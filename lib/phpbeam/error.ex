@@ -17,7 +17,10 @@ defmodule PhpBeam.Error do
   def fatal(msg), do: %__MODULE__{kind: :fatal, message: msg}
 
   def type_error(msg), do: %__MODULE__{kind: :type_error, message: msg}
-  def division_by_zero(msg \\ "Division by zero"), do: %__MODULE__{kind: :division_by_zero_error, message: msg}
+
+  def division_by_zero(msg \\ "Division by zero"),
+    do: %__MODULE__{kind: :division_by_zero_error, message: msg}
+
   def arithmetic_error(msg), do: %__MODULE__{kind: :arithmetic_error, message: msg}
   def value_error(msg), do: %__MODULE__{kind: :value_error, message: msg}
 

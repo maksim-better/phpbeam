@@ -135,8 +135,7 @@ defmodule PhpBeam.PArray do
       {:ok, k} ->
         case keys do
           %{^k => slot} ->
-            {:ok,
-             %__MODULE__{arr | keys: Map.delete(keys, k), slots: Map.delete(slots, slot)}}
+            {:ok, %__MODULE__{arr | keys: Map.delete(keys, k), slots: Map.delete(slots, slot)}}
 
           _ ->
             {:ok, arr}
@@ -171,9 +170,12 @@ defmodule PhpBeam.PArray do
   @doc "First element value or `:error` when empty (array_shift drops it)."
   def first(%__MODULE__{slots: slots}) do
     case min_slot(slots) do
-      nil -> :error
-      slot -> {_, v} = Map.fetch!(slots, slot)
-      {:ok, v}
+      nil ->
+        :error
+
+      slot ->
+        {_, v} = Map.fetch!(slots, slot)
+        {:ok, v}
     end
   end
 
@@ -205,8 +207,7 @@ defmodule PhpBeam.PArray do
 
       {k, v} = Map.fetch!(slots, slot)
 
-      {:ok, {k, v},
-       %__MODULE__{arr | keys: Map.delete(keys, k), slots: Map.delete(slots, slot)}}
+      {:ok, {k, v}, %__MODULE__{arr | keys: Map.delete(keys, k), slots: Map.delete(slots, slot)}}
     end
   end
 
