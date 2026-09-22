@@ -144,7 +144,9 @@ defmodule PhpBeam.LexerTest do
 
   test "backtick shell string lexes" do
     {:ok, ts} = Lexer.tokenize("<?php `ls`")
-    assert [{:shell_string, _, [{:text, "ls"}]}] = Enum.filter(ts, &match?({:shell_string, _, _}, &1))
+
+    assert [{:shell_string, _, [{:text, "ls"}]}] =
+             Enum.filter(ts, &match?({:shell_string, _, _}, &1))
   end
 
   test "line numbers tracked" do

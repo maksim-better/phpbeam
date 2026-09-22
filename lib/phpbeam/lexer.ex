@@ -107,7 +107,7 @@ defmodule PhpBeam.Lexer do
     do: number(c, rest, line, acc, ctx)
 
   defp php_mode(<<?., c, rest::binary>>, line, acc, ctx) when c >= ?0 and c <= ?9 do
-    {more, rest2} = take_while(rest, fn c -> c >= ?0 and c <= ?9 or c == ?_ end)
+    {more, rest2} = take_while(rest, fn c -> (c >= ?0 and c <= ?9) or c == ?_ end)
     build_float("", <<c>> <> more, rest2, line, acc, ctx)
   end
 
@@ -119,7 +119,10 @@ defmodule PhpBeam.Lexer do
 
   # strings
   defp php_mode("'" <> rest, line, acc, ctx), do: sq_string(rest, line, [], acc, ctx)
-  defp php_mode(<<?", rest::binary>>, line, acc, ctx), do: dq_string(rest, line, [], [], acc, ctx, :dq)
+
+  defp php_mode(<<?", rest::binary>>, line, acc, ctx),
+    do: dq_string(rest, line, [], [], acc, ctx, :dq)
+
   defp php_mode("`" <> rest, line, acc, ctx), do: dq_string(rest, line, [], [], acc, ctx, :shell)
 
   # heredoc / nowdoc
@@ -167,7 +170,7 @@ defmodule PhpBeam.Lexer do
   defp php_mode("<>" <> rest, line, acc, ctx), do: emit("<>", rest, line, acc, ctx)
   defp php_mode("::" <> rest, line, acc, ctx), do: emit("::", rest, line, acc, ctx)
 
-  defp php_mode(<<c, rest::binary>>, line, acc, ctx) when c in '+-*/%.=<>!?:;,()[]{}&|^@\\~$',
+  defp php_mode(<<c, rest::binary>>, line, acc, ctx) when c in ~c"+-*/%.=<>!?:;,()[]{}&|^@\\~$",
     do: emit(<<c>>, rest, line, acc, ctx)
 
   defp php_mode(<<c, _rest::binary>>, line, _acc, _ctx),
@@ -211,7 +214,13 @@ defmodule PhpBeam.Lexer do
 
       {pos, 2} ->
         chunk = binary_part(rest, 0, pos)
-        php_mode(binary_part(rest, pos + 2, byte_size(rest) - pos - 2), line + count_nl(chunk), acc, ctx)
+
+        php_mode(
+          binary_part(rest, pos + 2, byte_size(rest) - pos - 2),
+          line + count_nl(chunk),
+          acc,
+          ctx
+        )
     end
   end
 
@@ -219,7 +228,9 @@ defmodule PhpBeam.Lexer do
 
   defp take_name(c, rest), do: do_take_name(rest, <<c>>)
 
-  defp do_take_name(<<c, rest::binary>>, acc) when name_char?(c), do: do_take_name(rest, <<acc::binary, c>>)
+  defp do_take_name(<<c, rest::binary>>, acc) when name_char?(c),
+    do: do_take_name(rest, <<acc::binary, c>>)
+
   defp do_take_name(rest, acc), do: {acc, rest}
 
   defp whitespace?(c), do: c == ?\s or c == ?\t or c == ?\r or c == ?\n
@@ -230,9 +241,9 @@ defmodule PhpBeam.Lexer do
 
   defp number(?0, rest, line, acc, ctx) do
     case rest do
-      <<x, _::binary>> when x in 'xX' -> radix_number(rest, 16, line, acc, ctx)
-      <<x, _::binary>> when x in 'oO' -> radix_number(rest, 8, line, acc, ctx)
-      <<x, _::binary>> when x in 'bB' -> radix_number(rest, 2, line, acc, ctx)
+      <<x, _::binary>> when x in ~c"xX" -> radix_number(rest, 16, line, acc, ctx)
+      <<x, _::binary>> when x in ~c"oO" -> radix_number(rest, 8, line, acc, ctx)
+      <<x, _::binary>> when x in ~c"bB" -> radix_number(rest, 2, line, acc, ctx)
       _ -> decimal_number("0", rest, line, acc, ctx)
     end
   end
@@ -254,20 +265,20 @@ defmodule PhpBeam.Lexer do
     end
   end
 
-  defp radix_chars(16), do: '0123456789abcdefABCDEF_'
-  defp radix_chars(8), do: '01234567_'
-  defp radix_chars(2), do: '01_'
+  defp radix_chars(16), do: ~c"0123456789abcdefABCDEF_"
+  defp radix_chars(8), do: ~c"01234567_"
+  defp radix_chars(2), do: ~c"01_"
 
   defp decimal_number(int_digits, rest, line, acc, ctx) do
-    {more, rest2} = take_while(rest, fn c -> c >= ?0 and c <= ?9 or c == ?_ end)
+    {more, rest2} = take_while(rest, fn c -> (c >= ?0 and c <= ?9) or c == ?_ end)
     digits = int_digits <> more
 
     case rest2 do
       <<?., r::binary>> ->
-        {frac, rest3} = take_while(r, fn c -> c >= ?0 and c <= ?9 or c == ?_ end)
+        {frac, rest3} = take_while(r, fn c -> (c >= ?0 and c <= ?9) or c == ?_ end)
         build_float(digits, frac, rest3, line, acc, ctx)
 
-      <<e, _::binary>> when e in 'eE' ->
+      <<e, _::binary>> when e in ~c"eE" ->
         build_float(digits, "", rest2, line, acc, ctx)
 
       _ ->
@@ -328,14 +339,14 @@ defmodule PhpBeam.Lexer do
 
     {exp_s, rest2} =
       case rest do
-        <<e, r::binary>> when e in 'eE' ->
+        <<e, r::binary>> when e in ~c"eE" ->
           {sign, r2} =
             case r do
-              <<s, rr::binary>> when s in '+-' -> {<<s>>, rr}
+              <<s, rr::binary>> when s in ~c"+-" -> {<<s>>, rr}
               _ -> {"", r}
             end
 
-          {d, r3} = take_while(r2, fn c -> c >= ?0 and c <= ?9 or c == ?_ end)
+          {d, r3} = take_while(r2, fn c -> (c >= ?0 and c <= ?9) or c == ?_ end)
 
           if d == "" do
             {"", rest}
@@ -347,7 +358,9 @@ defmodule PhpBeam.Lexer do
           {"", rest}
       end
 
-    num = (if int_s == "", do: "0", else: int_s) <> "." <> (if frac_s == "", do: "0", else: frac_s) <> exp_s
+    num =
+      if(int_s == "", do: "0", else: int_s) <>
+        "." <> if(frac_s == "", do: "0", else: frac_s) <> exp_s
 
     case Float.parse(num) do
       {f, ""} ->
@@ -370,13 +383,27 @@ defmodule PhpBeam.Lexer do
   defp sq_string(rest, line, out, acc, ctx) do
     case rest do
       "'" <> rest2 ->
-        php_mode(rest2, line, [{:string, line, IO.iodata_to_binary(Enum.reverse(out))} | acc], ctx)
+        php_mode(
+          rest2,
+          line,
+          [{:string, line, IO.iodata_to_binary(Enum.reverse(out))} | acc],
+          ctx
+        )
 
-      "\\\\" <> rest2 -> sq_string(rest2, line, ["\\" | out], acc, ctx)
-      "\\'" <> rest2 -> sq_string(rest2, line, ["'" | out], acc, ctx)
-      "\n" <> rest2 -> sq_string(rest2, line + 1, ["\n" | out], acc, ctx)
-      <<c, rest2::binary>> -> sq_string(rest2, line, [<<c>> | out], acc, ctx)
-      "" -> {:error, "unterminated string", line}
+      "\\\\" <> rest2 ->
+        sq_string(rest2, line, ["\\" | out], acc, ctx)
+
+      "\\'" <> rest2 ->
+        sq_string(rest2, line, ["'" | out], acc, ctx)
+
+      "\n" <> rest2 ->
+        sq_string(rest2, line + 1, ["\n" | out], acc, ctx)
+
+      <<c, rest2::binary>> ->
+        sq_string(rest2, line, [<<c>> | out], acc, ctx)
+
+      "" ->
+        {:error, "unterminated string", line}
     end
   end
 
@@ -396,8 +423,11 @@ defmodule PhpBeam.Lexer do
 
       "\\" <> rest2 ->
         case escape(rest2, line, style) do
-          {:ok, chunk, rest3, line2} -> dq_string(rest3, line2, [chunk | text], parts, acc, ctx, style)
-          {:error, _, _} = e -> e
+          {:ok, chunk, rest3, line2} ->
+            dq_string(rest3, line2, [chunk | text], parts, acc, ctx, style)
+
+          {:error, _, _} = e ->
+            e
         end
 
       <<?$, c, rest2::binary>> when name_start?(c) ->
@@ -412,8 +442,11 @@ defmodule PhpBeam.Lexer do
             parts = flush_text(text, parts)
             dq_string(rest3, line, [], [{:complex, toks} | parts], acc, ctx, style)
 
-          {:ok, _, _} -> {:error, "unterminated interpolation", line}
-          {:error, _, _} = e -> e
+          {:ok, _, _} ->
+            {:error, "unterminated interpolation", line}
+
+          {:error, _, _} = e ->
+            e
         end
 
       <<c, rest2::binary>> ->
@@ -460,14 +493,20 @@ defmodule PhpBeam.Lexer do
 
   defp simple_index(inner) do
     cond do
-      inner == "" -> nil
-      Regex.match?(~r/^[0-9]+$/, inner) -> {:int, String.to_integer(inner)}
-      Regex.match?(~r/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/, inner) -> {:str, inner}
+      inner == "" ->
+        nil
+
+      Regex.match?(~r/^[0-9]+$/, inner) ->
+        {:int, String.to_integer(inner)}
+
+      Regex.match?(~r/^[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/, inner) ->
+        {:str, inner}
 
       Regex.match?(~r/^\$[a-zA-Z_\x80-\xff][a-zA-Z0-9_\x80-\xff]*$/, inner) ->
         {:var, binary_part(inner, 1, byte_size(inner) - 1)}
 
-      true -> nil
+      true ->
+        nil
     end
   end
 
@@ -475,19 +514,38 @@ defmodule PhpBeam.Lexer do
 
   defp escape(<<c, rest::binary>>, line, style) do
     case c do
-      ?n -> {:ok, "\n", rest, line}
-      ?r -> {:ok, "\r", rest, line}
-      ?t -> {:ok, "\t", rest, line}
-      ?v -> {:ok, "\v", rest, line}
-      ?f -> {:ok, "\f", rest, line}
-      ?e -> {:ok, "\e", rest, line}
-      ?\\ -> {:ok, "\\", rest, line}
-      ?$ -> {:ok, "$", rest, line}
-      ?" when style != :heredoc -> {:ok, "\"", rest, line}
-      ?` when style == :shell -> {:ok, "`", rest, line}
+      ?n ->
+        {:ok, "\n", rest, line}
+
+      ?r ->
+        {:ok, "\r", rest, line}
+
+      ?t ->
+        {:ok, "\t", rest, line}
+
+      ?v ->
+        {:ok, "\v", rest, line}
+
+      ?f ->
+        {:ok, "\f", rest, line}
+
+      ?e ->
+        {:ok, "\e", rest, line}
+
+      ?\\ ->
+        {:ok, "\\", rest, line}
+
+      ?$ ->
+        {:ok, "$", rest, line}
+
+      ?" when style != :heredoc ->
+        {:ok, "\"", rest, line}
+
+      ?` when style == :shell ->
+        {:ok, "`", rest, line}
 
       ?x ->
-        {hex, rest2} = take_while(rest, fn c -> c in '0123456789abcdefABCDEF' end)
+        {hex, rest2} = take_while(rest, fn c -> c in ~c"0123456789abcdefABCDEF" end)
 
         if hex == "" do
           {:ok, "\\x", rest, line}
@@ -501,7 +559,7 @@ defmodule PhpBeam.Lexer do
       ?u ->
         case rest do
           "{" <> r ->
-            {hex, r2} = take_while(r, fn c -> c in '0123456789abcdefABCDEF' end)
+            {hex, r2} = take_while(r, fn c -> c in ~c"0123456789abcdefABCDEF" end)
 
             case r2 do
               "}" <> r3 when hex != "" ->
@@ -608,7 +666,7 @@ defmodule PhpBeam.Lexer do
 
         case heredoc_token(body, interp?, line) do
           {:ok, tok} ->
-            php_mode(rest, line + (if had_nl?, do: 1, else: 0), [tok | acc], ctx)
+            php_mode(rest, line + if(had_nl?, do: 1, else: 0), [tok | acc], ctx)
 
           {:error, m, l} ->
             {:error, m, l}
@@ -637,7 +695,9 @@ defmodule PhpBeam.Lexer do
   # split one line; returns content without newline, rest, whether a newline was consumed
   defp split_line(src) do
     case :binary.match(src, "\n") do
-      :nomatch -> {strip_cr(src), "", false}
+      :nomatch ->
+        {strip_cr(src), "", false}
+
       {pos, _} ->
         line = binary_part(src, 0, pos)
         rest = binary_part(src, pos + 1, byte_size(src) - pos - 1)
@@ -697,9 +757,14 @@ defmodule PhpBeam.Lexer do
 
   defp scan_interp_parts("{$" <> rest, line, text, parts) do
     case tokenize_fragment("$" <> rest, line) do
-      {:ok, toks, "}" <> rest2} -> scan_interp_parts(rest2, line, [], [{:complex, toks} | flush_text(text, parts)])
-      {:ok, _, _} -> {:error, "unterminated interpolation", line}
-      e -> e
+      {:ok, toks, "}" <> rest2} ->
+        scan_interp_parts(rest2, line, [], [{:complex, toks} | flush_text(text, parts)])
+
+      {:ok, _, _} ->
+        {:error, "unterminated interpolation", line}
+
+      e ->
+        e
     end
   end
 
