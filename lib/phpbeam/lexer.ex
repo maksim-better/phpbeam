@@ -545,7 +545,7 @@ defmodule PhpBeam.Lexer do
         {:ok, "`", rest, line}
 
       ?x ->
-        {hex, rest2} = take_while(rest, fn c -> c in ~c"0123456789abcdefABCDEF" end)
+        {hex, _rest2} = take_while(rest, fn c -> c in ~c"0123456789abcdefABCDEF" end)
 
         if hex == "" do
           {:ok, "\\x", rest, line}
@@ -580,7 +580,7 @@ defmodule PhpBeam.Lexer do
         end
 
       c when c >= ?0 and c <= ?7 ->
-        {oct, rest2} = take_while(rest, fn c -> c >= ?0 and c <= ?7 end)
+        {oct, _rest2} = take_while(rest, fn c -> c >= ?0 and c <= ?7 end)
         digits = <<c>> <> binary_part(oct, 0, min(2, byte_size(oct)))
         used = byte_size(digits)
         rest3 = binary_part(rest, used - 1, byte_size(rest) - used + 1)
