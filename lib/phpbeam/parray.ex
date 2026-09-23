@@ -160,6 +160,9 @@ defmodule PhpBeam.PArray do
     |> Enum.map(fn {_, {_, v}} -> v end)
   end
 
+  @doc "Values extracted from a pair list (helper)."
+  def values_from_pairs(pairs), do: Enum.map(pairs, fn {_, v} -> v end)
+
   @doc "`[{key, value}]` in insertion order."
   def to_pairs(%__MODULE__{slots: slots}) do
     slots

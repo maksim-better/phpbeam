@@ -229,12 +229,21 @@ defmodule PhpBeam.Value do
   def to_float({:float, f}), do: {:ok, {:float, f}}
   def to_float({:int, i}), do: {:ok, {:float, i * 1.0}}
 
-  def to_float(v) do
-    case to_int(v) do
-      {:ok, {:int, i}} -> {:ok, {:float, i * 1.0}}
-      e -> e
+  def to_float({:string, s}) do
+    case classify_string_number(s) do
+      {:numeric, n} -> {:ok, {:float, num_f(n)}}
+      {:leading, n} -> {:ok, {:float, num_f(n)}}
+      :non_numeric -> {:ok, {:float, 0.0}}
     end
   end
+
+  def to_float({:bool, b}), do: {:ok, {:float, if(b, do: 1.0, else: 0.0)}}
+  def to_float(:null), do: {:ok, {:float, 0.0}}
+  def to_float({:array, a}), do: {:ok, {:float, if(PArray.size(a) > 0, do: 1.0, else: 0.0)}}
+  def to_float({:object, _}), do: {:ok, {:float, 1.0}}
+
+  defp num_f({:int, i}), do: i * 1.0
+  defp num_f({:float, f}), do: f
 
   @doc """
   (string) cast. Arrays warn and produce "Array"; objects need `__toString`
@@ -557,18 +566,30 @@ defmodule PhpBeam.Value do
   @doc "`%`: operands cast to int, C-style truncation semantics."
   def modulo(a, b) do
     with {:ok, x} <- coerced(a),
-         {:ok, y} <- coerced(b),
-         {:ok, {:int, i}} <- to_int(x),
-         {:ok, {:int, j}} <- to_int(y) do
-      if j == 0 do
-        {:error, Error.division_by_zero()}
-      else
-        {:ok, {:int, :erlang.rem(i, j)}}
+         {:ok, y} <- coerced(b) do
+      warn_lossy_int(x)
+      warn_lossy_int(y)
+
+      with {:ok, {:int, i}} <- to_int(x),
+           {:ok, {:int, j}} <- to_int(y) do
+        if j == 0 do
+          {:error, Error.division_by_zero()}
+        else
+          {:ok, {:int, :erlang.rem(i, j)}}
+        end
       end
     else
       {:error, e} -> {:error, e}
     end
   end
+
+  # Deprecation notice emitted through the interpreter's warning channel by
+  # the caller; here we only signal lossiness via a message tuple.
+  defp warn_lossy_int({:float, f}) when trunc(f) != f,
+    do:
+      {:deprecated, "Implicit conversion from float #{float_to_string(f)} to int loses precision"}
+
+  defp warn_lossy_int(_), do: :ok
 
   @doc "intdiv()."
   def intdiv(a, b) do
@@ -655,6 +676,9 @@ defmodule PhpBeam.Value do
       e -> e
     end
   end
+
+  @doc "JSON float: shortest round-trip (json serialize_precision=-1)."
+  def float_serialize_json(f), do: float_serialize(f)
 
   # ─────────────────────────── increment ───────────────────────────
 

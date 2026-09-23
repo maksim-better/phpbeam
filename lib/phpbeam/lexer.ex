@@ -661,22 +661,25 @@ defmodule PhpBeam.Lexer do
     else
       {line_bytes, rest, had_nl?} = split_line(src)
 
-      if closes_heredoc?(line_bytes, marker) do
-        body = finalize_heredoc_body(Enum.reverse(lines), closing_indent(line_bytes))
+      case heredoc_close_remainder(line_bytes, marker) do
+        {:ok, after_marker} ->
+          body = finalize_heredoc_body(Enum.reverse(lines), closing_indent(line_bytes))
 
-        case heredoc_token(body, interp?, line) do
-          {:ok, tok} ->
-            php_mode(rest, line + if(had_nl?, do: 1, else: 0), [tok | acc], ctx)
+          case heredoc_token(body, interp?, line) do
+            {:ok, tok} ->
+              rest_code = after_marker <> if(had_nl?, do: "\n" <> rest, else: rest)
+              php_mode(rest_code, line + if(had_nl?, do: 1, else: 0), [tok | acc], ctx)
 
-          {:error, m, l} ->
-            {:error, m, l}
-        end
-      else
-        if rest == "" and not had_nl? do
-          {:error, "unterminated heredoc", line}
-        else
-          heredoc_body(rest, line + 1, marker, interp?, [line_bytes | lines], acc, ctx)
-        end
+            {:error, m, l} ->
+              {:error, m, l}
+          end
+
+        :error ->
+          if rest == "" and not had_nl? do
+            {:error, "unterminated heredoc", line}
+          else
+            heredoc_body(rest, line + 1, marker, interp?, [line_bytes | lines], acc, ctx)
+          end
       end
     end
   end
@@ -711,14 +714,21 @@ defmodule PhpBeam.Lexer do
       else: line
   end
 
-  defp closes_heredoc?(line, marker) do
+  # the closing marker line: leading indent + marker must be followed by a
+  # non-name char; whatever follows the marker is ordinary PHP code
+  defp heredoc_close_remainder(line, marker) do
     {_indent, content} = take_while(line, fn c -> c == ?\s or c == ?\t end)
 
     if String.starts_with?(content, marker) do
       rest = binary_part(content, byte_size(marker), byte_size(content) - byte_size(marker))
-      rest == "" or not name_char?(first_byte(rest))
+
+      if rest == "" or not name_char?(first_byte(rest)) do
+        {:ok, rest}
+      else
+        :error
+      end
     else
-      false
+      :error
     end
   end
 

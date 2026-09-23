@@ -1185,7 +1185,7 @@ defmodule PhpBeam.Parser do
 
   defp group_expr([{_, _, "("} | rest]) do
     {e, r} = expr(rest)
-    {e, expect_op(r, ")")}
+    postfix_loop(e, expect_op(r, ")"))
   end
 
   # ───────────────────────── postfix ─────────────────────────
