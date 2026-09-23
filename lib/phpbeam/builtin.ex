@@ -5,7 +5,7 @@ defmodule PhpBeam.Builtin do
   functions that mutate by-reference arguments).
   """
 
-  alias PhpBeam.Builtin.{ArrayFns, MathFns, ObFns, RuntimeFns, StringFns, VarFns}
+  alias PhpBeam.Builtin.{ArrayFns, FileFns, MathFns, ObFns, RuntimeFns, StringFns, VarFns}
   alias PhpBeam.{PArray, Render, Value}
 
   def registry do
@@ -15,6 +15,7 @@ defmodule PhpBeam.Builtin do
     |> ArrayFns.register()
     |> VarFns.register()
     |> RuntimeFns.register()
+    |> FileFns.register()
     |> ObFns.register()
     |> output_fns()
   end

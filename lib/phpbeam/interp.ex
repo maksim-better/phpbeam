@@ -40,14 +40,18 @@ defmodule PhpBeam.Interp do
             error_handler: nil,
             shutdown_fns: [],
             autoload_fns: [],
-            ob_stack: []
+            ob_stack: [],
+            file_stack: [],
+            included: %{}
 
   @type t :: %__MODULE__{}
 
   # ───────────────────────── entry points ─────────────────────────
 
-  def run(src) do
-    interp = register_builtins(%__MODULE__{})
+  def run(src, file \\ nil) do
+    # the caller (cli) decides the spelling: real path for files,
+    # "Command line code" for -r — matching php's __FILE__
+    interp = register_builtins(%__MODULE__{file_stack: if(file, do: [file], else: [])})
     env = Env.global_scope(argv_info(src))
 
     with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),

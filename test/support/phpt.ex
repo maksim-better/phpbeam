@@ -88,10 +88,13 @@ defmodule PhpBeam.Test.Phpt do
             skip
 
           false ->
-            tmp = tmp_file(suite, Path.basename(path))
-            File.mkdir_p!(Path.dirname(tmp))
+            # run-tests convention: the runnable copy lives next to the .phpt
+            # so sibling fixtures (`include 'x.inc'`) and __DIR__ resolve
+            dir = Path.dirname(path)
+            tmp = Path.join(dir, Path.basename(path, ".phpt") <> ".phpbeam.php")
             File.write!(tmp, file)
-            out = run_escript(escript, tmp)
+            out = run_escript(escript, tmp, dir)
+            File.rm(tmp)
 
             case verify(secs, out) do
               :ok -> {:ok, Path.basename(path)}
@@ -115,8 +118,10 @@ defmodule PhpBeam.Test.Phpt do
     end
   end
 
-  defp run_escript(escript, file) do
-    shell("perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)} #{q(file)} 2>&1")
+  defp run_escript(escript, file, dir) do
+    shell(
+      "cd #{q(dir)} && perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)} #{q(file)} 2>&1"
+    )
   end
 
   defp verify(secs, out) do

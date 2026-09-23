@@ -22,7 +22,7 @@ defmodule PhpBeam.CLI do
         IO.puts(@usage)
 
       ["-r", code | _] ->
-        run_code("<?php " <> code)
+        run_code("<?php " <> code, "Command line code")
 
       ["--repl"] ->
         PhpBeam.Repl.start()
@@ -30,7 +30,7 @@ defmodule PhpBeam.CLI do
       [file | _rest] ->
         case File.read(file) do
           {:ok, src} ->
-            run_code(src)
+            run_code(src, Path.absname(file))
 
           {:error, _} ->
             IO.puts(:stderr, "Could not open input file: #{file}")
@@ -43,17 +43,17 @@ defmodule PhpBeam.CLI do
     end
   end
 
-  def run_code(src) do
-    {out, code} = run_and_capture(src)
+  def run_code(src, file \\ nil) do
+    {out, code} = run_and_capture(src, file)
     IO.write(out)
     if code != 0, do: System.halt(code)
   end
 
-  def run_and_capture(src) do
+  def run_and_capture(src, file \\ nil) do
     task =
       Task.async(fn ->
         try do
-          PhpBeam.Interp.run(src)
+          PhpBeam.Interp.run(src, file)
         catch
           :exit, _ ->
             {"PHP Fatal error:  internal exit\n", 255, nil}

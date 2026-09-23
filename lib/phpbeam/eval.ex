@@ -638,6 +638,96 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  # include/require: full-expression language constructs; the included file
+  # executes inline so it shares the calling scope (top level → globals)
+  def eval({:include, kind, path_e}, env, interp) do
+    {{:val, pv}, env2, i2} = eval(path_e, env, interp)
+    path = Value.cast_string_unsafe(pv)
+
+    case resolve_include_path(path, i2) do
+      nil ->
+        missing_include(kind, path, env2, i2)
+
+      resolved ->
+        once? = kind in [:include_once, :require_once]
+
+        if once? and Map.has_key?(i2.included, resolved) do
+          {{:val, {:bool, true}}, env2, i2}
+        else
+          case File.read(resolved) do
+            {:ok, src} ->
+              i3 = %{
+                i2
+                | included: Map.put(i2.included, resolved, true),
+                  file_stack: [resolved | i2.file_stack]
+              }
+
+              with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
+                   {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
+                case Interp.exec_stmts(stmts, env2, i3) do
+                  {:ok, env3, i4} ->
+                    {{:val, {:int, 1}}, env3, pop_file(i4)}
+
+                  # return unwinds carry a nil env by convention — the
+                  # include's value goes back to the caller's live env
+                  {{:unwind, {:return, v}}, _env3, i4} ->
+                    {{:val, v}, env2, pop_file(i4)}
+
+                  {{:unwind, _} = u, env3, i4} ->
+                    {u, env3, i4}
+                end
+              else
+                {:error, msg, line} ->
+                  {{:unwind, {:fatal, "syntax error, #{msg} in #{resolved} on line #{line}"}},
+                   env2, i2}
+              end
+
+            {:error, _} ->
+              missing_include(kind, path, env2, i2)
+          end
+        end
+    end
+  end
+
+  defp pop_file(%{file_stack: [_ | rest]} = i), do: %{i | file_stack: rest}
+  defp pop_file(i), do: i
+
+  # php order: include_path entries (relative to cwd), then the including
+  # file's directory, then cwd
+  defp resolve_include_path(path, interp) do
+    if Path.type(path) == :absolute do
+      if File.exists?(path), do: path
+    else
+      entries = String.split(Map.get(interp.ini, "include_path", "."), ":", trim: true)
+
+      cands = Enum.map(entries, fn e -> if e == ".", do: path, else: Path.join(e, path) end)
+
+      cands =
+        case interp.file_stack do
+          [cur | _] -> cands ++ [Path.join(Path.dirname(cur), path)]
+          [] -> cands
+        end
+
+      Enum.find(cands, &File.exists?/1)
+    end
+  end
+
+  defp missing_include(kind, path, env, interp) do
+    ip = Map.get(interp.ini, "include_path", ".")
+
+    if kind in [:require, :require_once] do
+      {{:unwind, {:fatal, "Failed opening required '#{path}' (include_path='#{ip}')"}}, env,
+       interp}
+    else
+      i2 = warn(env, interp, "include(#{path}): Failed to open stream: No such file or directory")
+
+      i3 =
+        warn(env, i2, "include(): Failed opening '#{path}' for inclusion (include_path='#{ip}')")
+
+      {{:val, {:bool, false}}, env, i3}
+    end
+  end
+
   def eval({:print, e}, env, interp) do
     {out, env2, interp2} = concat_to_string([e], env, interp)
     {{:val, {:int, 1}}, env2, Interp.write(interp2, out)}
@@ -1911,9 +2001,31 @@ defmodule PhpBeam.Eval do
   end
 
   defp resolve_const(name, _fq, interp) do
+    case magic_const(name, interp) do
+      {:ok, _} = ok -> ok
+      :error -> resolve_plain_const(name, interp)
+    end
+  end
+
+  defp resolve_plain_const(name, interp) do
     case Map.fetch(interp.consts, name) do
       {:ok, v} -> {:ok, v}
       :error -> builtin_const(name)
+    end
+  end
+
+  # magic constants are case-insensitive and resolve per file (include)
+  defp magic_const(name, interp) do
+    current =
+      case interp.file_stack do
+        [cur | _] -> cur
+        [] -> "Command line code"
+      end
+
+    case String.upcase(name) do
+      "__FILE__" -> {:ok, {:string, current}}
+      "__DIR__" -> {:ok, {:string, Path.dirname(current)}}
+      _ -> :error
     end
   end
 
@@ -2078,6 +2190,21 @@ defmodule PhpBeam.Eval do
 
       "LC_ALL" ->
         {:ok, {:int, 6}}
+
+      "DIRECTORY_SEPARATOR" ->
+        {:ok, {:string, "/"}}
+
+      "PATH_SEPARATOR" ->
+        {:ok, {:string, ":"}}
+
+      "FILE_APPEND" ->
+        {:ok, {:int, 8}}
+
+      "FILE_USE_INCLUDE_PATH" ->
+        {:ok, {:int, 1}}
+
+      "LOCK_EX" ->
+        {:ok, {:int, 2}}
 
       _ ->
         :error

@@ -25,6 +25,7 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "set_time_limit" => &set_time_limit/2,
       "zend_version" => &zend_version/2,
       "sys_get_temp_dir" => &sys_get_temp_dir/2,
+      "getmypid" => &getmypid/2,
       "setlocale" => &setlocale/2,
       "get_defined_functions" => &get_defined_functions/2,
       "set_include_path" => &set_include_path/2,
@@ -178,6 +179,8 @@ defmodule PhpBeam.Builtin.RuntimeFns do
   defp zend_version(_vals, i), do: {:ok, {:string, "4.4.0"}, i}
 
   defp sys_get_temp_dir(_vals, i), do: {:ok, {:string, System.tmp_dir!() || "/tmp"}, i}
+
+  defp getmypid(_vals, i), do: {:ok, {:int, :os.getpid() |> List.to_integer()}, i}
 
   defp gc_collect_cycles(_vals, i), do: {:ok, {:int, 0}, i}
 

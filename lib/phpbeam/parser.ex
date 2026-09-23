@@ -1298,6 +1298,16 @@ defmodule PhpBeam.Parser do
     end
   end
 
+  @include_kws ~w(include include_once require require_once)
+
+  # `include`/`require` sit below assignment (`$v = include ...` parses) and
+  # consume a full ternary-level expression — the WordPress idiom
+  # `require_once ABSPATH . 'wp-settings.php'` concatenates before including
+  defp ternary([{:name, _, kw} | rest]) when kw in @include_kws do
+    {e, r} = ternary(rest)
+    {{:include, String.to_atom(kw), e}, r}
+  end
+
   defp ternary(ts) do
     {c, rest} = coalesce(ts)
 
