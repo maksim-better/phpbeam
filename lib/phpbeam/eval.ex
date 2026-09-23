@@ -118,32 +118,131 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:prop, obj_e, name_e}, env, interp) do
-    {{:val, obj}, env2, interp2} = eval(obj_e, env, interp)
+    {{:val, obj_val}, env2, interp2} = eval(obj_e, env, interp)
 
-    case obj do
-      {:object, %{props: props}} ->
-        key = PhpBeam.Eval.prop_name_string(name_e, env2, interp2)
-        val = PArray.get(props, {:string, key}, :null)
+    case obj_val do
+      {:object, _} = obj_ref ->
+        obj = get_object(interp2, obj_ref)
+        key = prop_name_string(name_e, env2, interp2)
 
-        if val == :null do
-          interp3 = warn(env2, interp2, "Undefined property: stdClass::$#{key}")
-          {{:val, :null}, env2, interp3}
-        else
-          {{:val, deref(val, interp2)}, env2, interp2}
+        case PArray.fetch(obj.props, {:string, String.downcase(key)}) do
+          {:ok, v} ->
+            {{:val, deref(v, interp2)}, env2, interp2}
+
+          :error ->
+            case PhpBeam.Classes.find_method(interp2, obj.class, "__get") do
+              nil ->
+                interp3 =
+                  warn(
+                    env2,
+                    interp2,
+                    "Undefined property: #{display_class(interp2, obj.class)}::$#{key}"
+                  )
+
+                {{:val, :null}, env2, interp3}
+
+              m ->
+                call_php_method(
+                  obj_ref,
+                  m,
+                  [{:arg, {:lit_val, {:string, key}}, false, nil}],
+                  env2,
+                  interp2
+                )
+            end
         end
 
       :null ->
         {{:val, :null}, env2, warn(env2, interp2, "Attempt to read property \"value\" on null")}
 
-      _ ->
+      other ->
         interp3 =
           warn(
             env2,
             interp2,
-            "Attempt to read property on value of type #{PhpBeam.Value.gettype(obj)}"
+            "Attempt to read property on value of type #{PhpBeam.Value.gettype(other)}"
           )
 
         {{:val, :null}, env2, interp3}
+    end
+  end
+
+  def eval({:nullsafe_prop, obj_e, name_e}, env, interp) do
+    case isset?(obj_e, env, interp) do
+      {true, env2, interp2} -> eval({:prop, obj_e, name_e}, env2, interp2)
+      {false, env2, interp2} -> {{:val, :null}, env2, interp2}
+    end
+  end
+
+  # property writes flow through the object registry so every holder sees them
+  def assign({:prop, obj_e, name_e}, v, env, interp) do
+    {{:val, obj_val}, env2, interp2} = eval(obj_e, env, interp)
+
+    case obj_val do
+      {:object, _} = obj_ref ->
+        obj = get_object(interp2, obj_ref)
+        key = String.downcase(prop_name_string(name_e, env2, interp2))
+
+        declared =
+          PhpBeam.Classes.find_prop(interp2, obj.class, key) != nil or
+            PArray.has_key?(obj.props, {:string, key})
+
+        if declared do
+          case PArray.put(obj.props, {:string, key}, v) do
+            {:ok, props2} ->
+              {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
+
+            {:error, _} ->
+              {env2, interp2}
+          end
+        else
+          case PhpBeam.Classes.find_method(interp2, obj.class, "__set") do
+            nil ->
+              case PArray.put(obj.props, {:string, key}, v) do
+                {:ok, props2} -> {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
+                _ -> {env2, interp2}
+              end
+
+            m ->
+              margs = [
+                {:arg, {:lit_val, {:string, key}}, false, nil},
+                {:arg, {:lit_val, v}, false, nil}
+              ]
+
+              case call_php_method(obj_ref, m, margs, env2, interp2) do
+                {{:val, _}, _, i3} -> {env2, i3}
+                _ -> {env2, interp2}
+              end
+          end
+        end
+
+      _ ->
+        {env2,
+         warn(
+           env2,
+           interp2,
+           "Attempt to assign property on value of type #{PhpBeam.Value.gettype(obj_val)}"
+         )}
+    end
+  end
+
+  def assign({:static_prop, cname_e, name_e}, v, env, interp) do
+    case class_key_of(cname_e, env, interp) do
+      {:ok, key} ->
+        name = static_prop_name(name_e, env, interp)
+
+        case PhpBeam.Classes.find_prop(interp, key, name) do
+          {:ok, prop} when prop.static? ->
+            skey = static_props_key(key)
+            statics = Map.get(interp.statics, skey, %{})
+            {env, put_in(interp.statics[skey], Map.put(statics, prop.name, v))}
+
+          _ ->
+            {env, warn(env, interp, "Access to undeclared static property")}
+        end
+
+      {:error, _} ->
+        {env, interp}
     end
   end
 
@@ -158,19 +257,65 @@ defmodule PhpBeam.Eval do
 
   def prop_name_string(_, _env, _interp), do: ""
 
-  def stdclass(%PArray{} = props) do
-    %{__ref__: :erlang.unique_integer([:positive]), class: "stdClass", props: props}
-  end
-
   def eval({:nullsafe_prop, _, _}, env, interp),
     do: {{:unwind, {:fatal, "property access requires class support (M5)"}}, env, interp}
 
-  def eval({:static_prop, _, _}, env, interp),
-    do: {{:unwind, {:fatal, "static properties require class support (M5)"}}, env, interp}
+  def eval({:static_prop, cname_e, name_e}, env, interp) do
+    with {:ok, key} <- class_key_of(cname_e, env, interp) do
+      name = static_prop_name(name_e, env, interp)
 
-  def eval({:class_const, _, _}, env, interp) do
-    # `::class` on simple names resolves textually even before M5
-    {{:val, {:string, "class"}}, env, interp}
+      case PhpBeam.Classes.find_prop(interp, key, name) do
+        {:ok, prop} when prop.static? ->
+          statics = Map.get(interp.statics, static_props_key(key), %{})
+          {{:val, Map.get(statics, prop.name, prop.default)}, env, interp}
+
+        _ ->
+          {{:unwind,
+            {:fatal,
+             "Access to undeclared static property #{display_class(interp, key)}::$#{name}"}},
+           env, interp}
+      end
+    else
+      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+    end
+  end
+
+  def static_props_key(class_key), do: {:static_props, class_key}
+
+  # `A::$x` uses the literal variable name; only `A::$$x` dereferences
+  def static_prop_name({:var, v}, _env, _interp), do: String.downcase(v)
+  def static_prop_name({:lit_name, n}, _env, _interp), do: String.downcase(n)
+
+  def static_prop_name(other, env, interp),
+    do: String.downcase(prop_name_string(other, env, interp))
+
+  def eval({:class_const, cname_e, "class"}, env, interp) do
+    case class_key_of(cname_e, env, interp) do
+      {:ok, key} -> {{:val, {:string, display_class(interp, key)}}, env, interp}
+      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+    end
+  end
+
+  def eval({:class_const, cname_e, cname}, env, interp) do
+    with {:ok, key} <- class_key_of(cname_e, env, interp) do
+      case PhpBeam.Classes.find_const(interp, key, cname) do
+        {:ok, v} ->
+          {{:val, v}, env, interp}
+
+        :error ->
+          # unknown constants fall back to global constants
+          case Map.fetch(interp.consts, cname) do
+            {:ok, v} ->
+              {{:val, v}, env, interp}
+
+            :error ->
+              {{:unwind, {:fatal, "Undefined constant #{display_class(interp, key)}::#{cname}"}},
+               env, interp}
+          end
+      end
+    else
+      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+    end
   end
 
   def eval({:assign, target, rhs}, env, interp) do
@@ -356,6 +501,36 @@ defmodule PhpBeam.Eval do
     {{:val, {:bool, res}}, env3, interp3}
   end
 
+  # instanceof: the RHS is a class reference, not a constant
+  def eval({:binop, :instanceof, l, r}, env, interp) do
+    {{:val, lv}, env2, interp2} = eval(l, env, interp)
+
+    target =
+      case r do
+        {:const, parts, fq} ->
+          resolve_class_key({:cname, fq, parts}, env2, interp2)
+
+        {:cname, _, _} = c ->
+          resolve_class_key(c, env2, interp2)
+
+        _ ->
+          case eval(r, env2, interp2) do
+            {{:val, {:object, _} = oref}, _, i3} -> {:ok, get_object(i3, oref).class}
+            {{:val, {:string, name}}, _, i3} -> {:ok, resolve_class_string(name, i3)}
+            _ -> {:error, "invalid instanceof target"}
+          end
+      end
+
+    case {lv, target} do
+      {{:object, _} = obj_ref, {:ok, tkey}} ->
+        key = get_object(interp2, obj_ref).class
+        {{:val, {:bool, PhpBeam.Classes.is_a?(interp2, key, tkey)}}, env2, interp2}
+
+      {_, _} ->
+        {{:val, {:bool, false}}, env2, interp2}
+    end
+  end
+
   def eval({:binop, op, l, r}, env, interp) do
     {{:val, lv}, env2, interp2} = eval(l, env, interp)
     {{:val, rv}, env3, interp3} = eval(r, env2, interp2)
@@ -363,8 +538,14 @@ defmodule PhpBeam.Eval do
     # for `&&`/`||`; keyword forms are handled above with eager evaluation
 
     case apply_binop(op, lv, rv, env3, interp3) do
-      {:ok, v} -> {{:val, v}, env3, interp3}
-      {:unwind, _} = u -> {u, env3, interp3}
+      {:ok, v} ->
+        {{:val, v}, env3, interp3}
+
+      {:unwind, u, interp4} ->
+        {{:unwind, u}, env3, interp4}
+
+      {:unwind, _} = u ->
+        {u, env3, interp3}
     end
   end
 
@@ -451,11 +632,89 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  def eval({:new, _, _}, env, interp),
-    do: {{:unwind, {:fatal, "class instances require class support (M5)"}}, env, interp}
+  def eval({:new, cls, args}, env, interp) do
+    with {:ok, key} <- class_key_of(cls, env, interp) do
+      case PhpBeam.Classes.get_class(interp, key) do
+        nil ->
+          {{:unwind, {:fatal, "Class \"#{display_class(interp, key)}\" not found"}}, env, interp}
 
-  def eval({:clone, _}, env, interp),
-    do: {{:unwind, {:fatal, "clone requires class support (M5)"}}, env, interp}
+        class ->
+          if class.kind == :interface or class.kind == :trait do
+            {{:unwind, {:fatal, "Cannot instantiate #{class.kind} #{class.name}"}}, env, interp}
+          else
+            {{:object, _} = obj_ref, interp2} = make_instance(interp, key)
+            call_constructor(obj_ref, args, env, interp2)
+          end
+      end
+    else
+      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+    end
+  end
+
+  defp class_key_of({:cname, _, _} = cname, env, interp),
+    do: resolve_class_key(cname, env, interp)
+
+  defp class_key_of(cls_expr, env, interp), do: resolve_class_key(cls_expr, env, interp)
+
+  defp display_class(interp, key) do
+    case PhpBeam.Classes.get_class(interp, key) do
+      %{name: n} -> n
+      _ -> key
+    end
+  end
+
+  # objects live in the interpreter (handle semantics); the value is a ref id
+  def make_instance(interp, key) do
+    id = interp.next_obj
+    obj = PhpBeam.Classes.instantiate(interp, key, id)
+    interp2 = %{interp | objects: Map.put(interp.objects, id, obj), next_obj: id + 1}
+    {{:object, id}, interp2}
+  end
+
+  def get_object(interp, {:object, id}),
+    do: Map.get(interp.objects, id, %{__ref__: id, class: "stdclass", props: PArray.new()})
+
+  def get_object(_interp, other), do: other
+
+  def put_object(interp, {:object, id}, obj_map) do
+    %{interp | objects: Map.put(interp.objects, id, obj_map)}
+  end
+
+  def new_stdclass(interp, props) do
+    id = interp.next_obj
+    obj = %{__ref__: id, class: "stdclass", props: props, stdclass?: true}
+    {{:object, id}, %{interp | objects: Map.put(interp.objects, id, obj), next_obj: id + 1}}
+  end
+
+  defp call_constructor({:object, _} = obj_ref, args, env, interp) do
+    obj = get_object(interp, obj_ref)
+
+    case PhpBeam.Classes.find_method(interp, obj.class, "__construct") do
+      nil ->
+        {{:val, obj_ref}, env, interp}
+
+      method ->
+        case call_php_method(obj_ref, method, args, env, interp) do
+          {{:val, _ret}, e2, i2} -> {{:val, obj_ref}, e2, i2}
+          {{:unwind, _} = u, _, _} -> u
+        end
+    end
+  end
+
+  def eval({:clone, obj_e}, env, interp) do
+    {{:val, obj}, env2, interp2} = eval(obj_e, env, interp)
+
+    case obj do
+      {:object, _} ->
+        omap = get_object(interp2, obj)
+        {{:object, _} = copy_ref, interp3} = make_instance(interp2, omap.class)
+        interp4 = put_object(interp3, copy_ref, %{omap | __ref__: elem(copy_ref, 1)})
+        {{:val, copy_ref}, env2, interp4}
+
+      other ->
+        {{:val, other}, env2, interp2}
+    end
+  end
 
   def eval({:closure, params, uses, _by_ref?, body, arrow?}, env, interp) do
     {captures, env2, interp2} =
@@ -487,14 +746,224 @@ defmodule PhpBeam.Eval do
           {Map.put(caps, name, v), e, it}
       end)
 
+    captures =
+      if env.this != nil or env.called_class != nil do
+        Map.put(captures, :__obj_ctx, %{
+          this: env.this,
+          called_class: env.called_class,
+          scope_class: env.scope_class
+        })
+      else
+        captures
+      end
+
     {{:val, {:closure, params, body, captures, arrow?}}, env2, interp2}
   end
 
-  def eval({:method_call, _, _, _, _}, env, interp),
-    do: {{:unwind, {:fatal, "method calls require class support (M5)"}}, env, interp}
+  def eval({:method_call, obj_e, name_e, args, nullsafe?}, env, interp) do
+    {{:val, obj_ref}, env2, interp2} = eval(obj_e, env, interp)
 
-  def eval({:static_call, _, _, _}, env, interp),
-    do: {{:unwind, {:fatal, "static calls require class support (M5)"}}, env, interp}
+    case obj_ref do
+      :null when nullsafe? ->
+        {{:val, :null}, env2, interp2}
+
+      :null ->
+        name = prop_name_string(name_e, env2, interp2)
+        {{:unwind, {:fatal, "Call to a member function #{name}() on null"}}, env2, interp2}
+
+      {:object, _} ->
+        obj = get_object(interp2, obj_ref)
+        name = prop_name_string(name_e, env2, interp2)
+
+        case PhpBeam.Classes.find_method(interp2, obj.class, name) do
+          nil ->
+            magic_call(obj_ref, name, args, env2, interp2)
+
+          method ->
+            if method.static? do
+              {{:unwind, {:fatal, "Non-static method #{name}() cannot be called statically"}},
+               env2, interp2}
+            else
+              call_php_method(obj_ref, method, args, env2, interp2)
+            end
+        end
+
+      _ ->
+        name = prop_name_string(name_e, env2, interp2)
+
+        interp3 =
+          warn(
+            env2,
+            interp2,
+            "Call to a member function #{name}() on value of type #{PhpBeam.Value.gettype(obj_ref)}"
+          )
+
+        {{:val, :null}, env2, interp3}
+    end
+  end
+
+  defp magic_call({:object, _} = obj_ref, name, args, env, interp) do
+    obj = get_object(interp, obj_ref)
+
+    case PhpBeam.Classes.find_method(interp, obj.class, "__call") do
+      nil ->
+        {{:unwind,
+          {:fatal, "Call to undefined method #{display_class(interp, obj.class)}::#{name}()"}},
+         env, interp}
+
+      m ->
+        margs = [
+          {:arg, {:lit_val, {:string, name}}, false, nil},
+          {:arg,
+           {:lit_val,
+            {:array, PArray.from_pairs(Enum.map(arg_values(args, env, interp), &{nil, &1}))}},
+           false, nil}
+        ]
+
+        call_php_method(obj_ref, m, margs, env, interp)
+    end
+  end
+
+  defp arg_values(args, env, interp) do
+    case resolve_args(eval_args(args, env, interp, false)) do
+      {:ok, vals} -> vals
+      _ -> []
+    end
+  end
+
+  # dispatch a PHP method (user or native) with $this bound
+  def call_php_method({:object, _} = obj_ref, method, args, env, interp) do
+    obj = get_object(interp, obj_ref)
+
+    if method.native do
+      {:native, native} = method.native
+
+      vals = arg_values(args, env, interp)
+
+      case native.(obj, vals, interp) do
+        {:ok, {ret, obj2}, interp2} ->
+          interp3 = put_object(interp2, obj_ref, obj2)
+          {{:val, ret}, env, interp3}
+
+        other ->
+          other
+      end
+    else
+      mkey = obj.class <> "::" <> String.downcase(method.name)
+
+      fenv = %Env{
+        function: method.name,
+        statics_key: mkey,
+        this: obj_ref,
+        called_class: obj.class,
+        scope_class: method.class || obj.class
+      }
+
+      {binds, interp2} = bind_params(method.params, args, fenv, env, interp)
+
+      fenv2 =
+        Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
+
+      {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
+
+      {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+
+      case res do
+        :ok -> {{:val, :null}, env_out, interp4}
+        {:unwind, {:return, v}} -> {{:val, v}, env_out, interp4}
+        {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+      end
+    end
+  end
+
+  def eval({:static_call, cname_e, name_e, args}, env, interp) do
+    name = prop_name_string(name_e, env, interp)
+
+    with {:ok, key} <- class_key_of(cname_e, env, interp),
+         class when class != nil <- PhpBeam.Classes.get_class(interp, key) || :none do
+      case PhpBeam.Classes.find_method(interp, key, name) do
+        nil ->
+          magic_static_call(key, name, args, env, interp)
+
+        method ->
+          cond do
+            method.static? ->
+              call_static_method(key, method, args, env, interp)
+
+            # parent::method() / self::method() inside an instance method
+            env != nil and env.this != nil ->
+              call_php_method(env.this, method, args, env, interp)
+
+            true ->
+              msg =
+                "Non-static method #{display_class(interp, key)}::#{name}() cannot be called statically"
+
+              {{:unwind, {:fatal, msg}}, env, warn(env, interp, msg)}
+          end
+      end
+    else
+      :none ->
+        {{:unwind, {:fatal, "Class \"#{inspect(cname_e)}\" not found"}}, env, interp}
+
+      {:error, msg} ->
+        {{:unwind, {:fatal, msg}}, env, interp}
+    end
+  end
+
+  defp magic_static_call(key, name, args, env, interp) do
+    case PhpBeam.Classes.find_method(interp, key, "__callstatic") do
+      nil ->
+        {{:unwind, {:fatal, "Call to undefined method #{display_class(interp, key)}::#{name}()"}},
+         env, interp}
+
+      m ->
+        margs = [
+          {:arg, {:lit_val, {:string, name}}, false, nil},
+          {:arg,
+           {:lit_val,
+            {:array, PArray.from_pairs(Enum.map(arg_values(args, env, interp), &{nil, &1}))}},
+           false, nil}
+        ]
+
+        call_static_method(key, m, margs, env, interp)
+    end
+  end
+
+  defp call_static_method(key, method, args, env, interp) do
+    if method.native do
+      {:native, native} = method.native
+      vals = arg_values(args, env, interp)
+
+      case native.(%{__ref__: 0, class: key, props: PArray.new()}, vals, interp) do
+        {:ok, {ret, _obj2}, interp2} -> {{:val, ret}, env, interp2}
+        other -> other
+      end
+    else
+      mkey = key <> "::" <> String.downcase(method.name)
+
+      fenv = %Env{
+        function: method.name,
+        statics_key: mkey,
+        this: nil,
+        called_class: key,
+        scope_class: method.class || key
+      }
+
+      {binds, interp2} = bind_params(method.params, args, fenv, env, interp)
+
+      fenv2 =
+        Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
+
+      {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
+      {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+
+      case res do
+        :ok -> {{:val, :null}, env_out, interp4}
+        {:unwind, {:return, v}} -> {{:val, v}, env_out, interp4}
+        {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+      end
+    end
+  end
 
   def eval({:call, callee, args}, env, interp), do: do_call(callee, args, env, interp)
 
@@ -712,7 +1181,21 @@ defmodule PhpBeam.Eval do
   defp call_value({:closure, params, body, captures, _arrow?}, args, env, interp) do
     # captures may hold {:ref, id} cells for by-ref uses; reads and writes
     # flow through Env.lookup / assign naturally
-    fenv = %Env{function: "{closure}", statics_key: nil, closure_captures: captures}
+    {this, called_class, scope_class} =
+      case Map.get(captures, :__obj_ctx) do
+        nil -> {nil, nil, nil}
+        ctx -> {Map.get(ctx, :this), Map.get(ctx, :called_class), Map.get(ctx, :scope_class)}
+      end
+
+    fenv = %Env{
+      function: "{closure}",
+      statics_key: nil,
+      closure_captures: Map.delete(captures, :__obj_ctx),
+      this: this,
+      called_class: called_class,
+      scope_class: scope_class
+    }
+
     {binds, interp2} = bind_params(params, args, fenv, env, interp)
     fenv2 = Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
 
@@ -850,6 +1333,10 @@ defmodule PhpBeam.Eval do
 
   defp call_resolved_builtin(fun, vals, args, ref_positions, env, interp) do
     case fun.(vals, interp, %{env: env}) do
+      {:ok, {:unwind, {:php_throw, {:native_error, _, _} = ne}}, interp3} ->
+        {obj_ref, interp4} = materialize_native(ne, interp3)
+        {{:unwind, {:php_throw, obj_ref}}, env, interp4}
+
       {:ok, v, interp3} ->
         {{:val, v}, env, interp3}
 
@@ -917,15 +1404,15 @@ defmodule PhpBeam.Eval do
         arith(:*, l, r)
 
       :/ ->
-        Value.divide(l, r)
+        value_or_throw(Value.divide(l, r), interp)
 
       :% ->
         lossy_warn(l, interp)
         lossy_warn(r, interp)
-        Value.modulo(l, r)
+        value_or_throw(Value.modulo(l, r), interp)
 
       :** ->
-        Value.power(l, r)
+        value_or_throw(Value.power(l, r), interp)
 
       :== ->
         {:ok, {:bool, Value.loose_eq(l, r)}}
@@ -996,9 +1483,36 @@ defmodule PhpBeam.Eval do
 
   defp lossy_warn(_, _interp), do: :ok
 
+  defp value_or_throw({:ok, v}, _interp), do: {:ok, v}
+
+  defp value_or_throw({:error, %Error{} = err}, interp) do
+    {obj_ref, interp2} =
+      materialize_native({:native_error, Error.php_class(err), err.message}, interp)
+
+    {:unwind, {:php_throw, obj_ref}, interp2}
+  end
+
   defp throw_error(%Error{} = err) do
     {:unwind, {:php_throw, {:native_error, Error.php_class(err), err.message}}}
   end
+
+  # materialize native error tuples into real Throwable instances
+  def materialize_native({:native_error, class, msg}, interp) do
+    key = String.downcase(class)
+    {obj_ref, interp2} = make_instance(interp, key)
+    obj = get_object(interp2, obj_ref)
+
+    props =
+      case PArray.put(obj.props, {:string, "message"}, {:string, msg}) do
+        {:ok, p2} -> p2
+        _ -> obj.props
+      end
+
+    interp3 = put_object(interp2, obj_ref, %{obj | props: props})
+    {obj_ref, interp3}
+  end
+
+  def materialize_native(other, interp), do: {other, interp}
 
   defp throw_error_tuple(err, interp), do: throw_error(err) |> elem(1) |> then(&{&1, interp})
 
@@ -1055,6 +1569,8 @@ defmodule PhpBeam.Eval do
 
   defp bind_var_to_ref(env, _interp, _target, _id), do: env
 
+  # {:unwind, u, env, interp} carries the latest state so the exception
+  # object survives across statement boundaries
   def concat_to_string(exprs, env, interp) do
     Enum.reduce_while(exprs, {"", env, interp}, fn e, {acc, en, it} ->
       case eval(e, en, it) do
@@ -1062,20 +1578,40 @@ defmodule PhpBeam.Eval do
           {s, it3} = warn_to_string(v, en2, it2)
           {:cont, {acc <> s, en2, it3}}
 
-        {{:unwind, u}, _, _} ->
-          {:halt, {:unwind, u}}
+        {{:unwind, u}, en2, it2} ->
+          {:halt, {:unwind, u, en2, it2}}
       end
     end)
   end
 
-  # string conversion that emits the Array-to-string warning
-  def warn_to_string(v, _env, interp) do
-    case Value.cast_string(v) do
-      {:ok, s} -> {s, interp}
-      {:warn_array, _} -> {"Array", warn(interp, "Array to string conversion")}
-      _ -> {"", interp}
+  # string conversion that emits the Array-to-string warning; objects use __toString
+  def warn_to_string(v, env, interp) do
+    case v do
+      {:object, _} = obj_ref ->
+        obj = get_object(interp, obj_ref)
+
+        case PhpBeam.Classes.find_method(interp, obj.class, "__tostring") do
+          nil ->
+            {obj_str_default(obj), interp}
+
+          m ->
+            case call_php_method(obj_ref, m, [], env, interp) do
+              {{:val, {:string, sv}}, _, i2} -> {sv, i2}
+              {{:val, other}, _, i2} -> {php_to_string(other), i2}
+              _ -> {"Object", interp}
+            end
+        end
+
+      _ ->
+        case Value.cast_string(v) do
+          {:ok, s} -> {s, interp}
+          {:warn_array, _} -> {"Array", warn(interp, "Array to string conversion")}
+          _ -> {"", interp}
+        end
     end
   end
+
+  defp obj_str_default(_obj), do: "Object"
 
   defp warn(interp, msg), do: PhpBeam.Interp.warn(interp, msg)
 
@@ -1138,6 +1674,88 @@ defmodule PhpBeam.Eval do
   defp eval_const_expr({:bool, b}), do: {:bool, b}
   defp eval_const_expr(:null), do: :null
   defp eval_const_expr(_), do: :null
+
+  # resolve a class-name AST to a storage key (downcased, no leading backslash)
+  def resolve_class_key({:cname, fq, parts}, env, interp) do
+    first = hd(parts)
+    rest = tl(parts)
+
+    key =
+      cond do
+        fq == true ->
+          Enum.join(parts, "\\")
+
+        first == "self" and env != nil and env.scope_class ->
+          join_maybe(env.scope_class, rest)
+
+        first == "static" and env != nil ->
+          join_maybe(env.called_class || env.scope_class, rest)
+
+        first == "parent" and env != nil and env.scope_class ->
+          parent = parent_key(interp, env.scope_class)
+          if parent, do: join_maybe(parent, rest), else: Enum.join(parts, "\\")
+
+        alias_key = Map.get(interp.uses.normal, String.downcase(first)) ->
+          Enum.join([alias_key | rest], "\\")
+
+        interp.ns != [] and rest == [] ->
+          Enum.join(interp.ns ++ parts, "\\")
+
+        true ->
+          Enum.join(parts, "\\")
+      end
+
+    {:ok, String.downcase(key)}
+  end
+
+  def resolve_class_key(cname_expr, env, interp) when is_tuple(cname_expr) do
+    case eval(cname_expr, env, interp) do
+      {{:val, {:string, name}}, _e, i} ->
+        {:ok, resolve_class_string(name, i)}
+
+      {{:val, {:object, %{class: key}}}, _e, _i} ->
+        {:ok, key}
+
+      _ ->
+        {:error, "class name must be a string"}
+    end
+  end
+
+  def resolve_class_string(name, interp) do
+    name = String.trim_leading(name, "\\")
+    down = String.downcase(name)
+
+    cond do
+      Map.has_key?(interp.classes, down) ->
+        down
+
+      interp.ns != [] ->
+        ns_key = (interp.ns ++ [name]) |> Enum.join("\\") |> String.downcase()
+        if Map.has_key?(interp.classes, ns_key), do: ns_key, else: down
+
+      true ->
+        down
+    end
+  end
+
+  defp join_maybe(prefix, rest), do: Enum.join([prefix | rest], "\\")
+
+  defp parent_key(interp, key) do
+    case PhpBeam.Classes.get_class(interp, key) do
+      %{parent: p} when is_binary(p) -> p
+      _ -> nil
+    end
+  end
+
+  # constant folding for class constants / property defaults / enum cases
+  def const_fold(ast, interp) do
+    case eval(ast, nil, interp) do
+      {{:val, v}, _, _} -> v
+      _ -> :null
+    end
+  rescue
+    _ -> :null
+  end
 
   defp resolve_function(name, fq, interp) do
     cond do
@@ -1332,6 +1950,15 @@ defmodule PhpBeam.Eval do
     destructure(items, v, env, interp)
   end
 
+  # nested writes into member containers: $this->arr[$k] = v / self::$a[] = v
+  def assign({:index, {:prop, _, _} = prop_t, idx}, v, env, interp) do
+    nested_member_write(prop_t, idx, v, env, interp)
+  end
+
+  def assign({:index, {:static_prop, _, _} = prop_t, idx}, v, env, interp) do
+    nested_member_write(prop_t, idx, v, env, interp)
+  end
+
   def assign({:index, container, idx}, v, env, interp) do
     {path, env2, interp2} = build_path(container, env, interp)
 
@@ -1345,8 +1972,42 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  def assign({:prop, _, _}, _v, env, interp), do: {env, interp}
-  def assign({:static_prop, _, _}, _v, env, interp), do: {env, interp}
+  defp nested_member_write(prop_t, idx, v, env, interp) do
+    {{:val, container}, e2, i2} = eval(prop_t, env, interp)
+
+    container2 =
+      case container do
+        {:array, arr} ->
+          case idx do
+            nil ->
+              {:array, PArray.push(arr, v)}
+
+            _ ->
+              {{:val, key}, _, _} = eval(idx, e2, i2)
+
+              case PArray.put(arr, key, v) do
+                {:ok, a2} -> {:array, a2}
+                _ -> container
+              end
+          end
+
+        :null ->
+          case idx do
+            nil ->
+              {:array, PArray.from_pairs([{nil, v}])}
+
+            _ ->
+              {{:val, key}, _, _} = eval(idx, e2, i2)
+              {:array, PArray.from_pairs([{key, v}])}
+          end
+
+        _ ->
+          container
+      end
+
+    assign(prop_t, container2, e2, i2)
+  end
+
   def assign(_, _v, env, interp), do: {env, interp}
 
   # build a write path: [{:var, name} | segments]
@@ -1650,8 +2311,40 @@ defmodule PhpBeam.Eval do
           {false, env2, interp2}
         end
 
-      {:prop, _, _} ->
-        {false, env, interp}
+      {:prop, obj_e, name_e} ->
+        {{:val, ov}, env2, interp2} = eval(obj_e, env, interp)
+
+        case ov do
+          {:object, _} = obj_ref ->
+            obj = get_object(interp2, obj_ref)
+            key = String.downcase(prop_name_string(name_e, env2, interp2))
+
+            case PArray.fetch(obj.props, {:string, key}) do
+              {:ok, v} ->
+                {v != :null, env2, interp2}
+
+              :error ->
+                case PhpBeam.Classes.find_method(interp2, obj.class, "__isset") do
+                  nil ->
+                    {false, env2, interp2}
+
+                  m ->
+                    case call_php_method(
+                           obj_ref,
+                           m,
+                           [{:arg, {:lit_val, {:string, key}}, false, nil}],
+                           env2,
+                           interp2
+                         ) do
+                      {{:val, res}, _, i3} -> {PhpBeam.Value.truthy?(res), env2, i3}
+                      _ -> {false, env2, interp2}
+                    end
+                end
+            end
+
+          _ ->
+            {false, env2, interp2}
+        end
 
       {:nullsafe_prop, _, _} ->
         {false, env, interp}

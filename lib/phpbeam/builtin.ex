@@ -92,7 +92,8 @@ defmodule PhpBeam.Builtin do
               :null
           end
 
-        {:ok, decoded, interp}
+        {val, interp2} = register_json_objects(decoded, interp)
+        {:ok, val, interp2}
       end)
 
     fns =
@@ -162,6 +163,35 @@ defmodule PhpBeam.Builtin do
 
     fns
   end
+
+  # walk decoded JSON, turning stdClass markers into registry objects
+  # parents get ids before their children, matching PHP creation order
+  defp register_json_objects({:obj_reg, props}, interp) do
+    {ref, interp2} = PhpBeam.Eval.new_stdclass(interp, PArray.new())
+
+    {props2, interp3} =
+      Enum.reduce(PArray.to_pairs(props), {PArray.new(), interp2}, fn {k, v}, {acc, it} ->
+        {v2, it2} = register_json_objects(v, it)
+        {:ok, a2} = PArray.put(acc, {:string, k}, v2)
+        {a2, it2}
+      end)
+
+    obj = PhpBeam.Eval.get_object(interp3, ref)
+    {ref, PhpBeam.Eval.put_object(interp3, ref, %{obj | props: props2})}
+  end
+
+  defp register_json_objects({:array, arr}, interp) do
+    {pairs, interp2} =
+      Enum.reduce(PArray.to_pairs(arr), {[], interp}, fn {k, v}, {acc, it} ->
+        {v2, it2} = register_json_objects(v, it)
+        wrapped = if is_binary(k), do: {:string, k}, else: {:int, k}
+        {[{wrapped, v2} | acc], it2}
+      end)
+
+    {{:array, PArray.from_pairs(Enum.reverse(pairs))}, interp2}
+  end
+
+  defp register_json_objects(v, interp), do: {v, interp}
 
   # ───────────────────────── sprintf ─────────────────────────
 
@@ -352,27 +382,20 @@ defmodule PhpBeam.Builtin do
 
   defp json_term(_, _), do: nil
 
-  # object ids must start at 1 per PHP run — a counter threads the recursion
   def json_to_value(term) do
-    json_to_value(term, :counters.new(1, [:write_concurrency]))
-  end
-
-  def json_to_value(term, ctr) do
     case term do
       %{} ->
-        :counters.add(ctr, 1, 1)
-        id = :counters.get(ctr, 1)
-
+        # stdClass objects register into the object table (handle semantics)
         props =
           Enum.reduce(term, PArray.new(), fn {k, v}, acc ->
-            {:ok, a2} = PArray.put(acc, {:string, k}, json_to_value(v, ctr))
+            {:ok, a2} = PArray.put(acc, {:string, k}, json_to_value(v))
             a2
           end)
 
-        {:object, %{__ref__: id, class: "stdClass", props: props}}
+        {:obj_reg, props}
 
       list when is_list(list) ->
-        {:array, PArray.from_pairs(Enum.map(list, &{nil, json_to_value(&1, ctr)}))}
+        {:array, PArray.from_pairs(Enum.map(list, &{nil, json_to_value(&1)}))}
 
       n when is_integer(n) ->
         {:int, n}

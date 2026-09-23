@@ -20,6 +20,8 @@ defmodule PhpBeam.Interp do
             refs: %{},
             next_ref: 0,
             statics: %{},
+            objects: %{},
+            next_obj: 1,
             ns: [],
             uses: %{normal: %{}, function: %{}, const: %{}},
             halted: nil,
@@ -103,8 +105,10 @@ defmodule PhpBeam.Interp do
   end
 
   defp register_builtins(interp) do
-    Map.update!(interp, :functions, fn fns ->
-      Map.merge(fns, PhpBeam.Builtin.registry())
+    interp
+    |> Map.update!(:functions, fn fns -> Map.merge(fns, PhpBeam.Builtin.registry()) end)
+    |> Map.update!(:classes, fn classes ->
+      Map.merge(PhpBeam.Classes.native_classes(), classes)
     end)
   end
 
@@ -133,7 +137,7 @@ defmodule PhpBeam.Interp do
   def exec_stmt({:echo, exprs}, env, interp) do
     case Eval.concat_to_string(exprs, env, interp) do
       {out, env2, interp2} -> {:ok, env2, write(interp2, out)}
-      {:unwind, u} -> {{:unwind, u}, env, interp}
+      {:unwind, u, env2, interp2} -> {{:unwind, u}, env2, interp2}
     end
   end
 
@@ -535,10 +539,18 @@ defmodule PhpBeam.Interp do
 
   defp run_finally(nil, res, _catches, _e, _i), do: res
 
+  # finally's side effects must flow on: keep its env/interp, keep res's signal
   defp run_finally(finally, res, _catches, e, i) do
     case exec_stmts(finally, e, i) do
-      {:ok, _e2, _i2} -> res
-      other -> other
+      {:ok, e2, i2} ->
+        case res do
+          {:ok, _, _} -> {:ok, e2, i2}
+          {{:unwind, u}, _, _} -> {{:unwind, u}, e2, i2}
+          other -> other
+        end
+
+      other ->
+        other
     end
   end
 
@@ -554,31 +566,53 @@ defmodule PhpBeam.Interp do
   defp find_catch([], _val, _e, _i), do: :none
 
   defp find_catch([{types, var, body} | rest], val, e, i) do
-    if catch_matches?(types, val, e) do
-      _ = types
-      e2 = if var, do: Env.bind_var(e, i, var, val) |> elem(1), else: e
-      {:caught, exec_stmts(body, e2, i)}
+    if catch_matches?(types, val, e, i) do
+      {e2, i2} =
+        if var do
+          {:ok, e2, i2} = Env.bind_var(e, i, var, val)
+          {e2, i2}
+        else
+          {e, i}
+        end
+
+      {:caught, exec_stmts(body, e2, i2)}
     else
       find_catch(rest, val, e, i)
     end
   end
 
-  defp catch_matches?(_types, {:native_error, class, _msg}, _env) do
-    # M4: native errors (TypeError etc.) are catchable as their PHP classes
-    case class do
-      "TypeError" -> true
-      "DivisionByZeroError" -> true
-      "ArithmeticError" -> true
-      "ValueError" -> true
-      "ArgumentCountError" -> true
-      _ -> true
+  # a catch matches when the thrown value's class is or extends any listed type
+  defp catch_matches?(types, val, _env, interp) do
+    thrown_key =
+      case val do
+        {:object, _} ->
+          Eval.get_object(interp, val).class
+
+        {:native_error, class, _msg} ->
+          String.downcase(class)
+
+        _ ->
+          nil
+      end
+
+    if thrown_key == nil do
+      false
+    else
+      Enum.any?(types, fn parts ->
+        case Eval.resolve_class_key({:cname, false, parts}, nil, interp) do
+          {:ok, tkey} ->
+            PhpBeam.Classes.is_a?(interp, thrown_key, tkey)
+
+          _ ->
+            false
+        end
+      end)
     end
   end
 
-  defp catch_matches?(_types, _val, _env), do: false
-
   def exec_stmt({:namespace, name, stmts}, env, interp) do
-    interp2 = %{interp | ns: name || []}
+    # use aliases are per-namespace-block
+    interp2 = %{interp | ns: name || [], uses: %{normal: %{}, function: %{}, const: %{}}}
 
     case stmts do
       nil -> {:ok, env, interp2}
@@ -601,6 +635,22 @@ defmodule PhpBeam.Interp do
   end
 
   def exec_stmt({:halt, _}, env, interp), do: {:ok, env, interp}
+
+  def exec_stmt({:class_def, decl}, env, interp) do
+    case PhpBeam.Classes.register(decl, interp) do
+      {:ok, interp2} -> {:ok, env, interp2}
+      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+    end
+  end
+
+  def exec_stmt({:const_decl, entries}, env, interp) do
+    consts =
+      Enum.reduce(entries, interp.consts, fn {name, expr}, acc ->
+        Map.put(acc, name, Eval.const_fold(expr, interp))
+      end)
+
+    {:ok, env, %{interp | consts: consts}}
+  end
 
   def exec_stmt({:func_def, name, params, body}, env, interp) do
     if Map.has_key?(interp.functions, name) do

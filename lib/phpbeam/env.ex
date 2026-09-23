@@ -33,21 +33,27 @@ defmodule PhpBeam.Env do
 
   def lookup(%__MODULE__{} = env, interp, name) do
     cond do
-      env.function == nil or superglobal?(name) ->
-        case Map.fetch(interp.globals, name) do
-          {:ok, v} -> {:ok, v}
-          :error -> :undefined
+      name == "this" ->
+        case env.this do
+          nil -> :undefined
+          obj -> {:ok, obj}
         end
+
+      true ->
+        lookup_scope(env, interp, name)
+    end
+  end
+
+  defp lookup_scope(env, interp, name) do
+    cond do
+      env.function == nil or superglobal?(name) ->
+        global_fetch(interp, name)
 
       MapSet.member?(env.globalized, name) ->
-        case Map.fetch(interp.globals, name) do
-          {:ok, v} -> {:ok, v}
-          :error -> :undefined
-        end
+        global_fetch(interp, name)
 
       Map.has_key?(env.statics, name) ->
-        key = env.statics_key
-        {:static, key, name}
+        {:static, env.statics_key, name}
 
       true ->
         case Map.fetch(env.vars, name) do
@@ -60,6 +66,13 @@ defmodule PhpBeam.Env do
               :error -> :undefined
             end
         end
+    end
+  end
+
+  defp global_fetch(interp, name) do
+    case Map.fetch(interp.globals, name) do
+      {:ok, v} -> {:ok, v}
+      :error -> :undefined
     end
   end
 

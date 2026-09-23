@@ -573,7 +573,7 @@ defmodule PhpBeam.Value do
       with {:ok, {:int, i}} <- to_int(x),
            {:ok, {:int, j}} <- to_int(y) do
         if j == 0 do
-          {:error, Error.division_by_zero()}
+          {:error, %Error{kind: :division_by_zero_error, message: "Modulo by zero"}}
         else
           {:ok, {:int, :erlang.rem(i, j)}}
         end

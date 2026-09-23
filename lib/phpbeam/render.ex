@@ -39,13 +39,14 @@ defmodule PhpBeam.Render do
   def var_dump_lines({:ref, _} = r, interp, ind),
     do: var_dump_lines(Eval.deref(r, interp), interp, ind)
 
-  def var_dump_lines({:object, %{class: cls, props: props, __ref__: ref}}, interp, ind) do
+  def var_dump_lines({:object, _} = obj_ref, interp, ind) do
+    obj = Eval.get_object(interp, obj_ref)
     pad = pad2(ind)
     inner = pad2(ind + 1)
 
     [
-      "#{pad}object(#{cls})##{ref} (#{PArray.size(props)}) {\n"
-      | Enum.flat_map(PArray.to_pairs(props), fn {k, v} ->
+      "#{pad}object(#{class_display(interp, obj)})##{obj.__ref__} (#{PArray.size(obj.props)}) {\n"
+      | Enum.flat_map(PArray.to_pairs(obj.props), fn {k, v} ->
           [
             "#{inner}[\"#{k}\"]=>\n"
             | var_dump_lines(deref(v, interp), interp, ind + 1)
@@ -82,7 +83,46 @@ defmodule PhpBeam.Render do
   end
 
   def print_r({:ref, _} = r, interp, ind), do: print_r(deref(r, interp), interp, ind)
+
+  def print_r({:object, _} = obj_ref, interp, ind) do
+    obj = Eval.get_object(interp, obj_ref)
+    cls = class_display(interp, obj)
+
+    entries =
+      Enum.map_join(PArray.to_pairs(obj.props), fn {k, v} ->
+        "#{String.duplicate("    ", ind + 1)}[#{k}] => " <>
+          case v do
+            {:array, _} -> nested_or_scalar(v, interp, ind + 1)
+            {:object, _} -> nested_obj(v, interp, ind + 1)
+            _ -> scalar_string(Eval.deref(v, interp)) <> "\n"
+          end
+      end)
+
+    "#{cls} Object\n" <>
+      "(" <>
+      if(entries == "", do: "", else: "\n") <>
+      entries <> if(entries == "", do: "", else: "\n") <> "#{String.duplicate("    ", ind)})\n"
+  end
+
   def print_r(v, _interp, _ind), do: scalar_string(v)
+
+  defp nested_obj(obj_ref, interp, ind) do
+    obj = Eval.get_object(interp, obj_ref)
+    cls = class_display(interp, obj)
+
+    inner =
+      Enum.map_join(PArray.to_pairs(obj.props), fn {k, v} ->
+        "#{String.duplicate("    ", ind + 2)}[#{k}] => " <>
+          case v do
+            {:array, _} -> nested_or_scalar(v, interp, ind + 1)
+            {:object, _} -> nested_obj(v, interp, ind + 1)
+            _ -> scalar_string(Eval.deref(v, interp)) <> "\n"
+          end
+      end)
+
+    "#{cls} Object\n#{String.duplicate("    ", ind + 1)}(\n" <>
+      inner <> "#{String.duplicate("    ", ind + 1)})\n\n"
+  end
 
   defp nested_or_scalar({:array, _} = v, interp, ind_next) do
     "Array\n" <>
@@ -142,5 +182,14 @@ defmodule PhpBeam.Render do
 
   def var_export({:ref, _} = r, interp, ind), do: var_export(deref(r, interp), interp, ind)
 
+  def var_export({:object, _}, _interp, _ind), do: "stdClass::__set_state(array())"
+
   defp escape_sq(s), do: String.replace(s, "'", "\\'")
+
+  defp class_display(interp, obj) do
+    case PhpBeam.Classes.get_class(interp, obj.class) do
+      %{name: n} -> n
+      _ -> if obj[:stdclass?], do: "stdClass", else: obj.class
+    end
+  end
 end

@@ -166,9 +166,363 @@ defmodule PhpBeam.Parser do
       "use" -> use_stmt(ts)
       "declare" -> declare_stmt(ts)
       "__halt_compiler" -> halt_stmt(ts)
+      "const" -> const_stmt(ts)
+      "class" -> class_stmt([], ts)
+      "interface" -> class_stmt([], ts)
+      "trait" -> class_stmt([], ts)
+      "abstract" -> modifier_then_class(ts, "abstract")
+      "final" -> modifier_then_class(ts, "final")
+      "enum" -> raise(ParseError, message: "enums are not supported yet", line: peek_line(ts))
       "goto" -> raise(ParseError, message: "goto is not supported", line: peek_line(ts))
       _ -> expr_statement(ts)
     end
+  end
+
+  defp modifier_then_class(ts, mod) do
+    rest0 = tl(ts)
+
+    {mods, rest} =
+      case peek(rest0) do
+        {:name, _, "final"} when mod == "abstract" -> {[mod, "final"], tl(rest0)}
+        {:name, _, "abstract"} when mod == "final" -> {[mod, "abstract"], tl(rest0)}
+        _ -> {[mod], rest0}
+      end
+
+    case peek(rest) do
+      {:name, _, "class"} ->
+        class_stmt(mods, rest)
+
+      {:name, _, "interface"} ->
+        class_stmt(mods, rest)
+
+      {:name, _, "trait"} ->
+        class_stmt(mods, rest)
+
+      _ ->
+        raise(ParseError, message: "expected class after #{mod}", line: peek_line(rest))
+    end
+  end
+
+  # ───────────────────────── classes ─────────────────────────
+
+  defp class_stmt(mods, [{_, _, kind} | rest]) do
+    {name, rest2} = take_ident(rest)
+    {extends, rest3} = optional_extends(kind, rest2)
+    {implements, rest4} = optional_implements(kind, rest3)
+
+    rest5 = expect_op(rest4, "{")
+    {members, rest6} = class_members(rest5, [], name)
+    rest7 = expect_op(rest6, "}")
+
+    decl = %{
+      name: name,
+      kind: String.to_atom(kind),
+      modifiers: mods,
+      extends: extends,
+      implements: implements,
+      consts: List.flatten(Keyword.get_values(members, :consts)),
+      props: List.flatten(Keyword.get_values(members, :props)),
+      methods: List.flatten(Keyword.get_values(members, :methods)),
+      uses: Keyword.get_values(members, :uses)
+    }
+
+    {{:class_def, decl}, rest7}
+  end
+
+  # interfaces may extend several parents; classes/traits at most one
+  defp optional_extends("interface", ts) do
+    {yes, rest} = take_name(ts, "extends")
+
+    if yes do
+      {list, r} = interface_list(rest)
+      {list, r}
+    else
+      {[], ts}
+    end
+  end
+
+  defp optional_extends(_kind, ts) do
+    {yes, rest} = take_name(ts, "extends")
+
+    if yes do
+      {parts, r, _} = qualified_name(rest)
+      {[parts], r}
+    else
+      {[], ts}
+    end
+  end
+
+  defp optional_implements("interface", ts), do: {[], ts}
+
+  defp optional_implements(_kind, ts) do
+    {yes, rest} = take_name(ts, "implements")
+
+    if yes do
+      {list, r} = interface_list(rest)
+      {list, r}
+    else
+      {[], ts}
+    end
+  end
+
+  defp interface_list(ts, acc \\ []) do
+    {parts, rest, _} = qualified_name(ts)
+    {yes, rest2} = take_op(rest, ",")
+
+    if yes do
+      interface_list(rest2, [parts | acc])
+    else
+      {Enum.reverse([parts | acc]), rest}
+    end
+  end
+
+  defp class_members(ts, acc, _cls) do
+    cond do
+      at_op?(ts, "}") ->
+        {Enum.reverse(acc), ts}
+
+      true ->
+        {member, rest} = class_member(ts)
+        class_members(rest, [member | acc], _cls)
+    end
+  end
+
+  defp class_member(ts) do
+    cond do
+      at_name?(ts, "const") ->
+        const_member(ts)
+
+      at_name?(ts, "use") ->
+        trait_use(ts)
+
+      at_name?(ts, "public") or at_name?(ts, "protected") or at_name?(ts, "private") or
+        at_name?(ts, "static") or at_name?(ts, "abstract") or at_name?(ts, "final") or
+        at_name?(ts, "var") or at_name?(ts, "function") ->
+        visibility_member(ts)
+
+      true ->
+        raise(ParseError, message: "unexpected token in class body", line: peek_line(ts))
+    end
+  end
+
+  defp const_member([{_, _, "const"} | rest]) do
+    {entries, rest2} = const_entries(rest, [])
+    {{:consts, entries}, expect_semi(rest2)}
+  end
+
+  defp const_entries(ts, acc) do
+    {name, rest} = take_ident(ts)
+
+    {value, rest2} =
+      case take_op(rest, "=") do
+        {true, r} -> expr(r)
+        {false, _} -> {:null, rest}
+      end
+
+    {yes, rest3} = take_op(rest2, ",")
+
+    if yes do
+      const_entries(rest3, [{name, value} | acc])
+    else
+      {Enum.reverse([{name, value} | acc]), rest2}
+    end
+  end
+
+  defp trait_use([{_, _, "use"} | rest]) do
+    {traits, rest2} = use_trait_names(rest, [])
+
+    {adaptions, rest3} =
+      if at_op?(rest2, "{") do
+        {ad, r} = trait_adaptions(tl(rest2), [])
+        r2 = expect_op(r, "}")
+        {ad, r2}
+      else
+        {[], rest2}
+      end
+
+    {{:uses, {traits, adaptions}}, expect_semi(rest3)}
+  end
+
+  defp use_trait_names(ts, acc) do
+    {parts, rest, _} = qualified_name(ts)
+    {yes, rest2} = take_op(rest, ",")
+
+    # stop if the next token opens a { block (adaptions)
+    if yes and not at_op?(rest2, "{") do
+      use_trait_names(rest2, [parts | acc])
+    else
+      if yes do
+        {Enum.reverse([parts | acc]), rest2}
+      else
+        {Enum.reverse([parts | acc]), rest}
+      end
+    end
+  end
+
+  defp trait_adaptions(ts, acc) do
+    if at_op?(ts, "}") do
+      {Enum.reverse(acc), ts}
+    else
+      {ad, rest} = trait_adaption(ts)
+      rest2 = expect_semi(rest)
+      trait_adaptions(rest2, [ad | acc])
+    end
+  end
+
+  # Insteadof: `B::m insteadof A;`  As: `B::m as x;` / `B::m as protected x;` / `m as x;`
+  defp trait_adaption(ts) do
+    {parts, rest, _} = qualified_name(ts)
+    rest2 = expect_op(rest, "::")
+    {method, rest3} = take_ident(rest2)
+
+    {yes2, rest4} = take_name(rest3, "insteadof")
+
+    if yes2 do
+      {excluded, rest5} = use_trait_names(rest4, [])
+      {{:insteadof, parts, method, excluded}, rest5}
+    else
+      {_, rest4b} = take_name(rest3, "as")
+
+      {vis, alias, rest5} =
+        case peek(rest4b) do
+          {:name, _, n} when n in ~w(public protected private) ->
+            {String.to_atom(n), nil, tl(rest4b)}
+
+          _ ->
+            {nil, nil, rest4b}
+        end
+
+      case peek(rest5) do
+        {:name, _, alias_name} ->
+          {{:as, parts, method, alias_name, vis}, tl(rest5)}
+
+        _ ->
+          {{:as, nil, method, method, vis}, rest5}
+      end
+    end
+  end
+
+  defp visibility_member(ts) do
+    {mods, rest} = take_member_modifiers(ts, [])
+
+    vis = Enum.find(mods, &(&1 in [:public, :protected, :private])) || :public
+    static? = :static in mods
+    abstract? = :abstract in mods
+
+    cond do
+      at_name?(rest, "function") ->
+        method_member(rest, vis, static?, abstract?)
+
+      match?([{:variable, _, _} | _], rest) ->
+        prop_member(rest, vis, static?)
+
+      # typed property: `public int $x` (param_type consumes the hint)
+      match?([{:name, _, _} | _], rest) ->
+        prop_member(rest, vis, static?)
+
+      true ->
+        raise(ParseError,
+          message: "expected property or method in class body",
+          line: peek_line(rest)
+        )
+    end
+  end
+
+  defp take_member_modifiers(ts, acc) do
+    case peek(ts) do
+      {:name, _, n} when n in ~w(public protected private var static abstract final) ->
+        mod = if n == "var", do: :public, else: String.to_atom(n)
+        take_member_modifiers(tl(ts), [mod | acc])
+
+      _ ->
+        {Enum.reverse(acc), ts}
+    end
+  end
+
+  defp take_visibility(ts) do
+    case peek(ts) do
+      {:name, _, n} when n in ~w(public protected private var) ->
+        {if(n == "var", do: :public, else: String.to_atom(n)), tl(ts)}
+
+      _ ->
+        {:public, ts}
+    end
+  end
+
+  defp take_static(ts) do
+    case peek(ts) do
+      {:name, _, "static"} -> {true, tl(ts)}
+      _ -> {false, ts}
+    end
+  end
+
+  defp take_abstract(ts) do
+    case peek(ts) do
+      {:name, _, "abstract"} -> {true, tl(ts)}
+      _ -> {false, ts}
+    end
+  end
+
+  defp prop_member(ts, vis, static?) do
+    {props, rest} = prop_entries(ts, vis, static?, [])
+    {{:props, props}, expect_semi(rest)}
+  end
+
+  defp prop_entries(ts, vis, static?, acc) do
+    {_t, rest0} = param_type(ts)
+
+    case rest0 do
+      [{:variable, _, name} | rest2] ->
+        {default, rest3} =
+          case take_op(rest2, "=") do
+            {true, r} -> expr(r)
+            {false, _} -> {nil, rest2}
+          end
+
+        {yes, rest4} = take_op(rest3, ",")
+
+        if yes do
+          prop_entries(rest4, vis, static?, [{vis, static?, name, default} | acc])
+        else
+          {Enum.reverse([{vis, static?, name, default} | acc]), rest3}
+        end
+
+      _ ->
+        raise(ParseError, message: "expected property declaration", line: peek_line(rest0))
+    end
+  end
+
+  defp method_member([{_, _, "function"} | rest], vis, static?, abstract?) do
+    {by_ref?, rest1} =
+      case take_op(rest, "&") do
+        {true, r} -> {true, r}
+        {false, _} -> {false, rest}
+      end
+
+    {name, rest2} = take_ident(rest1)
+    rest3 = expect_op(rest2, "(")
+    {params, rest4} = param_list(rest3)
+    rest5 = return_hint(rest4)
+
+    {body, rest6} =
+      cond do
+        # abstract methods and interface declarations end with `;`
+        abstract? or at_op?(rest5, ";") ->
+          {[], expect_semi(rest5)}
+
+        true ->
+          rest5b = expect_op(rest5, "{")
+          {stmts, r} = block_body(rest5b)
+          {stmts, r}
+      end
+
+    {{:methods, [{vis, static?, abstract?, by_ref?, name, params, body}]}, rest6}
+  end
+
+  # statement-level `const A = 1, B = 2;`
+  defp const_stmt([{_, _, "const"} | rest]) do
+    {entries, rest2} = const_entries(rest, [])
+    {{:const_decl, entries}, expect_semi(rest2)}
   end
 
   defp echo_stmt([{_, _, "echo"} | rest]) do
@@ -1391,6 +1745,10 @@ defmodule PhpBeam.Parser do
       {:op, _, "$"} ->
         {e, rest} = var_or_expr(tl(ts))
         {{:var_var, e}, rest}
+
+      # fully-qualified name in expression position: \App\Models\User
+      {:op, _, "\\"} ->
+        qualified_name_expr(ts)
 
       {:op, _, "["} ->
         {items, rest} = list_items(tl(ts), "]")
