@@ -22,3 +22,6 @@ phpbeam-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 /phpx
+
+# macOS metadata
+.DS_Store

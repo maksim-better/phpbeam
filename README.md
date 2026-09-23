@@ -1,6 +1,8 @@
 # phpbeam — PHP on the BEAM
 
-用 Elixir 实现的 **PHP 8.4 子集树遍历解释器**，运行在 Erlang 虚拟机（BEAM）上。这是"在 BEAM 上实现 PHP"的第一阶段：词法 → 语法 → 求值四层完整落地，语义以本机 PHP 8.4 为金标准做**逐字节差分测试**。
+**English** | [简体中文](README.zh-CN.md)
+
+A tree-walking interpreter for a **subset of PHP 8.4**, implemented in Elixir and running on the Erlang VM (BEAM). This is stage one of "bringing PHP to the BEAM": a complete lexer → parser → evaluator pipeline whose semantics are pinned against a local PHP 8.4 via **byte-exact differential testing**.
 
 ```
 $ ./phpx test/cases/13_showcase.php
@@ -13,60 +15,64 @@ caught: Division by zero
 interpolation: 3 items for ~€26.74
 ```
 
-## 快速开始
+## Quick start
 
 ```console
-$ mix deps.get && mix escript.build   # 生成 ./phpx
-$ ./phpx script.php                   # 运行脚本
+$ mix deps.get && mix escript.build   # builds ./phpx
+$ ./phpx script.php                   # run a script
 $ ./phpx -r 'echo "hi ", PHP_INT_MAX, "\n";'
-$ ./phpx --repl                       # 状态持久化 REPL（变量/函数/类跨行保留）
-$ mix test                            # 单测 + 差分测试（需本机 php 8.4 于 /opt/homebrew/bin/php）
+$ ./phpx --repl                       # persistent REPL (vars/functions/classes kept across lines)
+$ mix test                            # unit + differential tests (needs a local PHP 8.4 at /opt/homebrew/bin/php)
 ```
 
-## 支持范围
+## Supported subset
 
-| 层 | 能力 |
+| Layer | Capabilities |
 | --- | --- |
-| 词法 | `<?php`/`<?=`/inline HTML、行/块注释（含 `?>`-in-comment 规则）、全部数值字面量（hex/oct/bin/下划线/64 位溢出转 float）、单双引号、heredoc/nowdoc（7.3+ 弹性缩进）、转义序列、简单与 `{$...}` 插值 |
-| 语法 | 完整运算符优先级（`or`/`and` 低于赋值、`**` 高于一元负号、`??` 右结合）、替代语法（`if: endif`）、`match`、`list()` 解构、闭包/箭头函数/IIFE、trait（`insteadof`/`as`）、类/接口/抽象/final、静态成员、命名空间与 `use` |
-| 求值 | PHP 8 类型杂耍（松散相等矩阵、数字字符串、算术 coercion、`"az"++`）、有序哈希数组（slot 方案保插入序，键规范化含 int64 边界）、`max(整型键)+1` 自动索引、var_dump/print_r/var_export/json 逐字节一致的格式化 |
-| 类 | 单继承、接口、trait 扁平化、`self`/`static`/`parent`（后期静态绑定）、`::class`、`instanceof`、静态属性、可见性、`__construct`/`__get`/`__set`/`__isset`/`__call`/`__callStatic`/`__toString`、对象句柄语义（写穿透） |
-| 异常 | 原生 `Throwable` 层次（Exception/Error 及常用子类）、`throw`/`try`/`catch`（按继承链匹配）/`finally`、算术错误物化为异常对象 |
-| 引用 | `$a = &$b` 共享单元、`foreach as &$v` 写回、`&` 参数写回、`usort` 族引用排序 |
-| 函数 | 约 90 个内置函数 + `call_user_func(_array)`/`array_map`/`array_filter`/`array_reduce`/`usort`/`uasort`/`uksort` 高阶函数、static 变量、递归、可变参数、命名参数 |
+| Lexer | `<?php`/`<?=`/inline HTML, line/block comments (incl. the `?>`-in-comment rule), all numeric literals (hex/oct/bin/underscores/64-bit overflow to float), single/double quotes, heredoc/nowdoc (7.3+ flexible indentation), escape sequences, simple and `{$...}` interpolation |
+| Parser | full operator precedence (`or`/`and` bind looser than assignment, `**` binds tighter than unary minus, `??` right-associative), alternative syntax (`if: endif`), `match`, `list()` destructuring, closures/arrow functions/IIFE, traits (`insteadof`/`as`), classes/interfaces/abstract/final, static members, namespaces and `use` |
+| Evaluation | PHP 8 type juggling (loose-equality matrix, numeric strings, arithmetic coercion, `"az"++`), ordered hash arrays (a slot scheme that preserves insertion order, key normalization incl. int64 boundaries), `max(int key)+1` auto-indexing, byte-exact var_dump/print_r/var_export/json formatting |
+| Classes | single inheritance, interfaces, trait flattening, `self`/`static`/`parent` (late static binding), `::class`, `instanceof`, static properties, visibility, `__construct`/`__get`/`__set`/`__isset`/`__call`/`__callStatic`/`__toString`, object-handle semantics (writes propagate) |
+| Exceptions | native `Throwable` hierarchy (Exception/Error and common subclasses), `throw`/`try`/`catch` (matching along the inheritance chain)/`finally`, arithmetic errors materialized as exception objects |
+| References | `$a = &$b` shared cells, `foreach as &$v` write-back, `&` parameter write-back, `usort`-family in-place sorting |
+| Functions | ~90 built-in functions + `call_user_func(_array)`/`array_map`/`array_filter`/`array_reduce`/`usort`/`uasort`/`uksort` higher-order functions, static variables, recursion, variadics, named arguments |
 
-## 架构
+## Architecture
 
 ```
 lib/phpbeam/
-├── lexer.ex        # 词法：HTML/PHP 模式切换、heredoc、插值扫描
-├── parser.ex       # 递归下降语法：token → AST（节点形状见 ast.ex）
-├── interp.ex       # 语句执行、控制流信号（return/break/continue/throw 以值穿透，状态不丢）
-├── eval.ex         # 表达式求值、左值路径写、函数/方法分派、高阶内置
-├── classes.ex      # 类模型：注册（trait 扁平化）、继承链查找、原生 Throwable
-├── value.ex        # zval 等价物 + 全部类型杂耍规则（gcvt 14 位浮点格式化、短表示）
-├── parray.ex       # 有序哈希数组（slot 单调递增保序）
-├── render.ex       # var_dump/print_r/var_export（与 PHP 逐字节一致）
-├── builtin/        # string/math/array/var + 求值器侧高阶函数
-└── cli.ex          # phpx CLI + 持久化 REPL
+├── lexer.ex        # lexing: HTML/PHP mode switching, heredoc, interpolation scanning
+├── parser.ex       # recursive-descent parsing: tokens → AST (node shapes in ast.ex)
+├── interp.ex       # statement execution, control-flow signals (return/break/continue/throw pass through as values, state is never lost)
+├── eval.ex         # expression evaluation, lvalue writes, function/method dispatch, higher-order builtins
+├── classes.ex      # class model: registration (trait flattening), inheritance-chain lookup, native Throwables
+├── value.ex        # the zval equivalent + all type-juggling rules (gcvt 14-digit float formatting, short representations)
+├── parray.ex       # ordered hash array (monotonic slots preserve order)
+├── render.ex       # var_dump/print_r/var_export (byte-exact against PHP)
+├── builtin/        # string/math/array/var + evaluator-side higher-order functions
+└── cli.ex          # the phpx CLI + persistent REPL
 ```
 
-**关键设计**：
+**Key design decisions:**
 
-- **控制流即值**：`return`/`break`/`throw` 都是 `{:unwind, signal}` 元组穿透求值器并携带最新解释器状态——static 变量、对象注册表、输出缓冲在异常路径上不丢失（Elixir 异常会丢弃累积状态，故不用）。
-- **对象注册表**：`{:object, id}` 句柄指向 `interp.objects`，属性写穿透所有持有者，与 PHP 的 zval 引用语义一致。
-- **数组 slot 方案**：单调递增 slot 保留插入序，删除留洞，替换保持原位；`max(历史整型键)+1` 自动索引（含负键、unset 后高水位保持）。
-- **差分测试**：`test/cases/*.php` 在本机 PHP 8.4 与 phpx 上运行并逐字节比对 stdout——13 组用例覆盖从算术边角（`018` 非法八进制、`"1abc"+1` 警告后取 1）到 OOP/异常/引用的完整语义。
+- **Control flow as values**: `return`/`break`/`throw` propagate through the evaluator as `{:unwind, signal}` tuples carrying the latest interpreter state — statics, the object registry, and output buffers all survive exception paths (Elixir exceptions would discard accumulated state, so they are not used for control flow).
+- **Object registry**: values hold `{:object, id}` handles into `interp.objects`; property writes propagate to every holder, matching PHP's zval reference semantics.
+- **Array slot scheme**: monotonically increasing slots preserve insertion order; deletions leave holes and replacements keep their position; `max(historical int keys)+1` auto-indexing (including negative keys and the high-water mark after unset).
+- **Differential testing**: every `test/cases/*.php` runs on both local PHP 8.4 and phpx, with stdout compared byte for byte — 13 suites covering everything from arithmetic corners (`018` illegal octal, `"1abc"+1` warns then yields 1) to the full semantics of OOP, exceptions, and references.
 
-## 已知偏差
+## Known deviations
 
-- `__destruct` 不保证时序（BEAM GC 语义），脚本结束时统一执行
-- 不支持 resource 类型与文件 I/O、`eval()`、匿名类、goto、枚举
-- 树遍历解释器比 php-src 慢 1~2 个数量级（预期内，性能优化属于后续编译后端里程碑）
-- 可见性检查宽松（private/protected 读取放行，写入按声明）
+- `__destruct` timing is not guaranteed (BEAM GC semantics); destructors all run at script end
+- No resource type or file I/O; no `eval()`, anonymous classes, `goto`, or enums
+- The tree-walking interpreter is 1–2 orders of magnitude slower than php-src (expected; performance is a milestone of the future compiled backend)
+- Visibility checks are lenient (private/protected reads are allowed; writes follow declarations)
 
-## 后续路线
+## Roadmap
 
-- PHP → Elixir AST 编译后端（原生 BEAM 性能 + 热加载，词法/语法/值模型全部复用）
-- Plug 每请求一 BEAM 进程的 Web 运行时（PHP share-nothing 与 BEAM 进程模型天然对齐）
-- Elixir 互操作（PHP 调 Elixir 函数）、`eval`/文件 I/O
+- A PHP → Elixir AST compilation backend (native BEAM performance + hot code loading; the lexer/parser/value model is fully reused)
+- A Plug-based web runtime with one BEAM process per request (PHP's share-nothing model maps naturally onto BEAM processes)
+- Elixir interop (PHP calling Elixir functions), `eval`/file I/O
+
+## License
+
+[MIT](LICENSE)
