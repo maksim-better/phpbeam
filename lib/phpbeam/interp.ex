@@ -69,6 +69,66 @@ defmodule PhpBeam.Interp do
     {out, code}
   end
 
+  # ───────────────────────── persistent REPL state ─────────────────────────
+
+  def repl_init do
+    {Env.global_scope([]), register_builtins(%__MODULE__{})}
+  end
+
+  # evaluate one snippet against persistent state: {output, new_state}
+  def repl_eval({env, interp}, src) do
+    with {:ok, toks} <- PhpBeam.Lexer.tokenize("<?php " <> src),
+         {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
+      {res, e2, i2} = exec_stmts(stmts, env, interp)
+
+      out = IO.iodata_to_binary(Enum.reverse(i2.out))
+      i3 = %{i2 | out: []}
+
+      case res do
+        :ok ->
+          {out, {e2, i3}}
+
+        {:unwind, {:return, _}} ->
+          {out, {e2, i3}}
+
+        {:unwind, {:halt, code}} ->
+          {out, {:halt, code}}
+
+        {:unwind, {:php_throw, val}} ->
+          msg = uncaught_message(val, i3)
+          {out <> msg, {env, i3}}
+
+        {:unwind, {:fatal, msg}} ->
+          {out <> "PHP Fatal error:  #{msg}\n", {env, i3}}
+
+        {:unwind, _} ->
+          {out, {e2, i3}}
+      end
+    else
+      {:error, msg, line} ->
+        {"PHP Parse error:  #{msg} on line #{line}\n", {env, interp}}
+    end
+  end
+
+  defp uncaught_message({:native_error, class, msg}, _i),
+    do: "\nPHP Fatal error:  Uncaught #{class}: #{msg}\n"
+
+  defp uncaught_message({:object, _} = obj_ref, i) do
+    obj = Eval.get_object(i, obj_ref)
+    cls = display_class(i, obj.class)
+    msg = PhpBeam.Eval.php_to_string(PArray.get(obj.props, {:string, "message"}, {:string, ""}))
+    "\nPHP Fatal error:  Uncaught #{cls}: #{msg}\n"
+  end
+
+  defp uncaught_message(_, _i), do: "\nPHP Fatal error:  uncaught value\n"
+
+  defp display_class(i, key) do
+    case PhpBeam.Classes.get_class(i, key) do
+      %{name: n} -> n
+      _ -> if key == "stdclass", do: "stdClass", else: key
+    end
+  end
+
   defp interp2_stub, do: %__MODULE__{}
 
   defp maybe_line(0), do: ""
@@ -328,7 +388,7 @@ defmodule PhpBeam.Interp do
     # write the ref back into the subject container
     interp3 =
       case Eval.path_write(path, k, v_val, env, interp2) do
-        {:ok, _e, it} -> it
+        {_e, it} -> it
         _ -> interp2
       end
 
@@ -373,9 +433,10 @@ defmodule PhpBeam.Interp do
     end
   end
 
+  # keys here are bare (int/binary), not tagged values
   defp remaining_pairs(arr, after_key) do
     pairs = PArray.to_pairs(arr)
-    idx = Enum.find_index(pairs, fn {k, _} -> Value.strict_eq(k, after_key) end)
+    idx = Enum.find_index(pairs, fn {k, _} -> k == after_key end)
 
     cond do
       is_nil(idx) -> []

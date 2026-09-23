@@ -91,36 +91,42 @@ defmodule PhpBeam.CLI do
 end
 
 defmodule PhpBeam.Repl do
-  @moduledoc "Minimal read-eval-print loop."
+  @moduledoc """
+  Persistent-state read-eval-print loop: variables, functions and classes
+  survive across inputs.
+  """
 
   def start do
     IO.puts("phpx repl — PHP on BEAM (type a statement, :q to quit)")
-    loop("", 1)
+    state = PhpBeam.Interp.repl_init()
+    loop("", state)
   end
 
-  defp loop(buffer, line_no) do
+  defp loop(buffer, state) do
     prompt = if buffer == "", do: "phpx> ", else: "...   > "
-    input = IO.gets(prompt)
 
-    case input do
+    case IO.gets(prompt) do
       :eof ->
         :ok
 
       :error ->
         :ok
 
-      line when line in [":q\n", ":q\r\n"] ->
+      line when line in [":q\n", ":q\r\n", ":q\r"] ->
         :ok
+
+      "" ->
+        loop(buffer, state)
 
       line ->
         buffer2 = buffer <> line
 
         if complete?(buffer2) do
-          {out, _code} = PhpBeam.CLI.run_and_capture("<?php " <> buffer2)
+          {out, state2} = PhpBeam.Interp.repl_eval(state, buffer2)
           IO.write(out)
-          loop("", line_no + 1)
+          loop("", state2)
         else
-          loop(buffer2, line_no + 1)
+          loop(buffer2, state)
         end
     end
   end

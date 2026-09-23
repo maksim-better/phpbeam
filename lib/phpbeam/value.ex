@@ -507,6 +507,10 @@ defmodule PhpBeam.Value do
   def arith_operand({:object, _}),
     do: {:error, Error.type_error("Unsupported operand types: object")}
 
+  # reference cells are dereferenced by the caller before arithmetic; a bare
+  # cell falling through here treats as null (0), never a crash
+  def arith_operand({:ref, _}), do: {:num, {:int, 0}}
+
   @doc "+ - * — int stays int unless a float is involved or int overflows."
   def arith(op, a, b) when op in [:+, :-, :*] do
     with {:ok, x} <- coerced(a),

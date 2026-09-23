@@ -329,27 +329,30 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  # $b = &$a — both names share one ref cell afterwards
   def eval({:assign_ref, target, rhs}, env, interp) do
     case rhs do
-      {:var, _} = rv ->
-        {{:val, v}, env2, interp2} = eval(rv, env, interp)
+      {:var, rname} ->
+        {id, interp2} =
+          case Env.lookup(env, interp, rname) do
+            {:ok, {:ref, rid}} ->
+              {rid, interp}
 
-        # reuse the existing ref cell if the RHS is already a reference
-        {id, interp3} =
-          case Env.lookup(env2, interp2, var_name(rv)) do
-            {:ok, {:ref, rid}} -> {rid, interp2}
-            _ -> new_ref(v, interp2)
+            {:ok, v} ->
+              new_ref(deref(v, interp), interp)
+
+            _ ->
+              new_ref(:null, interp)
           end
 
+        {:ok, env2, interp3} = Env.bind_var(env, interp2, rname, {:ref, id})
         {env3, interp4} = assign(target, {:ref, id}, env2, interp3)
-
-        case target do
-          {:var, _} -> :ok
-          _ -> :ok
-        end
-        |> tap(fn _ -> bind_var_to_ref(env3, interp4, target, id) end)
-
         {{:val, deref({:ref, id}, interp4)}, env3, interp4}
+
+      {:index, _, _} ->
+        # taking a reference of an array element: bind the element to a cell
+        {{:val, _cur}, _, _} = eval(rhs, env, interp)
+        {{:unwind, {:fatal, "cannot take reference of this expression yet"}}, env, interp}
 
       {:new, _, _} ->
         {{:unwind, {:fatal, "cannot take reference of new expression"}}, env, interp}
@@ -360,7 +363,8 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:assign_op, op, target, rhs}, env, interp) do
-    {cur, get_env, interp2} = read_target(target, env, interp)
+    {cur0, get_env, interp2} = read_target(target, env, interp)
+    cur = deref(cur0, interp2)
 
     {{:val, r}, env2, interp3} = eval(rhs, get_env, interp2)
 
@@ -385,28 +389,32 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:pre_inc, target}, env, interp) do
-    {cur, env2, interp2} = read_target(target, env, interp)
+    {cur0, env2, interp2} = read_target(target, env, interp)
+    cur = deref(cur0, interp2)
     v = Value.increment(deref(cur, interp2))
     {env3, interp3} = assign(target, v, env2, interp2)
     {{:val, v}, env3, interp3}
   end
 
   def eval({:pre_dec, target}, env, interp) do
-    {cur, env2, interp2} = read_target(target, env, interp)
+    {cur0, env2, interp2} = read_target(target, env, interp)
+    cur = deref(cur0, interp2)
     v = Value.decrement(deref(cur, interp2))
     {env3, interp3} = assign(target, v, env2, interp2)
     {{:val, v}, env3, interp3}
   end
 
   def eval({:post_inc, target}, env, interp) do
-    {cur, env2, interp2} = read_target(target, env, interp)
+    {cur0, env2, interp2} = read_target(target, env, interp)
+    cur = deref(cur0, interp2)
     v = Value.increment(deref(cur, interp2))
     {env3, interp3} = assign(target, v, env2, interp2)
     {{:val, cur}, env3, interp3}
   end
 
   def eval({:post_dec, target}, env, interp) do
-    {cur, env2, interp2} = read_target(target, env, interp)
+    {cur0, env2, interp2} = read_target(target, env, interp)
+    cur = deref(cur0, interp2)
     v = Value.decrement(deref(cur, interp2))
     {env3, interp3} = assign(target, v, env2, interp2)
     {{:val, cur}, env3, interp3}
@@ -1017,13 +1025,25 @@ defmodule PhpBeam.Eval do
   # ─────────────────── higher-order builtins (need the evaluator) ───────────────────
 
   defp higher_order(name, args, env, interp) do
-    if name in ~w(call_user_func call_user_func_array array_map array_filter array_reduce array_walk) do
-      case resolve_args(eval_args(args, env, interp, false)) do
-        {:ok, vals} -> dispatch_ho(name, vals, env, interp)
-        {:unwind, u} -> {{:unwind, u}, env, interp}
-      end
-    else
-      :not_mine
+    cond do
+      # sorts need the raw array-argument lvalue for writeback
+      name in ~w(usort uasort uksort) ->
+        unwrap_args =
+          Enum.map(args, fn
+            {:arg, e, _, _} -> e
+            {:arg_spread, e, _} -> e
+          end)
+
+        dispatch_ho(name, unwrap_args, env, interp)
+
+      name in ~w(call_user_func call_user_func_array array_map array_filter array_reduce array_walk) ->
+        case resolve_args(eval_args(args, env, interp, false)) do
+          {:ok, vals} -> dispatch_ho(name, vals, env, interp)
+          {:unwind, u} -> {{:unwind, u}, env, interp}
+        end
+
+      true ->
+        :not_mine
     end
   end
 
@@ -1063,7 +1083,98 @@ defmodule PhpBeam.Eval do
   defp dispatch_ho("array_walk", _, env, interp),
     do: {{:val, {:bool, false}}, env, interp}
 
+  # user-comparator sorts mutate their array argument (writeback via lvalue)
+  defp dispatch_ho("usort", [arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
+
+    cmp_val = fn a, b ->
+      case call_cb_raw(cb_arg, [a, b], env, i1) do
+        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
+        _ -> 0
+      end
+    end
+
+    sorted = merge_sort(PArray.values(arr), cmp_val)
+    {e2, i2} = assign(arr_arg, {:array, PArray.from_pairs(Enum.map(sorted, &{nil, &1}))}, env, i1)
+    {{:val, {:bool, true}}, e2, i2}
+  end
+
+  defp dispatch_ho("uasort", [arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
+
+    cmp_val = fn {_ka, a}, {_kb, b} ->
+      case call_cb_raw(cb_arg, [a, b], env, i1) do
+        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
+        _ -> 0
+      end
+    end
+
+    sorted = merge_sort(PArray.to_pairs(arr), cmp_val)
+
+    out =
+      Enum.reduce(sorted, PArray.new(), fn {k, v}, acc ->
+        {:ok, a2} = PArray.put(acc, wrap_bare(k), v)
+        a2
+      end)
+
+    {e2, i2} = assign(arr_arg, {:array, out}, env, i1)
+    {{:val, {:bool, true}}, e2, i2}
+  end
+
+  defp dispatch_ho("uksort", [arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
+
+    cmp_val = fn {ka, _}, {kb, _} ->
+      case call_cb_raw(cb_arg, [wrap_bare(ka), wrap_bare(kb)], env, i1) do
+        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
+        _ -> 0
+      end
+    end
+
+    sorted = merge_sort(PArray.to_pairs(arr), cmp_val)
+
+    out =
+      Enum.reduce(sorted, PArray.new(), fn {k, v}, acc ->
+        {:ok, a2} = PArray.put(acc, wrap_bare(k), v)
+        a2
+      end)
+
+    {e2, i2} = assign(arr_arg, {:array, out}, env, i1)
+    {{:val, {:bool, true}}, e2, i2}
+  end
+
+  defp wrap_bare(k) when is_integer(k), do: {:int, k}
+  defp wrap_bare(k) when is_binary(k), do: {:string, k}
+
+  # comparator returns -1|0|1; negative = keep order
+  defp merge_sort(list, cmp_val) when length(list) > 1 do
+    mid = div(length(list), 2)
+    {left, right} = Enum.split(list, mid)
+    merge(merge_sort(left, cmp_val), merge_sort(right, cmp_val), cmp_val)
+  end
+
+  defp merge_sort([_] = single, _cmp_val), do: single
+  defp merge_sort([], _cmp_val), do: []
+
+  defp merge([], right, _cmp), do: right
+  defp merge(left, [], _cmp), do: left
+
+  defp merge([a | rest_a], [b | rest_b], cmp) do
+    if cmp.(a, b) <= 0 do
+      [a | merge(rest_a, [b | rest_b], cmp)]
+    else
+      [b | merge([a | rest_a], rest_b, cmp)]
+    end
+  end
+
   defp dispatch_ho(_, _, env, interp), do: :not_mine
+
+  defp call_cb_raw(cb_ast, call_args, env, interp) do
+    case eval(cb_ast, env, interp) do
+      {{:val, cb}, e2, i2} -> call_cb(cb, call_args, e2, i2)
+      unw -> unw
+    end
+  end
 
   defp expand_spreads(args, env, interp) do
     Enum.flat_map(args, fn
@@ -1560,14 +1671,6 @@ defmodule PhpBeam.Eval do
   defp globals_array(interp) do
     {:array, PArray.from_pairs(Enum.map(interp.globals, fn {k, v} -> {{:string, k}, v} end))}
   end
-
-  defp bind_var_to_ref(env, _interp, {:var, name}, id) do
-    # keep a local binding pointing at the same cell so later writes share it
-    {:ok, env2, _} = {Env.bind_var(env, nil, name, {:ref, id}), nil}
-    env2
-  end
-
-  defp bind_var_to_ref(env, _interp, _target, _id), do: env
 
   # {:unwind, u, env, interp} carries the latest state so the exception
   # object survives across statement boundaries
@@ -2175,7 +2278,16 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  # write into a specific key of the path root (foreach by-ref)
+  # write into a specific key of the path root (foreach by-ref);
+  # keys arriving bare (int/binary from to_pairs) get wrapped
+  def path_write(path, key, v, env, interp) when is_binary(key) do
+    path_write(path, {:string, key}, v, env, interp)
+  end
+
+  def path_write(path, key, v, env, interp) when is_integer(key) do
+    path_write(path, {:int, key}, v, env, interp)
+  end
+
   def path_write(path, key, v, env, interp) do
     {head, rest} = split_path(path)
 

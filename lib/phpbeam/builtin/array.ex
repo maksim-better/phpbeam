@@ -390,13 +390,16 @@ defmodule PhpBeam.Builtin.ArrayFns do
         {:int, n} -> n
       end
 
+    key_tagged = wrap_key(key_v)
+    idx_key = if is_binary(key_v), do: {:string, key_v}, else: {:int, key_v}
+
     out =
       PArray.values(a)
       |> Enum.filter(&match?({:array, _}, &1))
       |> Enum.flat_map(fn {:array, row} ->
-        case PArray.get(row, key_v, :null) do
-          :null -> []
-          v -> [v]
+        case PArray.fetch(row, idx_key) do
+          {:ok, v} -> [v]
+          :error -> []
         end
       end)
 

@@ -278,14 +278,13 @@ defmodule PhpBeam.Builtin.StringFns do
   end
 
   defp implode([sep, {:array, arr} | _], i),
-    do:
-      {:ok, {:string, Enum.map_join(PArray.values(arr), s(sep), &PhpBeam.Eval.php_to_string/1)},
-       i}
+    do: {:ok, {:string, Enum.map_join(PArray.values(arr), s(sep), &deref_str(&1, i))}, i}
 
   defp implode([{:array, arr}, sep | _], i),
-    do:
-      {:ok, {:string, Enum.map_join(PArray.values(arr), s(sep), &PhpBeam.Eval.php_to_string/1)},
-       i}
+    do: {:ok, {:string, Enum.map_join(PArray.values(arr), s(sep), &deref_str(&1, i))}, i}
+
+  defp deref_str({:ref, _} = r, i), do: PhpBeam.Eval.php_to_string(PhpBeam.Eval.deref(r, i))
+  defp deref_str(v, _i), do: PhpBeam.Eval.php_to_string(v)
 
   defp explode([sep, v | rest], i) do
     {str, sep_str} = {s(v), s(sep)}
