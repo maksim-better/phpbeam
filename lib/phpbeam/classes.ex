@@ -140,6 +140,11 @@ defmodule PhpBeam.Classes do
 
   defp parent_key(_parts, _kind, _interp), do: nil
 
+  defp resolve_decl_name({parts, fq}, interp) do
+    {:ok, key} = Eval.resolve_class_key({:cname, fq, parts}, nil, interp)
+    key
+  end
+
   defp resolve_decl_name(parts, interp) do
     {:ok, key} = Eval.resolve_class_key({:cname, false, parts}, nil, interp)
     key
@@ -387,13 +392,33 @@ defmodule PhpBeam.Classes do
 
     members = native_throwable_methods()
 
-    Enum.reduce(base, base, fn {key, class}, acc ->
+    ifaces =
+      Map.new(
+        ~w(countable arrayaccess stringable jsonserializable iterator aggregate traversable),
+        &{&1, native_iface(String.capitalize(&1))}
+      )
+
+    base
+    |> Enum.reduce(base, fn {key, class}, acc ->
       if key == "throwable" do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
       end
     end)
+    |> Map.merge(ifaces)
+  end
+
+  defp native_iface(name) do
+    %__MODULE__{
+      name: name,
+      kind: :interface,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods: %{}
+    }
   end
 
   defp native_class(name, parent, ifaces) do

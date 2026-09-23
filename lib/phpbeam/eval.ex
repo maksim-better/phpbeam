@@ -840,6 +840,17 @@ defmodule PhpBeam.Eval do
   end
 
   # dispatch a PHP method (user or native) with $this bound
+  def call_count_method(obj_ref, interp) do
+    case PhpBeam.Classes.find_method(
+           interp,
+           PhpBeam.Eval.get_object(interp, obj_ref).class,
+           "count"
+         ) do
+      nil -> {{:val, {:int, 1}}, nil, interp}
+      m -> call_php_method(obj_ref, m, [], nil, interp)
+    end
+  end
+
   def call_php_method({:object, _} = obj_ref, method, args, env, interp) do
     obj = get_object(interp, obj_ref)
 

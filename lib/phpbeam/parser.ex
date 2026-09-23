@@ -245,8 +245,8 @@ defmodule PhpBeam.Parser do
     {yes, rest} = take_name(ts, "extends")
 
     if yes do
-      {parts, r, _} = qualified_name(rest)
-      {[parts], r}
+      {parts, r, fq} = qualified_name(rest)
+      {[{parts, fq}], r}
     else
       {[], ts}
     end
@@ -266,13 +266,13 @@ defmodule PhpBeam.Parser do
   end
 
   defp interface_list(ts, acc \\ []) do
-    {parts, rest, _} = qualified_name(ts)
+    {parts, rest, fq} = qualified_name(ts)
     {yes, rest2} = take_op(rest, ",")
 
     if yes do
-      interface_list(rest2, [parts | acc])
+      interface_list(rest2, [{parts, fq} | acc])
     else
-      {Enum.reverse([parts | acc]), rest}
+      {Enum.reverse([{parts, fq} | acc]), rest}
     end
   end
 
@@ -412,6 +412,9 @@ defmodule PhpBeam.Parser do
     cond do
       at_name?(rest, "function") ->
         method_member(rest, vis, static?, abstract?)
+
+      at_name?(rest, "const") ->
+        const_member(rest)
 
       match?([{:variable, _, _} | _], rest) ->
         prop_member(rest, vis, static?)

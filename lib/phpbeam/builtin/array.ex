@@ -68,9 +68,27 @@ defmodule PhpBeam.Builtin.ArrayFns do
 
   defp count_v(vals, i) do
     case vals do
-      [{:array, a} | _] -> {:ok, {:int, PArray.size(a)}, i}
-      [v | _] when v != :null -> {:ok, {:int, 1}, i}
-      _ -> {:ok, {:int, 0}, i}
+      [{:array, a} | _] ->
+        {:ok, {:int, PArray.size(a)}, i}
+
+      # Countable objects delegate to their count() method
+      [{:object, _} = oref | _] ->
+        obj = PhpBeam.Eval.get_object(i, oref)
+
+        if PhpBeam.Classes.find_method(i, obj.class, "count") do
+          case PhpBeam.Eval.call_count_method(oref, i) do
+            {{:val, v}, _, i2} -> {:ok, v, i2}
+            _ -> {:ok, {:int, 1}, i}
+          end
+        else
+          {:ok, {:int, 1}, i}
+        end
+
+      [v | _] when v != :null ->
+        {:ok, {:int, 1}, i}
+
+      _ ->
+        {:ok, {:int, 0}, i}
     end
   end
 
