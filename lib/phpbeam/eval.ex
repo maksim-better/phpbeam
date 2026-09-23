@@ -262,21 +262,36 @@ defmodule PhpBeam.Eval do
 
   def eval({:static_prop, cname_e, name_e}, env, interp) do
     with {:ok, key} <- class_key_of(cname_e, env, interp) do
-      name = static_prop_name(name_e, env, interp)
+      if is_nil(PhpBeam.Classes.get_class(interp, key)) do
+        {{:unwind, {:fatal, "Class \"#{class_display_string(cname_e, env, interp)}\" not found"}},
+         env, interp}
+      else
+        name = static_prop_name(name_e, env, interp)
 
-      case PhpBeam.Classes.find_prop(interp, key, name) do
-        {:ok, prop} when prop.static? ->
-          statics = Map.get(interp.statics, static_props_key(key), %{})
-          {{:val, Map.get(statics, prop.name, prop.default)}, env, interp}
+        case PhpBeam.Classes.find_prop(interp, key, name) do
+          {:ok, prop} when prop.static? ->
+            statics = Map.get(interp.statics, static_props_key(key), %{})
+            {{:val, Map.get(statics, prop.name, prop.default)}, env, interp}
 
-        _ ->
-          {{:unwind,
-            {:fatal,
-             "Access to undeclared static property #{display_class(interp, key)}::$#{name}"}},
-           env, interp}
+          _ ->
+            {{:unwind,
+              {:fatal,
+               "Access to undeclared static property #{display_class(interp, key)}::$#{name}"}},
+             env, interp}
+        end
       end
     else
       {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+    end
+  end
+
+  # the display name keeps the source spelling (keys are lowercased)
+  defp class_display_string({:cname, _fq, parts}, _env, _interp), do: Enum.join(parts, "\\")
+
+  defp class_display_string(e, env, interp) do
+    case eval(e, env, interp) do
+      {{:val, {:string, s}}, _, _} -> s
+      _ -> ""
     end
   end
 
@@ -297,7 +312,8 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:class_const, cname_e, cname}, env, interp) do
-    with {:ok, key} <- class_key_of(cname_e, env, interp) do
+    with {:ok, key} <- class_key_of(cname_e, env, interp),
+         true <- not is_nil(PhpBeam.Classes.get_class(interp, key)) do
       case PhpBeam.Classes.find_const(interp, key, cname) do
         {:ok, v} ->
           {{:val, v}, env, interp}
@@ -314,7 +330,12 @@ defmodule PhpBeam.Eval do
           end
       end
     else
-      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+      {:error, msg} ->
+        {{:unwind, {:fatal, msg}}, env, interp}
+
+      false ->
+        {{:unwind, {:fatal, "Class \"#{class_display_string(cname_e, env, interp)}\" not found"}},
+         env, interp}
     end
   end
 
@@ -540,20 +561,23 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:binop, op, l, r}, env, interp) do
-    {{:val, lv}, env2, interp2} = eval(l, env, interp)
-    {{:val, rv}, env3, interp3} = eval(r, env2, interp2)
-    # note: `and`/`or`/`xor` above don't short-circuit per PHP semantics
-    # for `&&`/`||`; keyword forms are handled above with eager evaluation
+    # operands must thread unwinds (a fatal in `$x::$y . "z"` used to badmatch)
+    case eval(l, env, interp) do
+      {{:val, lv}, env2, interp2} ->
+        case eval(r, env2, interp2) do
+          {{:val, rv}, env3, interp3} ->
+            case apply_binop(op, lv, rv, env3, interp3) do
+              {:ok, v} -> {{:val, v}, env3, interp3}
+              {:unwind, u, interp4} -> {{:unwind, u}, env3, interp4}
+              {:unwind, _} = u -> {u, env3, interp3}
+            end
 
-    case apply_binop(op, lv, rv, env3, interp3) do
-      {:ok, v} ->
-        {{:val, v}, env3, interp3}
+          {{:unwind, _} = u, env3, interp3} ->
+            {u, env3, interp3}
+        end
 
-      {:unwind, u, interp4} ->
-        {{:unwind, u}, env3, interp4}
-
-      {:unwind, _} = u ->
-        {u, env3, interp3}
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
     end
   end
 
@@ -1992,6 +2016,68 @@ defmodule PhpBeam.Eval do
 
       "NULL" ->
         {:ok, :null}
+
+      # error-reporting bit mask (PHP 8 values)
+      "E_ERROR" ->
+        {:ok, {:int, 1}}
+
+      "E_RECOVERABLE_ERROR" ->
+        {:ok, {:int, 4096}}
+
+      "E_PARSE" ->
+        {:ok, {:int, 4}}
+
+      "E_CORE_ERROR" ->
+        {:ok, {:int, 16}}
+
+      "E_CORE_WARNING" ->
+        {:ok, {:int, 32}}
+
+      "E_COMPILE_ERROR" ->
+        {:ok, {:int, 64}}
+
+      "E_COMPILE_WARNING" ->
+        {:ok, {:int, 128}}
+
+      "E_USER_ERROR" ->
+        {:ok, {:int, 256}}
+
+      "E_USER_WARNING" ->
+        {:ok, {:int, 512}}
+
+      "E_USER_NOTICE" ->
+        {:ok, {:int, 1024}}
+
+      "E_USER_DEPRECATED" ->
+        {:ok, {:int, 16_384}}
+
+      "E_DEPRECATED" ->
+        {:ok, {:int, 8192}}
+
+      "E_STRICT" ->
+        {:ok, {:int, 2048}}
+
+      # setlocale categories (darwin C library values)
+      "LC_CTYPE" ->
+        {:ok, {:int, 0}}
+
+      "LC_NUMERIC" ->
+        {:ok, {:int, 1}}
+
+      "LC_TIME" ->
+        {:ok, {:int, 2}}
+
+      "LC_COLLATE" ->
+        {:ok, {:int, 3}}
+
+      "LC_MONETARY" ->
+        {:ok, {:int, 4}}
+
+      "LC_MESSAGES" ->
+        {:ok, {:int, 5}}
+
+      "LC_ALL" ->
+        {:ok, {:int, 6}}
 
       _ ->
         :error

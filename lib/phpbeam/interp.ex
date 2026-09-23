@@ -26,7 +26,21 @@ defmodule PhpBeam.Interp do
             uses: %{normal: %{}, function: %{}, const: %{}},
             halted: nil,
             suppress: 0,
-            warnings: 0
+            warnings: 0,
+            ini: %{
+              "precision" => "14",
+              "serialize_precision" => "-1",
+              "error_reporting" => "22527",
+              "default_charset" => "UTF-8",
+              "include_path" => ".:",
+              "input_encoding" => "",
+              "internal_encoding" => "",
+              "output_encoding" => ""
+            },
+            error_handler: nil,
+            shutdown_fns: [],
+            autoload_fns: [],
+            ob_stack: []
 
   @type t :: %__MODULE__{}
 
@@ -152,8 +166,13 @@ defmodule PhpBeam.Interp do
 
   # ───────────────────────── output / warnings ─────────────────────────
 
-  def write(interp, data) when is_binary(data),
-    do: %{interp | out: [data | interp.out]}
+  # writes land in the innermost open output buffer when ob_start is active
+  def write(interp, data) when is_binary(data) do
+    case interp.ob_stack do
+      [top | rest] -> %{interp | ob_stack: [%{top | buf: [data | top.buf]} | rest]}
+      [] -> %{interp | out: [data | interp.out]}
+    end
+  end
 
   def warn(interp, msg) do
     if interp.suppress > 0 do
