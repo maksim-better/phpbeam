@@ -13,7 +13,8 @@ defmodule PhpBeam.Env do
             function: nil,
             called_class: nil,
             scope_class: nil,
-            closure_captures: %{}
+            closure_captures: %{},
+            args: []
 
   @type t :: %__MODULE__{}
 

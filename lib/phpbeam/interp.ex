@@ -114,6 +114,9 @@ defmodule PhpBeam.Interp do
 
         {:unwind, {:engine_fatal, msg}} ->
           {engine_fatal_out(interp2, msg), 255, interp2}
+
+        {:unwind, {:parse_error, msg, file, line}} ->
+          {parse_error_out(interp2, "syntax error, " <> msg, file, line), 255, interp2}
       end
     else
       {:error, msg, line} ->
@@ -234,6 +237,12 @@ defmodule PhpBeam.Interp do
     end
   end
 
+  # php-cli stdout display: `Parse error: syntax error, ... in file on line N`
+  defp parse_error_out(interp, msg, file, line) do
+    out = IO.iodata_to_binary(Enum.reverse(interp.out))
+    out <> "\nParse error: #{msg} in #{file} on line #{line}\n"
+  end
+
   defp engine_fatal_out(interp, msg) do
     out = IO.iodata_to_binary(Enum.reverse(interp.out))
 
@@ -252,6 +261,36 @@ defmodule PhpBeam.Interp do
     %{interp | call_stack: [frame | cs]}
   end
 
+  # frame with rendered arguments: php 8.4 traces show `g(10, 'x', Array)`
+  def push_frame(interp, name, arg_vals) do
+    rendered = Enum.map_join(arg_vals, ", ", &arg_display(&1, interp))
+    push_frame(interp, "#{name}(#{rendered})")
+  end
+
+  defp arg_display({:int, n}, _), do: Integer.to_string(n)
+  defp arg_display({:float, f}, _), do: PhpBeam.Value.float_to_string(f)
+  defp arg_display({:bool, true}, _), do: "true"
+  defp arg_display({:bool, false}, _), do: "false"
+  defp arg_display(:null, _), do: "NULL"
+  defp arg_display({:array, _}, _), do: "Array"
+
+  defp arg_display({:string, s}, _) do
+    if String.length(s) > 15,
+      do: "'" <> String.slice(s, 0, 15) <> "...'",
+      else: "'" <> s <> "'"
+  end
+
+  defp arg_display({:object, id}, interp) do
+    case Map.get(interp.objects, id) do
+      %{class: cls} ->
+        name = (PhpBeam.Classes.get_class(interp, cls) || %{name: cls}).name
+        "Object(" <> name <> ")"
+
+      _ ->
+        "Object"
+    end
+  end
+
   def pop_frame(%{call_stack: [_ | rest]} = interp), do: %{interp | call_stack: rest}
   def pop_frame(interp), do: interp
 
@@ -261,11 +300,11 @@ defmodule PhpBeam.Interp do
     file = current_file(interp)
     line = interp.cur_line
 
+    # the stack's head is the innermost frame — render as-is
     frames =
       interp.call_stack
-      |> Enum.reverse()
       |> Enum.with_index()
-      |> Enum.map(fn {f, i} -> "##{i} #{f.file}(#{f.line}): #{f.func}()\n" end)
+      |> Enum.map(fn {f, i} -> "##{i} #{f.file}(#{f.line}): #{f.func}\n" end)
 
     trace = frames ++ ["##{length(interp.call_stack)} {main}\n"]
 
@@ -308,11 +347,15 @@ defmodule PhpBeam.Interp do
 
   def exec_stmt({:block, stmts}, env, interp), do: exec_stmts(stmts, env, interp)
 
+  # `echo $a, f(), $b` compiles to one ECHO opcode per operand in php —
+  # each argument is written before the next one is evaluated
   def exec_stmt({:echo, exprs}, env, interp) do
-    case Eval.concat_to_string(exprs, env, interp) do
-      {out, env2, interp2} -> {:ok, env2, write(interp2, out)}
-      {:unwind, u, env2, interp2} -> {{:unwind, u}, env2, interp2}
-    end
+    Enum.reduce_while(exprs, {:ok, env, interp}, fn e, {:ok, en, it} ->
+      case Eval.concat_to_string([e], en, it) do
+        {out, en2, it2} -> {:cont, {:ok, en2, write(it2, out)}}
+        {:unwind, u, en2, it2} -> {:halt, {{:unwind, u}, en2, it2}}
+      end
+    end)
   end
 
   def exec_stmt({:expr_stmt, e}, env, interp) do

@@ -954,7 +954,8 @@ defmodule PhpBeam.Eval do
           {:arg, {:lit_val, {:string, name}}, false, nil},
           {:arg,
            {:lit_val,
-            {:array, PArray.from_pairs(Enum.map(arg_values(args, env, interp), &{nil, &1}))}},
+            {:array,
+             PArray.from_pairs(Enum.map(elem(arg_values(args, env, interp), 0), &{nil, &1}))}},
            false, nil}
         ]
 
@@ -964,8 +965,8 @@ defmodule PhpBeam.Eval do
 
   defp arg_values(args, env, interp) do
     case resolve_args(eval_args(args, env, interp, false)) do
-      {:ok, vals} -> vals
-      _ -> []
+      {:ok, vals, it} -> {vals, it || interp}
+      {:unwind, _, _} -> {[], interp}
     end
   end
 
@@ -987,7 +988,7 @@ defmodule PhpBeam.Eval do
     if method.native do
       {:native, native} = method.native
 
-      vals = arg_values(args, env, interp)
+      {vals, interp} = arg_values(args, env, interp)
 
       case native.(obj, vals, interp) do
         {:ok, {ret, obj2}, interp2} ->
@@ -1008,12 +1009,16 @@ defmodule PhpBeam.Eval do
         scope_class: method.class || obj.class
       }
 
-      {binds, interp2} = bind_params(method.params, args, fenv, env, interp)
+      {binds, vals, interp2} = bind_params(method.params, args, fenv, env, interp)
 
       fenv2 =
-        Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
+        binds
+        |> Enum.reduce(%{fenv | args: vals}, fn {n, v}, acc ->
+          %{acc | vars: Map.put(acc.vars, n, v)}
+        end)
 
-      interp2 = Interp.push_frame(interp2, "#{display_class(interp2, obj.class)}->#{method.name}")
+      interp2 =
+        Interp.push_frame(interp2, "#{display_class(interp2, obj.class)}->#{method.name}", vals)
 
       {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
 
@@ -1075,7 +1080,8 @@ defmodule PhpBeam.Eval do
           {:arg, {:lit_val, {:string, name}}, false, nil},
           {:arg,
            {:lit_val,
-            {:array, PArray.from_pairs(Enum.map(arg_values(args, env, interp), &{nil, &1}))}},
+            {:array,
+             PArray.from_pairs(Enum.map(elem(arg_values(args, env, interp), 0), &{nil, &1}))}},
            false, nil}
         ]
 
@@ -1086,7 +1092,7 @@ defmodule PhpBeam.Eval do
   defp call_static_method(key, method, args, env, interp) do
     if method.native do
       {:native, native} = method.native
-      vals = arg_values(args, env, interp)
+      {vals, interp} = arg_values(args, env, interp)
 
       case native.(%{__ref__: 0, class: key, props: PArray.new()}, vals, interp) do
         {:ok, {ret, _obj2}, interp2} -> {{:val, ret}, env, interp2}
@@ -1103,10 +1109,14 @@ defmodule PhpBeam.Eval do
         scope_class: method.class || key
       }
 
-      {binds, interp2} = bind_params(method.params, args, fenv, env, interp)
+      {binds, vals, interp2} = bind_params(method.params, args, fenv, env, interp)
 
       fenv2 =
-        Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
+        Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
+          %{acc | vars: Map.put(acc.vars, n, v)}
+        end)
+
+      interp2 = Interp.push_frame(interp2, "#{display_class(interp2, key)}::#{method.name}", vals)
 
       {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
       {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
@@ -1182,16 +1192,117 @@ defmodule PhpBeam.Eval do
 
         dispatch_ho(name, unwrap_args, env, interp)
 
-      name in ~w(call_user_func call_user_func_array array_map array_filter array_reduce array_walk) ->
+      name in ~w(call_user_func call_user_func_array array_map array_filter array_reduce array_walk eval func_get_args func_get_arg func_num_args) ->
         case resolve_args(eval_args(args, env, interp, false)) do
-          {:ok, vals} -> dispatch_ho(name, vals, env, interp)
-          {:unwind, u} -> {{:unwind, u}, env, interp}
+          {:ok, vals, it} -> dispatch_ho(name, vals, env, it || interp)
+          {:unwind, u, it} -> {{:unwind, u}, env, it || interp}
         end
 
       true ->
         :not_mine
     end
   end
+
+  # eval: the string is PHP code WITHOUT tags; executes in the calling
+  # scope, `return` yields the value. Warnings inside report the pseudo
+  # file `{calling_file}({calling_line}) : eval()'d code` with in-string lines
+  defp dispatch_ho("eval", [{:string, code} | _], env, interp) do
+    pseudo = eval_file(interp) <> "(#{interp.cur_line}) : eval()'d code"
+
+    with {:ok, toks} <- PhpBeam.Lexer.tokenize("<?php " <> code),
+         {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
+      i2 = %{interp | file_stack: [pseudo | interp.file_stack]}
+
+      case Interp.exec_stmts(stmts, env, i2) do
+        {:ok, e2, i3} ->
+          {{:val, :null}, e2, pop_file(i3)}
+
+        {{:unwind, {:return, v}}, _, i3} ->
+          {{:val, v}, env, pop_file(i3)}
+
+        {{:unwind, _} = u, e2, i3} ->
+          {u, e2, i3}
+      end
+    else
+      {:error, msg, line} ->
+        {{:unwind, {:parse_error, msg, pseudo, line}}, env, interp}
+    end
+  end
+
+  defp dispatch_ho("func_num_args", _vals, env, interp) do
+    case fn_context("func_num_args", env, interp) do
+      nil -> {{:val, {:int, length(env.args)}}, env, interp}
+      err -> err
+    end
+  end
+
+  defp dispatch_ho("func_get_args", _vals, env, interp) do
+    case fn_context("func_get_args", env, interp) do
+      nil ->
+        arr = PArray.from_pairs(Enum.map(env.args, &{nil, &1}))
+        {{:val, {:array, arr}}, env, interp}
+
+      err ->
+        err
+    end
+  end
+
+  defp dispatch_ho("func_get_arg", [{:int, n} | _], env, interp) do
+    case fn_context("func_get_arg", env, interp) do
+      nil ->
+        cond do
+          n < 0 ->
+            native_throw(
+              "ValueError",
+              "func_get_arg(): Argument #1 ($position) must be greater than or equal to 0",
+              env,
+              interp,
+              "func_get_arg(#{n})"
+            )
+
+          n >= length(env.args) ->
+            native_throw(
+              "ValueError",
+              "func_get_arg(): Argument #1 ($position) must be less than the number of the arguments passed to the currently executed function",
+              env,
+              interp,
+              "func_get_arg(#{n})"
+            )
+
+          true ->
+            {{:val, Enum.at(env.args, n)}, env, interp}
+        end
+
+      err ->
+        err
+    end
+  end
+
+  defp dispatch_ho("func_get_arg", _, env, interp), do: {{:val, {:bool, false}}, env, interp}
+
+  defp fn_context(name, env, interp) do
+    if env.function == nil do
+      native_throw(
+        "Error",
+        "#{name}() must be called from a function context",
+        env,
+        interp,
+        "#{name}()"
+      )
+    else
+      nil
+    end
+  end
+
+  defp native_throw(class, msg, env, interp, frame_display) do
+    interp2 = Interp.push_frame(interp, frame_display)
+    # materialize eagerly: catch bindings and get_class() expect a real object
+    {obj_ref, interp3} = materialize_native({:native_error, class, msg}, interp2)
+    {{:unwind, {:php_throw, obj_ref}}, env, interp3}
+  end
+
+  defp eval_file(%{file_stack: [f | _]}), do: f
+  defp eval_file(_), do: "Command line code"
 
   defp dispatch_ho("call_user_func", [cb | rest], env, interp),
     do: call_cb(cb, rest, env, interp)
@@ -1453,9 +1564,13 @@ defmodule PhpBeam.Eval do
       scope_class: scope_class
     }
 
-    interp = Interp.push_frame(interp, "{closure}")
-    {binds, interp2} = bind_params(params, args, fenv, env, interp)
-    fenv2 = Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
+    {binds, vals, interp2} = bind_params(params, args, fenv, env, interp)
+    interp2 = Interp.push_frame(interp2, "{closure}", vals)
+
+    fenv2 =
+      Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
+        %{acc | vars: Map.put(acc.vars, n, v)}
+      end)
 
     case Interp.exec_stmts(body, fenv2, interp2) do
       {:ok, e, i} -> {{:val, :null}, e, Interp.pop_frame(i)}
@@ -1466,11 +1581,14 @@ defmodule PhpBeam.Eval do
 
   def call_function({:user, params, body}, name, args, env, interp, _from_method?) do
     fenv = Env.function_scope(name, name)
-    interp = Interp.push_frame(interp, name)
-    {binds, interp2} = bind_params(params, args, fenv, env, interp)
+    {binds, vals, interp2} = bind_params(params, args, fenv, env, interp)
+    interp2 = Interp.push_frame(interp2, name, vals)
 
     # write back by-ref arguments
-    fenv2 = Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
+    fenv2 =
+      Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
+        %{acc | vars: Map.put(acc.vars, n, v)}
+      end)
 
     {res, _, interp3} = Interp.exec_stmts(body, fenv2, interp2)
 
@@ -1518,7 +1636,9 @@ defmodule PhpBeam.Eval do
       end)
 
     {vals, env2, interp2} = spread_args(args, env, interp)
-    do_bind_params(params, vals, fenv, env2, interp2, [])
+    {binds, interp3} = do_bind_params(params, vals, fenv, env2, interp2, [])
+    plain_vals = Enum.map(vals, fn {:val, v} -> v end)
+    {binds, plain_vals, interp3}
   end
 
   defp spread_args(args, env, interp) do
@@ -1585,11 +1705,11 @@ defmodule PhpBeam.Eval do
     %{fun: fun, refs: ref_positions} = entry
 
     case args |> eval_args(env, interp, false) |> resolve_args() do
-      {:unwind, u} ->
-        {{:unwind, u}, env, interp}
+      {:unwind, u, it} ->
+        {{:unwind, u}, env, it || interp}
 
-      {:ok, vals} ->
-        call_resolved_builtin(fun, vals, args, ref_positions, env, interp)
+      {:ok, vals, it} ->
+        call_resolved_builtin(fun, vals, args, ref_positions, env, it || interp)
     end
   end
 
@@ -1618,9 +1738,12 @@ defmodule PhpBeam.Eval do
   end
 
   defp resolve_args(arg_results) do
-    Enum.reduce_while(arg_results, {:ok, []}, fn
-      {{:val, v}, _, _}, {:ok, acc} -> {:cont, {:ok, acc ++ [v]}}
-      {{:unwind, u}, _, _}, _ -> {:halt, {:unwind, u}}
+    Enum.reduce_while(arg_results, {:ok, [], nil}, fn
+      {{:val, v}, _, it}, {:ok, acc, _} ->
+        {:cont, {:ok, acc ++ [v], it}}
+
+      {{:unwind, u}, _, it}, _ ->
+        {:halt, {:unwind, u, it}}
     end)
   end
 
