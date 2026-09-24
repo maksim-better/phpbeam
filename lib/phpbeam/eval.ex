@@ -771,11 +771,17 @@ defmodule PhpBeam.Eval do
           {{:unwind, {:fatal, "Class \"#{display_class(interp, key)}\" not found"}}, env, interp}
 
         class ->
-          if class.kind == :interface or class.kind == :trait do
-            {{:unwind, {:fatal, "Cannot instantiate #{class.kind} #{class.name}"}}, env, interp}
-          else
-            {{:object, _} = obj_ref, interp2} = make_instance(interp, key)
-            call_constructor(obj_ref, args, env, interp2)
+          cond do
+            class.abstract? ->
+              {{:unwind, {:fatal, "Cannot instantiate abstract class #{class.name}"}}, env,
+               interp}
+
+            class.kind == :interface or class.kind == :trait ->
+              {{:unwind, {:fatal, "Cannot instantiate #{class.kind} #{class.name}"}}, env, interp}
+
+            true ->
+              {{:object, _} = obj_ref, interp2} = make_instance(interp, key)
+              call_constructor(obj_ref, args, env, interp2)
           end
       end
     else

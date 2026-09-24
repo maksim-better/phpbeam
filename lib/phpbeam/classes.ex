@@ -71,8 +71,16 @@ defmodule PhpBeam.Classes do
           )
 
         case apply_traits(class, uses, interp) do
-          {:ok, class2} -> {:ok, %{interp | classes: Map.put(interp.classes, key, class2)}}
-          {:error, msg} -> {:error, msg}
+          {:ok, class2} ->
+            interp2 = %{interp | classes: Map.put(interp.classes, key, class2)}
+
+            case link_checks(class2, key, interp2) do
+              :ok -> {:ok, interp2}
+              {:error, msg} -> {:error, msg}
+            end
+
+          {:error, msg} ->
+            {:error, msg}
         end
       end
     end
@@ -93,13 +101,14 @@ defmodule PhpBeam.Classes do
       end)
 
     methods_map =
-      Map.new(methods, fn {vis, static?, abstract?, _by_ref?, mname, params, body} ->
+      Map.new(methods, fn {vis, static?, abstract?, final?, _by_ref?, mname, params, body} ->
         {String.downcase(mname),
          %{
            name: mname,
            visibility: vis,
            static?: static?,
            abstract?: abstract?,
+           final?: final?,
            params: params,
            body: body,
            class: key,
@@ -257,6 +266,234 @@ defmodule PhpBeam.Classes do
   def get_class(interp, key), do: Map.get(interp.classes, key)
 
   # returns the method map or nil
+  # ─────────────── inheritance strictness (link-time fatals) ───────────────
+
+  defp link_checks(class, key, interp) do
+    chain = parent_chain(interp, class.parent)
+
+    with :ok <- check_prop_overrides(class, chain, interp),
+         :ok <- check_method_overrides(class, chain, interp),
+         :ok <- check_abstract_methods(class, key, chain, interp) do
+      :ok
+    end
+  end
+
+  # ancestors of `key` INCLUDING itself, nearest first
+  defp parent_chain(_interp, nil), do: []
+
+  defp parent_chain(interp, key) do
+    case interp.classes[key] do
+      %{parent: p} -> [key | parent_chain(interp, p)]
+      _ -> [key]
+    end
+  end
+
+  defp check_prop_overrides(class, chain, interp) do
+    chain
+    |> Enum.find_value(fn a_key ->
+      ancestor = interp.classes[a_key]
+
+      Enum.find_value(ancestor.props, fn p ->
+        if p.visibility == :private do
+          nil
+        else
+          case Enum.find(class.props, &(&1.name == p.name)) do
+            nil ->
+              nil
+
+            cp ->
+              cond do
+                p.static? != cp.static? ->
+                  ours = if p.static?, do: "static", else: "non static"
+                  theirs = if p.static?, do: "non static", else: "static"
+
+                  "Cannot redeclare #{ours} #{ancestor.name}::$#{p.display} as #{theirs} " <>
+                    "#{class.name}::$#{cp.display}"
+
+                vis_rank(cp.visibility) < vis_rank(p.visibility) ->
+                  "Access level to #{class.name}::$#{cp.display} must be #{p.visibility}" <>
+                    " (as in class #{ancestor.name})"
+
+                true ->
+                  nil
+              end
+          end
+        end
+      end)
+    end)
+    |> case do
+      nil -> :ok
+      msg -> {:error, msg}
+    end
+  end
+
+  defp check_method_overrides(class, chain, interp) do
+    (chain ++ class.interfaces)
+    |> Enum.find_value(fn a_key ->
+      ancestor = interp.classes[a_key]
+      iface? = ancestor.kind == :interface
+
+      Enum.find_value(ancestor.methods, fn {lname, pm} ->
+        if pm.visibility == :private and not iface? do
+          nil
+        else
+          case Map.get(class.methods, lname) do
+            nil ->
+              nil
+
+            cm ->
+              cond do
+                pm.final? ->
+                  "Cannot override final method #{ancestor.name}::#{pm.name}()"
+
+                pm.static? != cm.static? ->
+                  if pm.static?,
+                    do:
+                      "Cannot make static method #{ancestor.name}::#{pm.name}() non static" <>
+                        " in class #{class.name}",
+                    else:
+                      "Cannot make non static method #{ancestor.name}::#{pm.name}() static" <>
+                        " in class #{class.name}"
+
+                vis_rank(cm.visibility) < vis_rank(pm.visibility) and pm.name != "__construct" ->
+                  "Access level to #{class.name}::#{cm.name}() must be #{pm.visibility}" <>
+                    " (as in class #{ancestor.name})"
+
+                pm.name != "__construct" and not params_compat?(pm.params, cm.params) ->
+                  "Declaration of #{class.name}::#{cm.name}(#{param_sig(cm.params)})" <>
+                    " must be compatible with #{ancestor.name}::#{pm.name}(#{param_sig(pm.params)})"
+
+                true ->
+                  nil
+              end
+          end
+        end
+      end)
+    end)
+    |> case do
+      nil -> :ok
+      msg -> {:error, msg}
+    end
+  end
+
+  defp check_abstract_methods(class, key, chain, interp) do
+    if class.abstract? do
+      :ok
+    else
+      ancestors = chain ++ class.interfaces
+
+      names =
+        [class.methods | Enum.map(ancestors, &interp.classes[&1].methods)]
+        |> Enum.flat_map(&Map.keys/1)
+        |> Enum.uniq()
+
+      missing =
+        Enum.flat_map(names, fn lname ->
+          case chain_lookup(interp, [key | chain], lname) do
+            {%{abstract?: true} = m, _owner} ->
+              [{owner_name(interp, m.class), m.name}]
+
+            {_m, _owner} ->
+              []
+
+            nil ->
+              case Enum.find(class.interfaces, fn ik ->
+                     Map.has_key?(interp.classes[ik].methods, lname)
+                   end) do
+                nil -> []
+                ik -> [{owner_name(interp, ik), interp.classes[ik].methods[lname].name}]
+              end
+          end
+        end)
+
+      case missing do
+        [] ->
+          :ok
+
+        missing ->
+          count = length(missing)
+
+          noun = if count == 1, do: "1 abstract method", else: "#{count} abstract methods"
+
+          list =
+            missing |> Enum.map(fn {owner, name} -> "#{owner}::#{name}" end) |> Enum.join(", ")
+
+          {:error,
+           "Class #{class.name} contains #{noun} and must therefore be declared abstract" <>
+             " or implement the remaining methods (#{list})"}
+      end
+    end
+  end
+
+  defp chain_lookup(interp, [k | rest], lname) do
+    case interp.classes[k] do
+      %{methods: methods} = c ->
+        case Map.fetch(methods, lname) do
+          {:ok, m} -> {m, c}
+          :error -> chain_lookup(interp, rest, lname)
+        end
+
+      _ ->
+        chain_lookup(interp, rest, lname)
+    end
+  end
+
+  defp chain_lookup(_interp, [], _lname), do: nil
+
+  defp owner_name(interp, key) do
+    case interp.classes[key] do
+      %{name: n} -> n
+      _ -> key
+    end
+  end
+
+  defp vis_rank(:private), do: 0
+  defp vis_rank(:protected), do: 1
+  defp vis_rank(:public), do: 2
+
+  # param tuples: {:param, name, type, default, by_ref?, variadic?}
+  defp params_compat?(pp, cp) do
+    p_var? = Enum.any?(pp, &match?({:param, _, _, _, _, true}, &1))
+    c_var? = Enum.any?(cp, &match?({:param, _, _, _, _, true}, &1))
+
+    cond do
+      not c_var? and length(cp) < length(pp) ->
+        false
+
+      required_count(cp) > required_count(pp) ->
+        false
+
+      true ->
+        Enum.zip(pp, cp)
+        |> Enum.all?(fn {{:param, _, pt, _, pr, _}, {:param, _, ct, _, cr, _}} ->
+          pr == cr and (ct == nil or ct == pt)
+        end)
+    end
+  end
+
+  defp required_count(params),
+    do: Enum.count(params, &match?({:param, _, _, nil, _, false}, &1))
+
+  defp param_sig(params) do
+    params
+    |> Enum.map(fn {:param, name, type, default, by_ref?, variadic?} ->
+      t = if type, do: type <> " ", else: ""
+      r = if by_ref?, do: "&", else: ""
+      d = if variadic?, do: "...", else: ""
+      def_ = if default != nil, do: " = " <> default_sig(default), else: ""
+      t <> r <> d <> "$" <> name <> def_
+    end)
+    |> Enum.join(", ")
+  end
+
+  defp default_sig({:int, n}), do: Integer.to_string(n)
+  defp default_sig({:float, f}), do: PhpBeam.Value.float_to_string(f)
+  defp default_sig({:string, s}), do: "\"#{s}\""
+  defp default_sig({:bool, true}), do: "true"
+  defp default_sig({:bool, false}), do: "false"
+  defp default_sig(:null), do: "null"
+  defp default_sig(_), do: "unknown"
+
   def find_method(interp, key, name) do
     case find_up(interp, key, String.downcase(name), fn class ->
            Map.fetch(class.methods, String.downcase(name))

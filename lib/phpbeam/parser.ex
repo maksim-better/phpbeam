@@ -430,10 +430,11 @@ defmodule PhpBeam.Parser do
     vis = Enum.find(mods, &(&1 in [:public, :protected, :private])) || :public
     static? = :static in mods
     abstract? = :abstract in mods
+    final? = :final in mods
 
     cond do
       at_name?(rest, "function") ->
-        method_member(rest, vis, static?, abstract?)
+        method_member(rest, vis, static?, abstract?, final?)
 
       at_name?(rest, "const") ->
         const_member(rest)
@@ -517,7 +518,7 @@ defmodule PhpBeam.Parser do
     end
   end
 
-  defp method_member([{_, _, "function"} | rest], vis, static?, abstract?) do
+  defp method_member([{_, _, "function"} | rest], vis, static?, abstract?, final?) do
     {by_ref?, rest1} =
       case take_op(rest, "&") do
         {true, r} -> {true, r}
@@ -541,7 +542,7 @@ defmodule PhpBeam.Parser do
           {stmts, r}
       end
 
-    {{:methods, [{vis, static?, abstract?, by_ref?, name, params, body}]}, rest6}
+    {{:methods, [{vis, static?, abstract?, final?, by_ref?, name, params, body}]}, rest6}
   end
 
   # statement-level `const A = 1, B = 2;`
@@ -1178,25 +1179,26 @@ defmodule PhpBeam.Parser do
     end
   end
 
-  # best-effort type consumption: `?A|B`, `int`, `\Foo\Bar`, `self` …
+  # type consumption that KEEPS the source spelling: `?A|B`, `int`,
+  # `\Foo\Bar`, `self` … — inheritance signature checks need it
   defp param_type(ts) do
     cond do
       at_op?(ts, "(") or at_op?(ts, ")") or at_op?(ts, "&") or at_op?(ts, "...") ->
         {nil, ts}
 
       at_op?(ts, "?") ->
-        {_t, r} = param_type_atom(tl(ts))
-        type_union_tail(r)
+        {t, r} = param_type_atom(tl(ts))
+        type_union_tail(r, "?" <> t)
 
       true ->
         case ts do
           [{:name, _, _} | _] ->
-            {_t, r} = param_type_atom(ts)
-            type_union_tail(r)
+            {t, r} = param_type_atom(ts)
+            type_union_tail(r, t)
 
           [{:op, _, "\\"} | _] ->
-            {_t, r} = param_type_atom(ts)
-            type_union_tail(r)
+            {t, r} = param_type_atom(ts)
+            type_union_tail(r, t)
 
           _ ->
             {nil, ts}
@@ -1205,22 +1207,22 @@ defmodule PhpBeam.Parser do
   end
 
   defp param_type_atom(ts) do
-    {_parts, rest, _fq} = qualified_name(ts)
-    {nil, rest}
+    {parts, rest, _fq} = qualified_name(ts)
+    {Enum.join(parts, "\\"), rest}
   end
 
-  defp type_union_tail(ts) do
+  defp type_union_tail(ts, acc) do
     cond do
       at_op?(ts, "|") ->
-        {_t, r} = param_type_atom(tl(ts))
-        type_union_tail(r)
+        {t, r} = param_type_atom(tl(ts))
+        type_union_tail(r, acc <> "|" <> t)
 
       at_op?(ts, "&") ->
-        {_t, r} = param_type_atom(tl(ts))
-        type_union_tail(r)
+        {t, r} = param_type_atom(tl(ts))
+        type_union_tail(r, acc <> "&" <> t)
 
       true ->
-        {nil, ts}
+        {acc, ts}
     end
   end
 

@@ -111,6 +111,9 @@ defmodule PhpBeam.Interp do
 
         {:unwind, {:fatal, msg}} ->
           {uncaught_out(interp2, "Error", msg), 255, interp2}
+
+        {:unwind, {:engine_fatal, msg}} ->
+          {engine_fatal_out(interp2, msg), 255, interp2}
       end
     else
       {:error, msg, line} ->
@@ -229,6 +232,13 @@ defmodule PhpBeam.Interp do
       |> write("\nWarning: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
       |> Map.update!(:warnings, &(&1 + 1))
     end
+  end
+
+  defp engine_fatal_out(interp, msg) do
+    out = IO.iodata_to_binary(Enum.reverse(interp.out))
+
+    out <>
+      "\nFatal error: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n"
   end
 
   defp current_file(%{file_stack: [f | _]}), do: f
@@ -804,7 +814,8 @@ defmodule PhpBeam.Interp do
   def exec_stmt({:class_def, decl}, env, interp) do
     case PhpBeam.Classes.register(decl, interp) do
       {:ok, interp2} -> {:ok, env, interp2}
-      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+      # link-time fatals render plain (no Uncaught wrapper, no trace)
+      {:error, msg} -> {{:unwind, {:engine_fatal, msg}}, env, interp}
     end
   end
 
