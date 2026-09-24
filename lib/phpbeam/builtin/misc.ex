@@ -43,6 +43,11 @@ defmodule PhpBeam.Builtin.MiscFns do
       "md5" => &md5_v/2,
       "sha1" => &sha1_v/2,
       "crc32" => &crc32_v/2,
+      "crc32b" => &crc32b_v/2,
+      "hash" => &hash_v/2,
+      "hash_hmac" => &hash_hmac_v/2,
+      "hash_equals" => &hash_equals_v/2,
+      "hash_algos" => &hash_algos_v/2,
       "is_resource" => &is_resource_v/2,
       "is_callable" => &is_callable_v/2,
       "is_a" => &is_a_v/2,
@@ -74,8 +79,8 @@ defmodule PhpBeam.Builtin.MiscFns do
     Enum.reduce(entries, fns, fn {name, fun}, acc ->
       Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []})
     end)
-    |> Map.put("is_callable", %{fun: fn v, i, _c -> is_callable_v(v, i) end, refs: [2]})
-    |> Map.put("headers_sent", %{fun: fn v, i, _c -> headers_sent_v(v, i) end, refs: [0, 1]})
+    |> Map.put("is_callable", %{fun: fn v, i, _c -> is_callable_v(v, i) end, refs: [2], skip_eval_refs: [2]})
+    |> Map.put("headers_sent", %{fun: fn v, i, _c -> headers_sent_v(v, i) end, refs: [0, 1], skip_eval_refs: [0, 1]})
   end
 
   defp val(vals, n \\ 0), do: Enum.at(vals, n)
@@ -700,6 +705,54 @@ defmodule PhpBeam.Builtin.MiscFns do
 
   defp md5_v(vals, i), do: digest(:md5, vals, i)
   defp sha1_v(vals, i), do: digest(:sha, vals, i)
+
+  # hash('sha256', data, raw?) / hash_hmac — the WP salt machinery's core
+  defp hash_v(vals, i) do
+    algo = down(s(vals))
+    raw? = int(vals, 2, 0) != 0
+
+    with {:ok, kind} <- hash_algo(algo) do
+      bin = :crypto.hash(kind, s(vals, 1))
+      {:ok, {:string, if(raw?, do: bin, else: Base.encode16(bin, case: :lower))}, i}
+    else
+      _ -> {:ok, {:bool, false}, warn(i, "hash(): Unknown hashing algorithm: #{algo}")}
+    end
+  end
+
+  defp hash_algo("md5"), do: {:ok, :md5}
+  defp hash_algo("sha1"), do: {:ok, :sha}
+  defp hash_algo("sha256"), do: {:ok, :sha256}
+  defp hash_algo("sha384"), do: {:ok, :sha384}
+  defp hash_algo("sha512"), do: {:ok, :sha512}
+  defp hash_algo(_), do: :error
+
+  defp hash_hmac_v(vals, i) do
+    algo = down(s(vals))
+    raw? = int(vals, 3, 0) != 0
+
+    with {:ok, kind} <- hash_algo(algo) do
+      bin = :crypto.mac(:hmac, kind, s(vals, 2), s(vals, 1))
+      {:ok, {:string, if(raw?, do: bin, else: Base.encode16(bin, case: :lower))}, i}
+    else
+      _ -> {:ok, {:bool, false}, warn(i, "hash_hmac(): Unknown hashing algorithm: #{algo}")}
+    end
+  end
+
+  defp hash_equals_v(vals, i) do
+    a = s(vals)
+    b = s(vals, 1)
+    # constant-time in php; plain comparison preserves observable behavior
+    {:ok, {:bool, byte_size(a) == byte_size(b) and a == b}, i}
+  end
+
+  defp hash_algos_v(_vals, i) do
+    algos = ~w(md5 sha1 sha256 sha384 sha512)
+    {:ok, {:array, PArray.from_pairs(Enum.map(algos, &{nil, {:string, &1}}))}, i}
+  end
+
+  defp crc32b_v(vals, i), do: crc32_v(vals, i)
+
+  defp warn(i, msg), do: PhpBeam.Interp.warn(i, msg)
 
   defp digest(kind, vals, i) do
     raw? = int(vals, 1, 0) != 0

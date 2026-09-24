@@ -12,7 +12,6 @@ defmodule PhpBeam.Builtin.ArrayFns do
       "count" => &count_v/2,
       "sizeof" => &count_v/2,
       "array_keys" => &array_keys/2,
-      "array_values" => &array_values/2,
       "in_array" => &in_array/2,
       "array_search" => &array_search/2,
       "array_key_exists" => &array_key_exists/2,
@@ -31,9 +30,11 @@ defmodule PhpBeam.Builtin.ArrayFns do
       "array_column" => &array_column/2,
       "array_diff" => &array_diff/2,
       "array_intersect" => &array_intersect/2,
-      "array_key_first" => &array_key_first/2,
-      "array_key_last" => &array_key_last/2,
-      "range" => &range_v/2
+      "range" => &range_v/2,
+      "array_change_key_case" => &array_change_key_case_v/2,
+      "array_key_first" => &array_key_first_v/2,
+      "array_key_last" => &array_key_last_v/2,
+      "array_column" => &array_column_v/2
     }
 
     mutators = %{
@@ -55,9 +56,13 @@ defmodule PhpBeam.Builtin.ArrayFns do
         Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []})
       end)
 
-    Enum.reduce(mutators, fns, fn {name, {fun, refs}}, acc ->
-      Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: refs})
-    end)
+    fns =
+      Enum.reduce(mutators, fns, fn {name, entry}, acc ->
+        {fun, refs} = normalize_entry(entry)
+        Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: refs})
+      end)
+
+    fns
   end
 
   defp arr([{:array, a} | _]), do: a
@@ -555,4 +560,92 @@ defmodule PhpBeam.Builtin.ArrayFns do
   defp ordered?(_, :asc), do: false
   defp ordered?(c, :desc) when c >= 0, do: true
   defp ordered?(_, :desc), do: false
+
+  defp array_change_key_case_v(vals, i) do
+    case Enum.at(vals, 0) do
+      {:array, arr} ->
+        upper? =
+          case Enum.at(vals, 1) do
+            {:int, n} -> n == 1
+            _ -> false
+          end
+
+        pairs =
+          Enum.map(PArray.to_pairs(arr), fn {k, v} ->
+            k2 =
+              cond do
+                not is_binary(k) -> k
+                upper? -> String.upcase(k)
+                true -> String.downcase(k)
+              end
+
+            {if(is_binary(k2), do: {:string, k2}, else: {:int, k2}), v}
+          end)
+
+        {:ok, {:array, PArray.from_pairs(pairs)}, i}
+
+      _ ->
+        {:ok, {:array, PArray.new()}, i}
+    end
+  end
+
+  defp array_key_first_v(vals, i) do
+    case Enum.at(vals, 0) do
+      {:array, arr} ->
+        case PArray.to_pairs(arr) do
+          [{k, _} | _] -> {:ok, wrap_key(k), i}
+          [] -> {:ok, :null, i}
+        end
+
+      _ ->
+        {:ok, :null, i}
+    end
+  end
+
+  defp array_key_last_v(vals, i) do
+    case Enum.at(vals, 0) do
+      {:array, arr} ->
+        case PArray.to_pairs(arr) |> Enum.reverse() do
+          [{k, _} | _] -> {:ok, wrap_key(k), i}
+          [] -> {:ok, :null, i}
+        end
+
+      _ ->
+        {:ok, :null, i}
+    end
+  end
+
+  defp array_column_v(vals, i) do
+    case Enum.at(vals, 0) do
+      {:array, arr} ->
+        col =
+          case Enum.at(vals, 1) do
+            {:int, n} -> {:int, n}
+            other -> {:string, PhpBeam.Value.cast_string_unsafe(other || :null)}
+          end
+
+        out =
+          Enum.flat_map(PArray.values(arr), fn
+            {:array, row} ->
+              case PArray.fetch(row, col) do
+                {:ok, v} -> [v]
+                :error -> []
+              end
+
+            _ ->
+              []
+          end)
+
+        {:ok, {:array, PArray.from_pairs(Enum.map(out, &{nil, &1}))}, i}
+
+      _ ->
+        {:ok, {:array, PArray.new()}, i}
+    end
+  end
+
+  defp wrap_key(k) when is_integer(k), do: {:int, k}
+  defp wrap_key(k) when is_binary(k), do: {:string, k}
+  # plain fns arrive as &name/2; mutators as {fun, refs}
+  defp normalize_entry({fun, refs}) when is_function(fun, 2), do: {fun, refs || []}
+  defp normalize_entry(fun) when is_function(fun, 2), do: {fun, []}
 end

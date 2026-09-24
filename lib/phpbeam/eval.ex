@@ -493,17 +493,37 @@ defmodule PhpBeam.Eval do
   def eval({:cast, kind, e}, env, interp) do
     {{:val, v}, env2, interp2} = eval(e, env, interp)
 
-    out =
-      case kind do
-        :int -> Value.to_int(v) |> elem(1)
-        :float -> Value.to_float(v) |> elem(1)
-        :bool -> {:bool, Value.truthy?(v)}
-        :string -> Value.cast_string(v) |> string_of_cast()
-        :array -> Value.to_array(v)
-        :object -> v
-      end
+    case kind do
+      :int ->
+        # lossy float→int casts raise a php 8.1+ deprecation on stdout
+        interp3 =
+          with {:float, f} <- v,
+               true <- trunc(f) != f do
+            Interp.warn_level(
+              interp2,
+              "Deprecated",
+              "Implicit conversion from float " <>
+                Value.float_to_string(f) <> " to int loses precision"
+            )
+          else
+            _ -> interp2
+          end
 
-    {{:val, out}, env2, interp2}
+        out = Value.to_int(v) |> elem(1)
+        {{:val, out}, env2, interp3}
+
+      other ->
+        out =
+          case other do
+            :float -> Value.to_float(v) |> elem(1)
+            :bool -> {:bool, Value.truthy?(v)}
+            :string -> Value.cast_string(v) |> string_of_cast()
+            :array -> Value.to_array(v)
+            :object -> v
+          end
+
+        {{:val, out}, env2, interp2}
+    end
   end
 
   def eval({:binop, :&&, l, r}, env, interp) do
@@ -580,6 +600,7 @@ defmodule PhpBeam.Eval do
           {{:val, rv}, env3, interp3} ->
             case apply_binop(op, lv, rv, env3, interp3) do
               {:ok, v} -> {{:val, v}, env3, interp3}
+              {:ok, v, interp4} -> {{:val, v}, env3, interp4}
               {:unwind, u, interp4} -> {{:unwind, u}, env3, interp4}
               {:unwind, _} = u -> {u, env3, interp3}
             end
@@ -2131,15 +2152,16 @@ defmodule PhpBeam.Eval do
 
   defp call_builtin(entry, _name, args, env, interp) do
     %{fun: fun, refs: ref_positions} = entry
+    skip_positions = Map.get(entry, :skip_eval_refs)
 
     {arg_list, ref_set} =
-      {args, MapSet.new(ref_positions || [])}
+      {args, MapSet.new(skip_positions || [])}
 
     {results, _env2, _it2} =
       Enum.reduce(arg_list |> Enum.with_index(), {[], env, interp}, fn {a, idx}, {acc, en, it} ->
         if MapSet.member?(ref_set, idx) do
-          # by-ref args are OUTPUT slots — evaluating them would warn on
-          # undefined vars php never reads
+          # ONLY for pure-output refs (headers_sent's &$file): a placeholder
+          # avoids warnings php never emits. Sort-style in-out refs evaluate.
           {[{{:val, :null}, en, it} | acc], en, it}
         else
           e =
@@ -2263,7 +2285,11 @@ defmodule PhpBeam.Eval do
       :% ->
         interp = lossy_warn(l, interp)
         interp = lossy_warn(r, interp)
-        value_or_throw(Value.modulo(l, r), interp)
+
+        case Value.modulo(l, r) do
+          {:ok, v} -> {:ok, v, interp}
+          {:error, %Error{} = err} -> throw_error(err) |> then(&{:unwind, elem(&1, 1), interp})
+        end
 
       :** ->
         value_or_throw(Value.power(l, r), interp)
@@ -2328,8 +2354,9 @@ defmodule PhpBeam.Eval do
 
   # float→int implicit conversion deprecation (parity with PHP 8)
   defp lossy_warn({:float, f}, interp) when trunc(f) != f do
-    PhpBeam.Interp.warn(
+    PhpBeam.Interp.warn_level(
       interp,
+      "Deprecated",
       "Implicit conversion from float " <>
         PhpBeam.Value.float_to_string(f) <> " to int loses precision"
     )
@@ -2982,6 +3009,21 @@ defmodule PhpBeam.Eval do
 
       "ENT_HTML5" ->
         {:ok, {:int, 48}}
+
+      "CASE_UPPER" ->
+        {:ok, {:int, 1}}
+
+      "CASE_LOWER" ->
+        {:ok, {:int, 0}}
+
+      "MYSQLI_CLIENT_SSL" ->
+        {:ok, {:int, 2048}}
+
+      "MYSQLI_CLIENT_COMPRESS" ->
+        {:ok, {:int, 32}}
+
+      "MYSQLI_OPT_SSL_VERIFY_SERVER_CERT" ->
+        {:ok, {:int, 2048}}
 
       "MYSQLI_REPORT_ERROR" ->
         {:ok, {:int, 1}}

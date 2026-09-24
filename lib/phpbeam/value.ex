@@ -37,7 +37,7 @@ defmodule PhpBeam.Value do
   def type({:object, _}), do: :object
 
   def gettype(v) do
-    case type(v) do
+    case type(foreign(v)) do
       :int -> "integer"
       :float -> "double"
       :string -> "string"
@@ -48,6 +48,20 @@ defmodule PhpBeam.Value do
       :resource -> "resource"
     end
   end
+
+
+  # markers like :__null (mysql rows) or atoms should not crash gettype
+  defp foreign({:int, _} = v), do: v
+  defp foreign({:float, _} = v), do: v
+  defp foreign({:string, _} = v), do: v
+  defp foreign({:bool, _} = v), do: v
+  defp foreign(:null), do: :null
+  defp foreign({:array, _} = v), do: v
+  defp foreign({:object, _} = v), do: v
+  defp foreign({:resource, _} = v), do: v
+  defp foreign(other) when is_atom(other), do: {:string, to_string(other)}
+  defp foreign(other) when is_binary(other), do: {:string, other}
+  defp foreign(other), do: {:string, inspect(other)}
 
   def truthy?({:int, 0}), do: false
   def truthy?({:float, 0.0}), do: false
@@ -266,6 +280,12 @@ defmodule PhpBeam.Value do
 
   def cast_string({:object, _}),
     do: {:error, Error.type_error("Object of class could not be converted to string")}
+
+  def cast_string({:resource, _}),
+    do: {:error, Error.type_error("Resource cannot be converted to string")}
+
+  # foreign values (e.g. :__null markers leaked from result rendering)
+  def cast_string(other), do: {:ok, inspect(other)}
 
   @doc "Like to_string/1 but used where PHP already warns (concat etc.)."
   def cast_string_unsafe(v) do

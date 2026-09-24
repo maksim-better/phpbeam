@@ -1,3 +1,7 @@
 %{
+  "db_connection": {:git, "https://github.com/elixir-ecto/db_connection.git", "6c4e5c2a3eec47a80537704187e314dbeb6cfbe4", [tag: "v2.10.1"]},
+  "decimal": {:git, "https://github.com/ericmj/decimal.git", "d07162160e486f9adde57456d9f675aa58bfd711", [tag: "v2.4.1"]},
   "jason": {:hex, :jason, "1.4.5", "2e3a008590b0b8d7388c20293e9dcc9cf3e5d642fd2a114e4cbbb52e595d940a", [:mix], [{:decimal, "~> 1.0 or ~> 2.0 or ~> 3.0", [hex: :decimal, repo: "hexpm", optional: true]}], "hexpm", "b0c823996102bcd0239b3c2444eb00409b72f6a140c1950bc8b457d836b30684"},
+  "myxql": {:git, "https://github.com/elixir-ecto/myxql.git", "7fd16ec000f5ead69a5bf1c070abee2f2a2c98cd", [tag: "v0.7.1"]},
+  "telemetry": {:git, "https://github.com/beam-telemetry/telemetry.git", "8d8af76720856bcf26641ee1307658ad8f25e466", [tag: "v1.3.0"]},
 }

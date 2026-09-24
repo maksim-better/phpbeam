@@ -283,6 +283,10 @@ defmodule PhpBeam.Builtin.StringFns do
   defp implode([{:array, arr}, sep | _], i),
     do: {:ok, {:string, Enum.map_join(PArray.values(arr), s(sep), &deref_str(&1, i))}, i}
 
+  # implode(array) with no separator — php 8 rejects it, older callers join with ""
+  defp implode([{:array, arr} | _], i),
+    do: {:ok, {:string, Enum.map_join(PArray.values(arr), "", &deref_str(&1, i))}, i}
+
   defp deref_str({:ref, _} = r, i), do: PhpBeam.Eval.php_to_string(PhpBeam.Eval.deref(r, i))
   defp deref_str(v, _i), do: PhpBeam.Eval.php_to_string(v)
 

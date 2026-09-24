@@ -11,6 +11,7 @@ defmodule PhpBeam.Builtin do
     FileFns,
     MathFns,
     MiscFns,
+    MysqliFns,
     ObFns,
     PatternFns,
     RuntimeFns,
@@ -31,6 +32,7 @@ defmodule PhpBeam.Builtin do
     |> RuntimeFns.register()
     |> FileFns.register()
     |> MiscFns.register()
+    |> MysqliFns.register()
     |> StreamFns.register()
     |> PatternFns.register()
     |> SerializeFns.register()

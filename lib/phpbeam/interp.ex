@@ -47,7 +47,8 @@ defmodule PhpBeam.Interp do
             call_stack: [],
             resources: %{},
             next_res: 5,
-            output_origin: nil
+            output_origin: nil,
+            mysqli_report: 3
 
   @type t :: %__MODULE__{}
 
@@ -321,6 +322,9 @@ defmodule PhpBeam.Interp do
 
   # php-cli populates $_SERVER with structural keys (env keys are machine
   # specific and stay absent); WP's bootstrap reads PHP_SELF/SCRIPT_FILENAME
+  def set_mysqli_report(interp, mode), do: %{interp | mysqli_report: mode}
+  def get_mysqli_report(interp), do: interp.mysqli_report || 3
+
   defp seed_server(interp, nil), do: interp
 
   defp seed_server(interp, file) do
