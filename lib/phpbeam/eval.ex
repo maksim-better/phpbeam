@@ -1730,11 +1730,25 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  # evaluate call arguments SEQUENTIALLY threading the interpreter — a
+  # later argument must observe earlier arguments' side effects
+  # (var_dump(next($a), current($a)) sees the moved cursor)
   defp eval_args(args, env, interp, _spread?) do
-    Enum.map(args, fn
-      {:arg, e, _, _} -> eval(e, env, interp)
-      {:arg_spread, e, _} -> eval(e, env, interp)
-    end)
+    {rev, _env2, _interp2} =
+      Enum.reduce(args, {[], env, interp}, fn a, {acc, en, it} ->
+        e =
+          case a do
+            {:arg, x, _, _} -> x
+            {:arg_spread, x, _} -> x
+          end
+
+        case eval(e, en, it) do
+          {{:val, v}, en2, it2} -> {[{{:val, v}, en2, it2} | acc], en2, it2}
+          {{:unwind, _} = unw, en2, it2} -> {[{unw, en2, it2} | acc], en2, it2}
+        end
+      end)
+
+    Enum.reverse(rev)
   end
 
   defp resolve_args(arg_results) do

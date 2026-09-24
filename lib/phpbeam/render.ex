@@ -60,7 +60,7 @@ defmodule PhpBeam.Render do
   defp pad2(ind), do: String.duplicate("  ", ind)
 
   defp dump_key(k) when is_integer(k), do: Integer.to_string(k)
-  defp dump_key(k) when is_binary(k), do: k
+  defp dump_key(k) when is_binary(k), do: ~s("#{k}")
 
   defp deref({:ref, id}, interp), do: Map.get(interp.refs, id, :null)
   defp deref(v, _), do: v

@@ -16,7 +16,7 @@ defmodule PhpBeam.PArray do
   ascending slot id. Deletions leave holes, which keeps order stable.
   """
 
-  defstruct keys: %{}, slots: %{}, next_slot: 0, next_index: nil
+  defstruct keys: %{}, slots: %{}, next_slot: 0, next_index: nil, cursor: 0
 
   @type key :: integer() | binary()
   @type t :: %__MODULE__{
@@ -147,6 +147,48 @@ defmodule PhpBeam.PArray do
   end
 
   @doc "All normalized keys in insertion order."
+  # ───────────────────────── array cursor ─────────────────────────
+  # php arrays carry an internal pointer; value copies carry their own
+
+  @doc "Entry at the cursor: `{:ok, key, value}` | `:error` (past end / empty)."
+  def cursor_entry(%__MODULE__{} = arr) do
+    case Enum.at(to_pairs(arr), arr.cursor) do
+      {k, v} -> {:ok, k, v}
+      nil -> :error
+    end
+  end
+
+  @doc "Move the cursor `delta` positions; `{entry, new_array}`."
+  def cursor_move(%__MODULE__{} = arr, delta) do
+    arr2 = %{arr | cursor: max(0, arr.cursor + delta)}
+
+    case Enum.at(to_pairs(arr2), arr2.cursor) do
+      {k, v} -> {{:ok, k, v}, arr2}
+      nil -> {:error, arr2}
+    end
+  end
+
+  @doc "Move to the first entry; `{entry, new_array}`."
+  def cursor_first(%__MODULE__{} = arr) do
+    arr2 = %{arr | cursor: 0}
+
+    case Enum.at(to_pairs(arr2), 0) do
+      {k, v} -> {{:ok, k, v}, arr2}
+      nil -> {:error, arr2}
+    end
+  end
+
+  @doc "Move to the last entry; `{entry, new_array}`."
+  def cursor_last(%__MODULE__{} = arr) do
+    count = size(arr)
+    arr2 = %{arr | cursor: max(0, count - 1)}
+
+    case Enum.at(to_pairs(arr2), arr2.cursor) do
+      {k, v} -> {{:ok, k, v}, arr2}
+      nil -> {:error, arr2}
+    end
+  end
+
   def keys(%__MODULE__{slots: slots}) do
     slots
     |> Enum.sort_by(fn {slot, _} -> slot end)
