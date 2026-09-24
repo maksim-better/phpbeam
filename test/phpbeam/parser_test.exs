@@ -5,7 +5,7 @@ defmodule PhpBeam.ParserTest do
   defp parse(src) do
     with {:ok, toks} <- Lexer.tokenize(src),
          {:ok, ast} <- Parser.parse(toks) do
-      ast
+      Parser.strip_lines(ast)
     else
       {:error, m, l} -> flunk("parse error: #{m} line #{l}")
     end

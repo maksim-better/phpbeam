@@ -42,11 +42,49 @@ defmodule PhpBeam.Interp do
             autoload_fns: [],
             ob_stack: [],
             file_stack: [],
-            included: %{}
+            included: %{},
+            cur_line: 0,
+            call_stack: []
 
   @type t :: %__MODULE__{}
 
   # ───────────────────────── entry points ─────────────────────────
+
+  @doc "symlink-resolving realpath (this OTP lacks :file.realpath)"
+  def real_path(p) do
+    parts =
+      if Path.type(p) == :absolute,
+        do: Path.split(p),
+        else: Path.split(Path.join(File.cwd!(), p))
+
+    resolve_r(parts, [], 0)
+  end
+
+  defp resolve_r(["/" | rest], _acc, n), do: resolve_r(rest, [], n)
+  defp resolve_r([], acc, _n), do: "/" <> Path.join(Enum.reverse(acc))
+  defp resolve_r(["." | rest], acc, n), do: resolve_r(rest, acc, n)
+  defp resolve_r([".." | rest], [_ | acc], n), do: resolve_r(rest, acc, n)
+  defp resolve_r([".." | rest], [], n), do: resolve_r(rest, [], n)
+
+  defp resolve_r([part | rest], acc, n) when n < 40 do
+    full = "/" <> Path.join(Enum.reverse([part | acc]))
+
+    case File.read_link(full) do
+      {:ok, target} ->
+        t =
+          if Path.type(target) == :absolute,
+            do: target,
+            else: "/" <> Path.join(Enum.reverse(acc) ++ [target])
+
+        resolve_r(Path.split(t) ++ rest, [], n + 1)
+
+      _ ->
+        resolve_r(rest, [part | acc], n)
+    end
+  end
+
+  # symlink cycles: give up and append the unresolved tail
+  defp resolve_r(parts, acc, _n), do: "/" <> Path.join(Enum.reverse(acc) ++ parts)
 
   def run(src, file \\ nil) do
     # the caller (cli) decides the spelling: real path for files,
@@ -72,7 +110,7 @@ defmodule PhpBeam.Interp do
           {render_uncaught(val, interp2), 255, interp2}
 
         {:unwind, {:fatal, msg}} ->
-          {"PHP Fatal error:  #{msg}\n", 255, interp2}
+          {uncaught_out(interp2, "Error", msg), 255, interp2}
       end
     else
       {:error, msg, line} ->
@@ -90,7 +128,7 @@ defmodule PhpBeam.Interp do
   # ───────────────────────── persistent REPL state ─────────────────────────
 
   def repl_init do
-    {Env.global_scope([]), register_builtins(%__MODULE__{})}
+    {Env.global_scope([]), register_builtins(%__MODULE__{file_stack: ["php shell code"]})}
   end
 
   # evaluate one snippet against persistent state: {output, new_state}
@@ -161,9 +199,12 @@ defmodule PhpBeam.Interp do
     {IO.iodata_to_binary(Enum.reverse(interp.out)), code, interp}
   end
 
-  defp render_uncaught({:native_error, class, msg}, interp) do
-    out = IO.iodata_to_binary(Enum.reverse(interp.out))
-    out <> "\nPHP Fatal error:  Uncaught #{class}: #{msg}\n  thrown on line 1\n"
+  defp render_uncaught({:native_error, class, msg}, interp),
+    do: uncaught_out(interp, class, msg)
+
+  defp render_uncaught({:object, _id} = ref, interp) do
+    {class, msg} = PhpBeam.Classes.exception_info(interp, ref)
+    uncaught_out(interp, class, msg)
   end
 
   defp render_uncaught(_, interp), do: IO.iodata_to_binary(Enum.reverse(interp.out))
@@ -178,13 +219,49 @@ defmodule PhpBeam.Interp do
     end
   end
 
+  # php-cli display format: warnings go to stdout, positioned from the
+  # innermost statement's line
   def warn(interp, msg) do
     if interp.suppress > 0 do
       interp
     else
-      IO.write(:stderr, "PHP Warning:  #{msg}\n")
-      %{interp | warnings: interp.warnings + 1}
+      interp
+      |> write("\nWarning: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
+      |> Map.update!(:warnings, &(&1 + 1))
     end
+  end
+
+  defp current_file(%{file_stack: [f | _]}), do: f
+
+  defp current_file(_), do: "Command line code"
+
+  # frame = the call site of the function currently executing; php shows
+  # these in uncaught-error stack traces, innermost first
+  def push_frame(%{call_stack: cs} = interp, func) do
+    frame = %{func: func, file: current_file(interp), line: interp.cur_line}
+    %{interp | call_stack: [frame | cs]}
+  end
+
+  def pop_frame(%{call_stack: [_ | rest]} = interp), do: %{interp | call_stack: rest}
+  def pop_frame(interp), do: interp
+
+  # php 8.4 uncaught-error block; position comes from the failing statement
+  defp uncaught_out(interp, class, msg) do
+    out = IO.iodata_to_binary(Enum.reverse(interp.out))
+    file = current_file(interp)
+    line = interp.cur_line
+
+    frames =
+      interp.call_stack
+      |> Enum.reverse()
+      |> Enum.with_index()
+      |> Enum.map(fn {f, i} -> "##{i} #{f.file}(#{f.line}): #{f.func}()\n" end)
+
+    trace = frames ++ ["##{length(interp.call_stack)} {main}\n"]
+
+    out <>
+      "\nFatal error: Uncaught #{class}: #{msg} in #{file}:#{line}\nStack trace:\n" <>
+      IO.iodata_to_binary(trace) <> "  thrown in #{file} on line #{line}\n"
   end
 
   defp register_builtins(interp) do
@@ -212,6 +289,10 @@ defmodule PhpBeam.Interp do
       {{:unwind, u}, env2, interp2} -> exec_stmts([], env2, interp2, {:unwind, u})
     end
   end
+
+  # statements carry their source line; tracked for warnings/fatal rendering
+  def exec_stmt({:stmt_line, line, stmt}, env, interp),
+    do: exec_stmt(stmt, env, %{interp | cur_line: line})
 
   def exec_stmt({:html, text}, env, interp), do: {:ok, env, write(interp, text)}
 
@@ -602,7 +683,7 @@ defmodule PhpBeam.Interp do
         run_finally(finally, {:ok, e2, i2}, catches, e2, i2)
 
       {{:unwind, {:php_throw, val}} = uw, e2, i2} ->
-        case find_catch(catches, val, e2, i2) do
+        case find_catch(catches, val, e2, %{i2 | call_stack: []}) do
           {:caught, {res, e3, i3}} ->
             run_finally(finally, {res, e3, i3}, catches, e3, i3)
 

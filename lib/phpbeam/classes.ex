@@ -549,5 +549,22 @@ defmodule PhpBeam.Classes do
     end
   end
 
+  @doc "Class display name + message for a thrown exception object"
+  def exception_info(interp, {:object, id}) do
+    case Map.get(interp.objects, id) do
+      nil ->
+        {"Exception", ""}
+
+      %{class: cls} = obj ->
+        name =
+          case get_class(interp, cls) do
+            %{name: n} -> n
+            _ -> cls
+          end
+
+        {name, Eval.php_to_string(native_get(obj, "message"))}
+    end
+  end
+
   defp native_get(obj, name), do: PArray.get(obj.props, {:string, name}, :null)
 end

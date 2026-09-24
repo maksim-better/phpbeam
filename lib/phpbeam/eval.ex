@@ -153,14 +153,17 @@ defmodule PhpBeam.Eval do
         end
 
       :null ->
-        {{:val, :null}, env2, warn(env2, interp2, "Attempt to read property \"value\" on null")}
+        key = prop_name_string(name_e, env2, interp2)
+        {{:val, :null}, env2, warn(env2, interp2, "Attempt to read property \"#{key}\" on null")}
 
       other ->
+        key = prop_name_string(name_e, env2, interp2)
+
         interp3 =
           warn(
             env2,
             interp2,
-            "Attempt to read property on value of type #{PhpBeam.Value.gettype(other)}"
+            "Attempt to read property \"#{key}\" on value of type #{PhpBeam.Value.gettype(other)}"
           )
 
         {{:val, :null}, env2, interp3}
@@ -708,8 +711,15 @@ defmodule PhpBeam.Eval do
           [] -> cands
         end
 
-      Enum.find(cands, &File.exists?/1)
+      case Enum.find(cands, &File.exists?/1) do
+        nil -> nil
+        found -> real_path(found)
+      end
     end
+  end
+
+  defp real_path(p) do
+    Interp.real_path(p)
   end
 
   defp missing_include(kind, path, env, interp) do
@@ -997,13 +1007,18 @@ defmodule PhpBeam.Eval do
       fenv2 =
         Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
 
+      interp2 = Interp.push_frame(interp2, "#{display_class(interp2, obj.class)}->#{method.name}")
+
       {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
 
       {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
 
+      interp5 = Interp.pop_frame(interp4)
+
       case res do
-        :ok -> {{:val, :null}, env_out, interp4}
-        {:unwind, {:return, v}} -> {{:val, v}, env_out, interp4}
+        :ok -> {{:val, :null}, env_out, interp5}
+        {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
+        # a throw escaping keeps its frame alive for the uncaught trace
         {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
       end
     end
@@ -1432,18 +1447,20 @@ defmodule PhpBeam.Eval do
       scope_class: scope_class
     }
 
+    interp = Interp.push_frame(interp, "{closure}")
     {binds, interp2} = bind_params(params, args, fenv, env, interp)
     fenv2 = Enum.reduce(binds, fenv, fn {n, v}, acc -> %{acc | vars: Map.put(acc.vars, n, v)} end)
 
     case Interp.exec_stmts(body, fenv2, interp2) do
-      {:ok, e, i} -> {{:val, :null}, e, i}
-      {{:unwind, {:return, v}}, _, i} -> {{:val, v}, env, i}
+      {:ok, e, i} -> {{:val, :null}, e, Interp.pop_frame(i)}
+      {{:unwind, {:return, v}}, _, i} -> {{:val, v}, env, Interp.pop_frame(i)}
       {{:unwind, _} = u, _, _} -> {u, env, interp2}
     end
   end
 
   def call_function({:user, params, body}, name, args, env, interp, _from_method?) do
     fenv = Env.function_scope(name, name)
+    interp = Interp.push_frame(interp, name)
     {binds, interp2} = bind_params(params, args, fenv, env, interp)
 
     # write back by-ref arguments
@@ -1454,9 +1471,12 @@ defmodule PhpBeam.Eval do
     {interp4, env_out} =
       write_back_refs(params, args, env, fenv2, interp3)
 
+    interp5 = Interp.pop_frame(interp4)
+
     case res do
-      :ok -> {{:val, :null}, env_out, interp4}
-      {:unwind, {:return, v}} -> {{:val, v}, env_out, interp4}
+      :ok -> {{:val, :null}, env_out, interp5}
+      {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
+      # a throw escaping keeps its frame alive for the uncaught trace
       {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
     end
   end
@@ -1643,8 +1663,8 @@ defmodule PhpBeam.Eval do
         value_or_throw(Value.divide(l, r), interp)
 
       :% ->
-        lossy_warn(l, interp)
-        lossy_warn(r, interp)
+        interp = lossy_warn(l, interp)
+        interp = lossy_warn(r, interp)
         value_or_throw(Value.modulo(l, r), interp)
 
       :** ->
@@ -1717,7 +1737,7 @@ defmodule PhpBeam.Eval do
     )
   end
 
-  defp lossy_warn(_, _interp), do: :ok
+  defp lossy_warn(_, interp), do: interp
 
   defp value_or_throw({:ok, v}, _interp), do: {:ok, v}
 
@@ -2212,9 +2232,10 @@ defmodule PhpBeam.Eval do
   end
 
   def warn(env, interp, msg) do
-    # suppression is tracked on the interpreter; env is accepted for uniformity
-    Interp.warn(%{interp | __struct__: PhpBeam.Interp}, msg)
-    interp
+    # warnings are interpreter state now (they write to stdout/ob buffers);
+    # env is accepted for call-site uniformity
+    _ = env
+    Interp.warn(interp, msg)
   end
 
   # ───────────────────────── lvalues ─────────────────────────

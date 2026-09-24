@@ -30,7 +30,7 @@ defmodule PhpBeam.CLI do
       [file | _rest] ->
         case File.read(file) do
           {:ok, src} ->
-            run_code(src, Path.absname(file))
+            run_code(src, script_path(file))
 
           {:error, _} ->
             IO.puts(:stderr, "Could not open input file: #{file}")
@@ -80,6 +80,13 @@ defmodule PhpBeam.CLI do
       nil ->
         {"PHP Fatal error:  execution timed out\n", 255}
     end
+  end
+
+  # php canonicalizes the main script path (symlinks) in errors/__FILE__
+  defp script_path(file) do
+    abs = Path.absname(file)
+
+    PhpBeam.Interp.real_path(abs)
   end
 
   defp version do

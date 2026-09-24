@@ -30,7 +30,7 @@ defmodule PhpBeam.DiffTest do
 
     failures =
       Enum.flat_map(files, fn file ->
-        php_out = shell_cmd(~s(#{@php_bin} -d display_errors=stderr #{file} 2>/dev/null))
+        php_out = shell_cmd(~s(#{@php_bin} #{file} 2>/dev/null))
         px_out = shell_cmd(~s(#{escript} #{file} 2>/dev/null))
 
         if php_out == px_out do

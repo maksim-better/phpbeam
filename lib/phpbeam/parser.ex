@@ -34,6 +34,15 @@ defmodule PhpBeam.Parser do
     ast
   end
 
+  @doc "Drops the `{:stmt_line, _, inner}` wrappers introduced by `statement/1`."
+  def strip_lines(list) when is_list(list), do: Enum.map(list, &strip_lines/1)
+  def strip_lines({:stmt_line, _, inner}), do: strip_lines(inner)
+
+  def strip_lines(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.map(&strip_lines/1) |> List.to_tuple()
+
+  def strip_lines(other), do: other
+
   # ───────────────────────── token helpers ─────────────────────────
 
   defp peek([{k, l, v} | _]), do: {k, l, v}
@@ -118,7 +127,20 @@ defmodule PhpBeam.Parser do
     {stmts, rest}
   end
 
+  # every statement carries its first token's line for warning/fatal rendering
   defp statement(ts) do
+    {stmt, rest} = statement_raw(ts)
+
+    line =
+      case ts do
+        [{_, l, _} | _] -> l
+        _ -> 0
+      end
+
+    {{:stmt_line, line, stmt}, rest}
+  end
+
+  defp statement_raw(ts) do
     case peek(ts) do
       {:inline_html, _, text} ->
         {{:html, text}, tl(ts)}
