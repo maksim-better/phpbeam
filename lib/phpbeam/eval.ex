@@ -365,6 +365,15 @@ defmodule PhpBeam.Eval do
             {:ok, v} ->
               new_ref(deref(v, interp), interp)
 
+            # taking a reference of a static local: share the static cell
+            # (WP does exactly this for $noop_translations in l10n.php)
+            {:static, skey, sname} ->
+              cur = deref(Map.get(interp.statics[skey] || %{}, sname, :null), interp)
+              {rid, i2} = new_ref(cur, interp)
+              cell = Map.get(i2.statics, skey, %{})
+              i3 = %{i2 | statics: Map.put(i2.statics, skey, Map.put(cell, sname, {:ref, rid}))}
+              {rid, i3}
+
             _ ->
               new_ref(:null, interp)
           end
@@ -2047,20 +2056,34 @@ defmodule PhpBeam.Eval do
   end
 
   defp spread_args(args, env, interp) do
-    Enum.reduce(args, {[], env, interp}, fn
+    # bind_params stops after the first arg that unwound — spread_args must
+    # not evaluate further args with the resulting nil env
+    args
+    |> Enum.reduce_while({[], env, interp}, fn
       {:spread, e}, {acc, en, it} ->
-        {{:val, v}, en2, it2} = eval(e, en, it)
+        case eval(e, en, it) do
+          {{:val, {:array, arr}}, en2, it2} ->
+            {:cont, {acc ++ Enum.map(PArray.values(arr), &{:val, &1}), en2, it2}}
 
-        case v do
-          {:array, arr} -> {acc ++ Enum.map(PArray.values(arr), &{:val, &1}), en2, it2}
-          _ -> {acc, en2, warn(en2, it2, "only arrays can be spread")}
+          {{:val, _}, en2, it2} ->
+            {:cont, {acc, en2, warn(en2, it2, "only arrays can be spread")}}
+
+          {{:unwind, _} = u, en2, it2} ->
+            {:halt, {[u | acc], en2, it2}}
         end
 
       e, {acc, en, it} ->
-        {{:val, v}, en2, it2} = eval(e, en, it)
-        {acc ++ [{:val, v}], en2, it2}
+        case eval(e, en, it) do
+          {{:val, v}, en2, it2} -> {:cont, {acc ++ [{:val, v}], en2, it2}}
+          {{:unwind, _} = u, en2, it2} -> {:halt, {[u | acc], en2, it2}}
+        end
     end)
+    |> normalize_spread()
   end
+
+  # an unwind result rides at the head of the vals list
+  defp normalize_spread([{:unwind, _} = u | vals]), do: {[u | vals], nil, nil}
+  defp normalize_spread({vals, env, interp}), do: {vals, env, interp}
 
   defp do_bind_params(
          [{:param, name, _t, default, by_ref?, variadic?} | rest],
@@ -2163,7 +2186,7 @@ defmodule PhpBeam.Eval do
   # (var_dump(next($a), current($a)) sees the moved cursor)
   defp eval_args(args, env, interp, _spread?) do
     {rev, _env2, _interp2} =
-      Enum.reduce(args, {[], env, interp}, fn a, {acc, en, it} ->
+      Enum.reduce_while(args, {[], env, interp}, fn a, {acc, en, it} ->
         e =
           case a do
             {:arg, x, _, _} -> x
@@ -2171,8 +2194,12 @@ defmodule PhpBeam.Eval do
           end
 
         case eval(e, en, it) do
-          {{:val, v}, en2, it2} -> {[{{:val, v}, en2, it2} | acc], en2, it2}
-          {{:unwind, _} = unw, en2, it2} -> {[{unw, en2, it2} | acc], en2, it2}
+          {{:val, v}, en2, it2} ->
+            {:cont, {[{{:val, v}, en2, it2} | acc], en2, it2}}
+
+          # stop on the first unwind — later args must not evaluate with nil env
+          {{:unwind, _} = unw, en2, it2} ->
+            {:halt, {[{unw, en2, it2} | acc], en2, it2}}
         end
       end)
 
@@ -2935,6 +2962,27 @@ defmodule PhpBeam.Eval do
       "MYSQLI_REPORT_OFF" ->
         {:ok, {:int, 0}}
 
+      "ENT_COMPAT" ->
+        {:ok, {:int, 2}}
+
+      "ENT_QUOTES" ->
+        {:ok, {:int, 3}}
+
+      "ENT_NOQUOTES" ->
+        {:ok, {:int, 0}}
+
+      "ENT_IGNORE" ->
+        {:ok, {:int, 4}}
+
+      "ENT_SUBSTITUTE" ->
+        {:ok, {:int, 8}}
+
+      "ENT_HTML401" ->
+        {:ok, {:int, 0}}
+
+      "ENT_HTML5" ->
+        {:ok, {:int, 48}}
+
       "MYSQLI_REPORT_ERROR" ->
         {:ok, {:int, 1}}
 
@@ -3242,6 +3290,9 @@ defmodule PhpBeam.Eval do
   defp deref_container({:ref, id}, interp), do: Map.get(interp.refs, id, :null)
   defp deref_container(v, _), do: v
 
+  # empty path (unsupported lvalue root): php would fatal; keep state safe
+  defp path_put([], _v, env, interp), do: {env, interp}
+
   defp path_put([{:var, name}], v, env, interp), do: assign({:var, name}, v, env, interp)
 
   defp path_put([{:var, name} | rest], v, env, interp) do
@@ -3400,10 +3451,15 @@ defmodule PhpBeam.Eval do
   defp plain_key({:string, s}), do: s
   defp plain_key(_), do: ""
 
-  # isset without warnings
+  # isset without warnings (env may be nil on unwind paths)
+  def isset?(_target, nil, interp), do: {false, nil, interp}
+
   def isset?(target, env, interp) do
     case target do
-      {:var, name} ->
+      {:var, name} when not is_binary(name) ->
+        {false, env, interp}
+
+      {:var, name} when is_binary(name) ->
         case Env.lookup(env, interp, name) do
           {:ok, v} ->
             {v != :null, env, interp}
