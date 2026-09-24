@@ -79,8 +79,16 @@ defmodule PhpBeam.Builtin.MiscFns do
     Enum.reduce(entries, fns, fn {name, fun}, acc ->
       Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []})
     end)
-    |> Map.put("is_callable", %{fun: fn v, i, _c -> is_callable_v(v, i) end, refs: [2], skip_eval_refs: [2]})
-    |> Map.put("headers_sent", %{fun: fn v, i, _c -> headers_sent_v(v, i) end, refs: [0, 1], skip_eval_refs: [0, 1]})
+    |> Map.put("is_callable", %{
+      fun: fn v, i, _c -> is_callable_v(v, i) end,
+      refs: [2],
+      skip_eval_refs: [2]
+    })
+    |> Map.put("headers_sent", %{
+      fun: fn v, i, _c -> headers_sent_v(v, i) end,
+      refs: [0, 1],
+      skip_eval_refs: [0, 1]
+    })
   end
 
   defp val(vals, n \\ 0), do: Enum.at(vals, n)

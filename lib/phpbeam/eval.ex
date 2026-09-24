@@ -1166,8 +1166,9 @@ defmodule PhpBeam.Eval do
       {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
 
       case res do
-        :ok -> {{:val, :null}, env_out, interp4}
-        {:unwind, {:return, v}} -> {{:val, v}, env_out, interp4}
+        :ok -> {{:val, :null}, env_out, Interp.pop_frame(interp4)}
+        {:unwind, {:return, v}} -> {{:val, v}, env_out, Interp.pop_frame(interp4)}
+        # a throw escaping keeps its frame alive for the uncaught trace
         {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
       end
     end
@@ -2150,7 +2151,7 @@ defmodule PhpBeam.Eval do
 
   defp do_bind_params([], _args, _fenv, _env, interp, acc), do: {Enum.reverse(acc), interp}
 
-  defp call_builtin(entry, _name, args, env, interp) do
+  defp call_builtin(entry, name, args, env, interp) do
     %{fun: fun, refs: ref_positions} = entry
     skip_positions = Map.get(entry, :skip_eval_refs)
 
@@ -2182,19 +2183,21 @@ defmodule PhpBeam.Eval do
         {{:unwind, u}, env, it || interp}
 
       {:ok, vals, it} ->
-        call_resolved_builtin(fun, vals, args, ref_positions, env, it || interp)
+        call_resolved_builtin(fun, vals, args, ref_positions, env, it || interp, name)
     end
   end
 
-  defp call_resolved_builtin(fun, vals, args, ref_positions, env, interp) do
+  defp call_resolved_builtin(fun, vals, args, ref_positions, env, interp, name \\ "") do
     case fun.(vals, interp, %{env: env}) do
       {:ok, {:unwind, {:php_throw, {:native_error, _, _} = ne}}, interp3} ->
         {obj_ref, interp4} = materialize_native(ne, interp3)
-        {{:unwind, {:php_throw, obj_ref}}, env, interp4}
+        i5 = Interp.push_frame(interp4, name, vals)
+        {{:unwind, {:php_throw, obj_ref}}, env, i5}
 
       {:ok, v, interp3} ->
         {{:val, v}, env, interp3}
 
+      # already-shaped throws (stream TypeErrors materialize + frame themselves)
       {:unwind, u, interp3} ->
         {{:unwind, u}, env, interp3}
 
@@ -2288,7 +2291,7 @@ defmodule PhpBeam.Eval do
 
         case Value.modulo(l, r) do
           {:ok, v} -> {:ok, v, interp}
-          {:error, %Error{} = err} -> throw_error(err) |> then(&{:unwind, elem(&1, 1), interp})
+          {:error, %Error{} = err} -> value_or_throw({:error, err}, interp)
         end
 
       :** ->

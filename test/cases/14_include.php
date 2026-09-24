@@ -1,7 +1,8 @@
 <?php
 // include/require semantics: scope sharing, return values, _once idempotence,
 // full-expression operands (the WordPress `CONST . 'file.php'` idiom)
-$dir = sys_get_temp_dir() . '/phpbeam_incl_' . getmypid();
+$dir = sys_get_temp_dir() . '/phpbeam_incl_fixed';
+if (is_dir($dir)) { array_map('unlink', glob("$dir/*")); rmdir($dir); }
 mkdir($dir, 0777, true);
 
 file_put_contents("$dir/a.php", '<?php $shared = 42; return "from-a";');

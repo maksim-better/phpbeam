@@ -191,7 +191,11 @@ defmodule PhpBeam.Builtin.RuntimeFns do
 
   defp zend_version(_vals, i), do: {:ok, {:string, "4.4.0"}, i}
 
-  defp sys_get_temp_dir(_vals, i), do: {:ok, {:string, System.tmp_dir!() || "/tmp"}, i}
+  defp sys_get_temp_dir(_vals, i) do
+    # php returns WITHOUT the trailing slash (macOS System.tmp_dir! has one)
+    dir = System.tmp_dir!() || "/tmp"
+    {:ok, {:string, String.trim_trailing(dir, "/")}, i}
+  end
 
   defp getmypid(_vals, i), do: {:ok, {:int, :os.getpid() |> List.to_integer()}, i}
 

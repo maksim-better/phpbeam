@@ -32,7 +32,7 @@ defmodule PhpBeam.Interp do
               "serialize_precision" => "-1",
               "error_reporting" => "22527",
               "default_charset" => "UTF-8",
-              "include_path" => ".:",
+              "include_path" => ".:/opt/homebrew/Cellar/php/8.4.2/share/php/pear",
               "input_encoding" => "",
               "internal_encoding" => "",
               "output_encoding" => ""
@@ -48,6 +48,7 @@ defmodule PhpBeam.Interp do
             resources: %{},
             next_res: 5,
             output_origin: nil,
+            throw_pos: nil,
             mysqli_report: 3
 
   @type t :: %__MODULE__{}
@@ -259,9 +260,10 @@ defmodule PhpBeam.Interp do
 
   defp engine_fatal_out(interp, msg) do
     out = IO.iodata_to_binary(Enum.reverse(interp.out))
+    {file, line} = interp.throw_pos || {current_file(interp), interp.cur_line}
 
     out <>
-      "\nFatal error: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n"
+      "\nFatal error: #{msg} in #{file} on line #{line}\n"
   end
 
   # levelled variant: Notice:/Deprecated:/Warning: prefix instead of Warning
@@ -365,8 +367,7 @@ defmodule PhpBeam.Interp do
   # php 8.4 uncaught-error block; position comes from the failing statement
   defp uncaught_out(interp, class, msg) do
     out = IO.iodata_to_binary(Enum.reverse(interp.out))
-    file = current_file(interp)
-    line = interp.cur_line
+    {file, line} = interp.throw_pos || {current_file(interp), interp.cur_line}
 
     # the stack's head is the innermost frame — render as-is
     frames =
@@ -428,9 +429,28 @@ defmodule PhpBeam.Interp do
     end
   end
 
-  # statements carry their source line; tracked for warnings/fatal rendering
-  def exec_stmt({:stmt_line, line, stmt}, env, interp),
-    do: exec_stmt(stmt, env, %{interp | cur_line: line})
+  # statements carry their source line; tracked for warnings/fatal rendering.
+  # A throw/fatal is STAMPED here — at the innermost statement it escapes —
+  # because finally blocks (and arg-eval paths) can shift cur_line before
+  # the uncaught renderer runs
+  def exec_stmt({:stmt_line, line, stmt}, env, interp) do
+    case exec_stmt(stmt, env, %{interp | cur_line: line}) do
+      {{:unwind, {:php_throw, _}} = r, env2, i2} ->
+        stamp(r, env2, i2, line)
+
+      {{:unwind, {:fatal, _}} = r, env2, i2} ->
+        stamp(r, env2, i2, line)
+
+      other ->
+        other
+    end
+  end
+
+  defp stamp({:unwind, u} = _inner, env, i2, line) do
+    if i2.throw_pos == nil,
+      do: {{:unwind, u}, env, %{i2 | throw_pos: {current_file(i2), line}}},
+      else: {{:unwind, u}, env, i2}
+  end
 
   def exec_stmt({:label, _name}, env, interp), do: {:ok, env, interp}
 
@@ -785,7 +805,18 @@ defmodule PhpBeam.Interp do
 
   def exec_stmt({:global, names}, env, interp) do
     env2 = Enum.reduce(names, env, fn n, acc -> Env.globalize(acc, n) end)
-    {:ok, env2, interp}
+
+    # php seeds `global $x` as a NULL global when absent — later reads
+    # must not warn "Undefined variable"
+    interp2 =
+      Enum.reduce(names, interp, fn n, acc ->
+        case Map.fetch(acc.globals, n) do
+          {:ok, _} -> acc
+          :error -> %{acc | globals: Map.put(acc.globals, n, :null)}
+        end
+      end)
+
+    {:ok, env2, interp2}
   end
 
   def exec_stmt({:static_vars, decls}, env, interp) do
@@ -836,7 +867,10 @@ defmodule PhpBeam.Interp do
       {{:unwind, {:php_throw, val}} = uw, e2, i2} ->
         case find_catch(catches, val, e2, %{i2 | call_stack: []}) do
           {:caught, {res, e3, i3}} ->
-            run_finally(finally, {res, e3, i3}, catches, e3, i3)
+            run_finally(finally, {res, e3, %{i3 | throw_pos: nil}}, catches, e3, %{
+              i3
+              | throw_pos: nil
+            })
 
           :none ->
             case run_finally_raw(finally, e2, i2) do

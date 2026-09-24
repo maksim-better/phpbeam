@@ -49,7 +49,6 @@ defmodule PhpBeam.Value do
     end
   end
 
-
   # markers like :__null (mysql rows) or atoms should not crash gettype
   defp foreign({:int, _} = v), do: v
   defp foreign({:float, _} = v), do: v
