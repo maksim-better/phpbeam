@@ -17,6 +17,9 @@ defmodule PhpBeam.Render do
   def var_dump_lines({:bool, false}, _interp, ind), do: [pad2(ind), "bool(false)\n"]
   def var_dump_lines(:null, _interp, ind), do: [pad2(ind), "NULL\n"]
 
+  def var_dump_lines({:resource, id}, _interp, ind),
+    do: [pad2(ind), "resource(#{id}) of type (Unknown)\n"]
+
   def var_dump_lines({:string, s}, _interp, ind),
     do: [pad2(ind), "string(#{byte_size(s)}) \"#{s}\"\n"]
 

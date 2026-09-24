@@ -2874,6 +2874,21 @@ defmodule PhpBeam.Eval do
       "JSON_ERROR_NONE" ->
         {:ok, {:int, 0}}
 
+      "SEEK_SET" ->
+        {:ok, {:int, 0}}
+
+      "SEEK_CUR" ->
+        {:ok, {:int, 1}}
+
+      "SEEK_END" ->
+        {:ok, {:int, 2}}
+
+      "LOCK_SH" ->
+        {:ok, {:int, 1}}
+
+      "LOCK_UN" ->
+        {:ok, {:int, 3}}
+
       "PREG_PATTERN_ORDER" ->
         {:ok, {:int, 1}}
 

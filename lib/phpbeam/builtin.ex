@@ -15,6 +15,7 @@ defmodule PhpBeam.Builtin do
     PatternFns,
     RuntimeFns,
     SerializeFns,
+    StreamFns,
     StringFns,
     VarFns
   }
@@ -30,6 +31,7 @@ defmodule PhpBeam.Builtin do
     |> RuntimeFns.register()
     |> FileFns.register()
     |> MiscFns.register()
+    |> StreamFns.register()
     |> PatternFns.register()
     |> SerializeFns.register()
     |> CursorFns.register()

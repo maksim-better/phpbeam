@@ -32,6 +32,7 @@ defmodule PhpBeam.Value do
   def type({:string, _}), do: :string
   def type({:bool, _}), do: :bool
   def type(:null), do: :null
+  def type({:resource, _}), do: :resource
   def type({:array, _}), do: :array
   def type({:object, _}), do: :object
 
@@ -44,6 +45,7 @@ defmodule PhpBeam.Value do
       :null -> "NULL"
       :array -> "array"
       :object -> "object"
+      :resource -> "resource"
     end
   end
 
@@ -366,6 +368,7 @@ defmodule PhpBeam.Value do
   def strict_eq({:string, a}, {:string, b}), do: a == b
   def strict_eq({:bool, a}, {:bool, b}), do: a == b
   def strict_eq(:null, :null), do: true
+  def strict_eq({:resource, a}, {:resource, b}), do: a == b
 
   def strict_eq({:array, a}, {:array, b}) do
     PArray.size(a) == PArray.size(b) and

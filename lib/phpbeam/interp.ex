@@ -44,7 +44,9 @@ defmodule PhpBeam.Interp do
             file_stack: [],
             included: %{},
             cur_line: 0,
-            call_stack: []
+            call_stack: [],
+            resources: %{},
+            next_res: 5
 
   @type t :: %__MODULE__{}
 
@@ -291,6 +293,8 @@ defmodule PhpBeam.Interp do
       else: "'" <> s <> "'"
   end
 
+  defp arg_display({:resource, id}, _), do: "Resource id ##{id}"
+
   defp arg_display({:object, id}, interp) do
     case Map.get(interp.objects, id) do
       %{class: cls} ->
@@ -303,6 +307,20 @@ defmodule PhpBeam.Interp do
   end
 
   def pop_frame(%{call_stack: [_ | rest]} = interp), do: %{interp | call_stack: rest}
+
+  # ───────────────────────── stream resources ─────────────────────────
+
+  def open_resource(interp, res) do
+    id = interp.next_res
+    {{:resource, id}, %{interp | resources: Map.put(interp.resources, id, res), next_res: id + 1}}
+  end
+
+  def get_resource(interp, {:resource, id}), do: Map.get(interp.resources, id)
+  def get_resource(_interp, _), do: nil
+
+  def put_resource(interp, {:resource, id}, res),
+    do: %{interp | resources: Map.put(interp.resources, id, res)}
+
   def pop_frame(interp), do: interp
 
   # php 8.4 uncaught-error block; position comes from the failing statement
