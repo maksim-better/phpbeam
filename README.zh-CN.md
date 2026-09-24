@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-用 Elixir 实现的 **PHP 8.4 子集树遍历解释器**，运行在 Erlang 虚拟机（BEAM）上。这是"在 BEAM 上实现 PHP"的第一阶段：词法 → 语法 → 求值四层完整落地，语义以本机 PHP 8.4 为金标准做**逐字节差分测试**。
+用 Elixir 实现、运行在 Erlang 虚拟机（BEAM）上的 **PHP 8.4 子集树遍历解释器**。它是"**在 BEAM 上跑 WordPress**"计划的第一阶段：语言管线（词法 → 语法 → 求值）已完整落地，所有语义决定都以**真实 PHP 8.4 逐字节对拍**来锚定——先是差分测试，再是 PHP 官方测试套件（`.phpt`）。
 
 ```
 $ ./phpx test/cases/13_showcase.php
@@ -15,63 +15,87 @@ caught: Division by zero
 interpolation: 3 items for ~€26.74
 ```
 
+## 现状一览
+
+| 指标 | 数值 |
+| --- | --- |
+| php-src 官方测试（tests/{lang,strings,func,classes,basic,output}） | **264 / 697 通过**，逐里程碑上升 |
+| Zend/tests 核心语言抽样（300 个随机） | ~11%——类型系统边角是当前战线 |
+| WordPress 内置函数需求覆盖（按调用频次） | **80%**（按种类 170/632） |
+| 对本机 PHP 8.4 的差分用例（stdout 逐字节） | 17/17 |
+| 代码量 | 约 1.3 万行 Elixir，11 个内置模块 |
+
 ## 快速开始
 
 ```console
 $ mix deps.get && mix escript.build   # 生成 ./phpx
-$ ./phpx script.php                   # 运行脚本
+$ ./phpx script.php                   # 运行脚本（include/require 可用）
 $ ./phpx -r 'echo "hi ", PHP_INT_MAX, "\n";'
-$ ./phpx --repl                       # 状态持久化 REPL（变量/函数/类跨行保留）
-$ mix test                            # 单测 + 差分测试（需本机 php 8.4 于 /opt/homebrew/bin/php）
+$ ./phpx --repl                       # 状态持久化 REPL
+$ mix test                            # 单测 + 差分 + .phpt 三层
+$ mix test --exclude phpt             # 快速开发循环
 ```
 
-## 支持范围
+`.phpt` 套件需要一份解压的 php-src 源码树（默认 `~/Downloads/php-8.4.24`，用 `PHP_SRC` 环境变量改指向）。
 
-| 层 | 能力 |
-| --- | --- |
-| 词法 | `<?php`/`<?=`/inline HTML、行/块注释（含 `?>`-in-comment 规则）、全部数值字面量（hex/oct/bin/下划线/64 位溢出转 float）、单双引号、heredoc/nowdoc（7.3+ 弹性缩进）、转义序列、简单与 `{$...}` 插值 |
-| 语法 | 完整运算符优先级（`or`/`and` 低于赋值、`**` 高于一元负号、`??` 右结合）、替代语法（`if: endif`）、`match`、`list()` 解构、闭包/箭头函数/IIFE、trait（`insteadof`/`as`）、类/接口/抽象/final、静态成员、命名空间与 `use` |
-| 求值 | PHP 8 类型杂耍（松散相等矩阵、数字字符串、算术 coercion、`"az"++`）、有序哈希数组（slot 方案保插入序，键规范化含 int64 边界）、`max(整型键)+1` 自动索引、var_dump/print_r/var_export/json 逐字节一致的格式化 |
-| 类 | 单继承、接口、trait 扁平化、`self`/`static`/`parent`（后期静态绑定）、`::class`、`instanceof`、静态属性、可见性、`__construct`/`__get`/`__set`/`__isset`/`__call`/`__callStatic`/`__toString`、对象句柄语义（写穿透） |
-| 异常 | 原生 `Throwable` 层次（Exception/Error 及常用子类）、`throw`/`try`/`catch`（按继承链匹配）/`finally`、算术错误物化为异常对象 |
-| 引用 | `$a = &$b` 共享单元、`foreach as &$v` 写回、`&` 参数写回、`usort` 族引用排序 |
-| 函数 | 约 90 个内置函数 + `call_user_func(_array)`/`array_map`/`array_filter`/`array_reduce`/`usort`/`uasort`/`uksort` 高阶函数、static 变量、递归、可变参数、命名参数 |
+## 已验证的语义
+
+正确性不是宣称的，是**测出来的**——对 `/opt/homebrew/bin/php`（8.4.2）和 php-src 8.4.24 官方语料逐字节比对：
+
+- **警告与错误渲染和 PHP 8.4 完全一致**：`\nWarning: Undefined variable $x in /real/path.php on line 3`、带真实调用栈（含实参列表）的多行未捕获错误 `#0 /app/wp-load.php(5): require()`、链接期引擎 fatal（无 Uncaught 包装）——全部经探针与差分用例验证。
+- **语言**：完整 PHP 8 运算符优先级、`match`、`list()` 解构、闭包/箭头函数、trait（`insteadof`/`as`）、命名空间、`include`/`require`(_once)（吃完整表达式操作数，`require_once ABSPATH . 'wp-settings.php'`）、调用方作用域的 `eval()`、逐文件栈的 `__FILE__`/`__DIR__`。
+- **类型与值**：PHP 8 类型杂耍（松散相等矩阵、数字字符串、`"az"++`）、slot 保序的有序哈希数组、int64 键规范化与自动索引、逐字节一致的 `var_dump`/`print_r`/`var_export`/JSON。
+- **面向对象**：单继承、接口、trait、后期静态绑定、魔术方法、写穿透的对象句柄——以及**链接期严格性**：abstract 强制、可见性收窄、static 冲突、`final` 重写、签名兼容性检查（`Declaration of D::f(array $a) must be compatible with A::f($a)`）。
+- **Throwable**：原生 Exception/Error 层次、`DivisionByZeroError`、内置抛出的 `ValueError`、带真实栈帧的 `Uncaught Error:` 格式。
+- **函数**：约 220 个内置（字符串/数学/数组/文件/输出缓冲/序列化/正则）；高阶分派（`array_map`、`usort` 族引用写回、`preg_replace_callback`）、`func_get_args()` 族、引用语义（`$a = &$b`、`foreach as &$v`、`&` 参数）。
+- **PCRE**：完整 `preg_*` 族直跑原生 PCRE——命名组（`$m['year']`）、`PREG_OFFSET_CAPTURE`、`PATTERN_ORDER`/`SET_ORDER`、`$N`/`${N}`/`$name` 替换反引用、`preg_split` 标志。
+- **I/O 与状态**：include_path 解析的 include/require、字符串类文件函数（`file_get_contents`、`file_put_contents`、`scandir` 等）、输出缓冲（`ob_*` 族连警告一起捕获）、带可见性修饰属性名和最短往返浮点的 `serialize`/`unserialize`、数组游标（`current`/`next`/`key`/…）。
+
+## 正确性如何保证
+
+三层，全部由 `mix test` 驱动：
+
+1. **单元测试**：词法、语法、值模型、有序数组。
+2. **差分测试**（`test/cases/*.php`）：每个用例在本机 PHP 和 phpx 上各跑一遍，**stdout 必须逐字节一致**——警告、错误文本、行号，全部。
+3. **php-src 官方验收 harness**（`test/phpbeam/phpt_test.exs`）：php-8.4.24 发行版约 700 个 `.phpt` 用例，按 `run-tests.php` 语义执行（PHP 式 trim、逐条照抄的 `expectf_to_regex` 代码表）。失败带分诊标签（`undef_fn`、`parse_error`、`mismatch`……），每个里程碑攻最大的一桶。
 
 ## 架构
 
 ```
 lib/phpbeam/
-├── lexer.ex        # 词法：HTML/PHP 模式切换、heredoc、插值扫描
-├── parser.ex       # 递归下降语法：token → AST（节点形状见 ast.ex）
-├── interp.ex       # 语句执行、控制流信号（return/break/continue/throw 以值穿透，状态不丢）
-├── eval.ex         # 表达式求值、左值路径写、函数/方法分派、高阶内置
-├── classes.ex      # 类模型：注册（trait 扁平化）、继承链查找、原生 Throwable
-├── value.ex        # zval 等价物 + 全部类型杂耍规则（gcvt 14 位浮点格式化、短表示）
-├── parray.ex       # 有序哈希数组（slot 单调递增保序）
-├── render.ex       # var_dump/print_r/var_export（与 PHP 逐字节一致）
-├── builtin/        # string/math/array/var + 求值器侧高阶函数
+├── lexer.ex        # PHP 8 词法：HTML/PHP 模式、heredoc、插值扫描
+├── parser.ex       # 递归下降 → AST；每条语句携带行号
+├── interp.ex       # 语句执行；警告/fatal、文件栈、调用栈
+├── eval.ex         # 表达式、左值、调用分派（含高阶 preg/排序）
+├── classes.ex      # 类模型、链接期继承检查、原生 Throwable
+├── value.ex        # zval 等价物：全部类型杂耍规则、浮点格式化
+├── parray.ex       # 有序哈希数组（slot 单调递增）+ 内部游标
+├── pattern.ex      # preg_* 引擎（原生 :re），命名组编号扫描器
+├── render.ex       # var_dump / print_r / var_export（与 PHP 逐字节一致）
+├── env.ex          # 作用域：局部/static/捕获 + 每帧实参快照
+├── builtin/        # 11 个注册表模块：string、math、array、var、file、
+│                   # ob、runtime/ini、serialize、cursor、preg
 └── cli.ex          # phpx CLI + 持久化 REPL
 ```
 
 **关键设计**：
 
-- **控制流即值**：`return`/`break`/`throw` 都是 `{:unwind, signal}` 元组穿透求值器并携带最新解释器状态——static 变量、对象注册表、输出缓冲在异常路径上不丢失（Elixir 异常会丢弃累积状态，故不用）。
-- **对象注册表**：`{:object, id}` 句柄指向 `interp.objects`，属性写穿透所有持有者，与 PHP 的 zval 引用语义一致。
-- **数组 slot 方案**：单调递增 slot 保留插入序，删除留洞，替换保持原位；`max(历史整型键)+1` 自动索引（含负键、unset 后高水位保持）。
-- **差分测试**：`test/cases/*.php` 在本机 PHP 8.4 与 phpx 上运行并逐字节比对 stdout——13 组用例覆盖从算术边角（`018` 非法八进制、`"1abc"+1` 警告后取 1）到 OOP/异常/引用的完整语义。
+- **控制流即值**：`return`/`break`/`throw` 以 `{:unwind, signal}` 元组穿透并始终携带最新解释器状态——static 变量、对象注册表、输出缓存在异常路径上不丢（用 Elixir 异常会丢弃累积状态）。
+- **解释器状态线程化，绝不共享**：`{result, env, interp}` 贯穿一切；副作用（警告、ob 写入、实参求值）必须返回新状态，否则静默丢失——本项目用血泪修掉的一整族 bug。
+- **对象是句柄**：`{:object, id}` 指向 `interp.objects`；属性写穿透注册表，所有持有者立即可见——免费获得 PHP 引用语义。
+- **错误带位置**：语句包行号，`Interp.cur_line` + 文件栈喂给每条警告/fatal；函数调用压帧（含渲染后的实参），支撑 PHP 8.4 风格的未捕获栈。
+- **PCRE 就是 PCRE**：Erlang 的 `:re` 底层就是 PCRE，模式体只做定界符/修饰符翻译即直通。
 
-## 已知偏差
+## 通往 WordPress 的路线
 
-- `__destruct` 不保证时序（BEAM GC 语义），脚本结束时统一执行
-- 不支持 resource 类型与文件 I/O、`eval()`、匿名类、goto、枚举
-- 树遍历解释器比 php-src 慢 1~2 个数量级（预期内，性能优化属于后续编译后端里程碑）
-- 可见性检查宽松（private/protected 读取放行，写入按声明）
+对着 WordPress 真实源码（它调用的每一个函数）量出来的：
 
-## 后续路线
-
-- PHP → Elixir AST 编译后端（原生 BEAM 性能 + 热加载，词法/语法/值模型全部复用）
-- Plug 每请求一 BEAM 进程的 Web 运行时（PHP share-nothing 与 BEAM 进程模型天然对齐）
-- Elixir 互操作（PHP 调 Elixir 函数）、`eval`/文件 I/O
+1. ✅ 语言核心、include 链、preg_*、serialize、输出缓冲——**WP 内置需求已覆盖 80%**
+2. ▶ 字符串/杂项内置扫尾（`is_callable`、`parse_url`、`md5`、`ord`/`chr`、`compact` 等）→ 约 85%
+3. ◻ resource 流（`fopen`/`fread`/`fseek`……需要 resource 值类型）、`trigger_error`、date/time 族
+4. ◻ SPL（`ArrayObject`、迭代器）、session、`filter_var`
+5. ◻ 基于Elixir 数据库驱动的 `mysqli`/PDO——真实站点的门槛
+6. ◻ 性能：PHP→Elixir AST 编译后端（词法/语法/值模型全复用）——树遍历比 php-src 慢 1~2 个数量级
 
 ## 许可证
 

@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A tree-walking interpreter for a **subset of PHP 8.4**, implemented in Elixir and running on the Erlang VM (BEAM). This is stage one of "bringing PHP to the BEAM": a complete lexer → parser → evaluator pipeline whose semantics are pinned against a local PHP 8.4 via **byte-exact differential testing**.
+A tree-walking interpreter for a **subset of PHP 8.4**, written in Elixir and running on the Erlang VM (BEAM). It is stage one of a longer plan to **run WordPress on the BEAM**: the whole language pipeline (lexer → parser → evaluator) is complete, and every semantic decision is pinned **byte-for-byte against a real PHP 8.4** — first by differential tests, then by PHP's own official test suite (`.phpt`).
 
 ```
 $ ./phpx test/cases/13_showcase.php
@@ -15,63 +15,87 @@ caught: Division by zero
 interpolation: 3 items for ~€26.74
 ```
 
+## Status at a glance
+
+| Metric | Value |
+| --- | --- |
+| php-src official tests (tests/{lang,strings,func,classes,basic,output}) | **264 / 697 passing**, rising every milestone |
+| Zend/tests core-language sample (300 random) | ~11% — type-system corners are the current frontier |
+| WordPress builtin-function demand covered (by call frequency) | **80%** (170/632 by kind) |
+| Differential cases vs local PHP 8.4 (stdout byte-exact) | 17/17 |
+| Codebase | ~13k lines of Elixir, 11 builtin modules |
+
 ## Quick start
 
 ```console
 $ mix deps.get && mix escript.build   # builds ./phpx
-$ ./phpx script.php                   # run a script
+$ ./phpx script.php                   # run a script (include/require work)
 $ ./phpx -r 'echo "hi ", PHP_INT_MAX, "\n";'
-$ ./phpx --repl                       # persistent REPL (vars/functions/classes kept across lines)
-$ mix test                            # unit + differential tests (needs a local PHP 8.4 at /opt/homebrew/bin/php)
+$ ./phpx --repl                       # persistent REPL
+$ mix test                            # unit + differential + .phpt suites
+$ mix test --exclude phpt             # fast dev loop
 ```
 
-## Supported subset
+The `.phpt` suites need an unpacked php-src tree (default `~/Downloads/php-8.4.24`, override with `PHP_SRC`).
 
-| Layer | Capabilities |
-| --- | --- |
-| Lexer | `<?php`/`<?=`/inline HTML, line/block comments (incl. the `?>`-in-comment rule), all numeric literals (hex/oct/bin/underscores/64-bit overflow to float), single/double quotes, heredoc/nowdoc (7.3+ flexible indentation), escape sequences, simple and `{$...}` interpolation |
-| Parser | full operator precedence (`or`/`and` bind looser than assignment, `**` binds tighter than unary minus, `??` right-associative), alternative syntax (`if: endif`), `match`, `list()` destructuring, closures/arrow functions/IIFE, traits (`insteadof`/`as`), classes/interfaces/abstract/final, static members, namespaces and `use` |
-| Evaluation | PHP 8 type juggling (loose-equality matrix, numeric strings, arithmetic coercion, `"az"++`), ordered hash arrays (a slot scheme that preserves insertion order, key normalization incl. int64 boundaries), `max(int key)+1` auto-indexing, byte-exact var_dump/print_r/var_export/json formatting |
-| Classes | single inheritance, interfaces, trait flattening, `self`/`static`/`parent` (late static binding), `::class`, `instanceof`, static properties, visibility, `__construct`/`__get`/`__set`/`__isset`/`__call`/`__callStatic`/`__toString`, object-handle semantics (writes propagate) |
-| Exceptions | native `Throwable` hierarchy (Exception/Error and common subclasses), `throw`/`try`/`catch` (matching along the inheritance chain)/`finally`, arithmetic errors materialized as exception objects |
-| References | `$a = &$b` shared cells, `foreach as &$v` write-back, `&` parameter write-back, `usort`-family in-place sorting |
-| Functions | ~90 built-in functions + `call_user_func(_array)`/`array_map`/`array_filter`/`array_reduce`/`usort`/`uasort`/`uksort` higher-order functions, static variables, recursion, variadics, named arguments |
+## Verified semantics
+
+Correctness is not claimed — it is **measured**, byte for byte, against `/opt/homebrew/bin/php` (8.4.2) and the official php-src 8.4.24 test corpus:
+
+- **Warnings and errors render exactly like PHP 8.4**: `\nWarning: Undefined variable $x in /real/path.php on line 3`, multi-line uncaught errors with a real call stack including argument lists (`#0 /app/wp-load.php(5): require()`), link-time engine fatals without the Uncaught wrapper — all verified by probes and differential cases.
+- **Language**: full PHP 8 operator precedence, `match`, `list()` destructuring, closures/arrow functions, traits (`insteadof`/`as`), namespaces, `include`/`require`(_once) with full-expression operands (`require_once ABSPATH . 'wp-settings.php'`), `eval()` in the calling scope, `__FILE__`/`__DIR__` with per-file stacks, goto-free control flow.
+- **Types & values**: PHP 8 type juggling (loose equality matrix, numeric strings, `"az"++`), ordered hash arrays with slot-stable insertion order, int64 key normalization and auto-indexing, byte-exact `var_dump`/`print_r`/`var_export`/JSON.
+- **OOP**: single inheritance, interfaces, traits, late static binding, magic methods, object handles with write-through semantics — and **link-time strictness**: abstract enforcement, visibility narrowing, static conflicts, `final` overrides, and signature compatibility with rendered signatures (`Declaration of D::f(array $a) must be compatible with A::f($a)`).
+- **Throwables**: native Exception/Error hierarchy, `DivisionByZeroError`, `ValueError` from builtins, `Uncaught Error:` formatting with real stack frames.
+- **Functions**: ~220 builtins across strings/math/arrays/files/output-buffering/serialize/regex; higher-order dispatch (`array_map`, `usort` family with by-ref writeback, `preg_replace_callback`), `func_get_args()` family, references (`$a = &$b`, `foreach as &$v`, `&` params).
+- **PCRE**: the full `preg_*` family on raw PCRE — named groups (`$m['year']`), `PREG_OFFSET_CAPTURE`, `PATTERN_ORDER`/`SET_ORDER`, `$N`/`${N}`/`$name` replacement backrefs, `preg_split` flags.
+- **I/O & state**: `include`/`require` with include_path resolution, string-based file functions (`file_get_contents`, `file_put_contents`, `scandir`, ...), output buffering (`ob_*` family capturing warnings too), `serialize`/`unserialize` with visibility-mangled property names and shortest-roundtrip floats, array cursors (`current`/`next`/`key`/...).
+
+## How correctness is enforced
+
+Three layers, all run by `mix test`:
+
+1. **Unit tests** for the lexer, parser, value model, and ordered arrays.
+2. **Differential tests** (`test/cases/*.php`): every case runs on local PHP and on phpx; **stdout must match byte for byte** — warnings, error text, line numbers, and all.
+3. **The official php-src acceptance harness** (`test/phpbeam/phpt_test.exs`): ~700 `.phpt` cases from the php-8.4.24 distribution, run with `run-tests.php` semantics (PHP-style `trim`, the exact `expectf_to_regex` code table). Failures are triaged with class tags (`undef_fn`, `parse_error`, `mismatch`, …) so each milestone attacks the largest bucket.
 
 ## Architecture
 
 ```
 lib/phpbeam/
-├── lexer.ex        # lexing: HTML/PHP mode switching, heredoc, interpolation scanning
-├── parser.ex       # recursive-descent parsing: tokens → AST (node shapes in ast.ex)
-├── interp.ex       # statement execution, control-flow signals (return/break/continue/throw pass through as values, state is never lost)
-├── eval.ex         # expression evaluation, lvalue writes, function/method dispatch, higher-order builtins
-├── classes.ex      # class model: registration (trait flattening), inheritance-chain lookup, native Throwables
-├── value.ex        # the zval equivalent + all type-juggling rules (gcvt 14-digit float formatting, short representations)
-├── parray.ex       # ordered hash array (monotonic slots preserve order)
-├── render.ex       # var_dump/print_r/var_export (byte-exact against PHP)
-├── builtin/        # string/math/array/var + evaluator-side higher-order functions
-└── cli.ex          # the phpx CLI + persistent REPL
+├── lexer.ex        # PHP 8 lexer: HTML/PHP modes, heredoc, interpolation scanning
+├── parser.ex       # recursive descent → AST; every statement carries its line
+├── interp.ex       # statement execution; warnings/fatals, file stack, call stack
+├── eval.ex         # expressions, lvalues, call dispatch (+ higher-order preg/sorts)
+├── classes.ex      # class model, link-time inheritance checks, native Throwables
+├── value.ex        # zval equivalent: all type-juggling rules, float formatting
+├── parray.ex       # ordered hash array (monotonic slots) + internal cursor
+├── pattern.ex      # preg_* engine on raw PCRE (:re), named-group index scanner
+├── render.ex       # var_dump / print_r / var_export (byte-exact vs PHP)
+├── env.ex          # scopes: locals/statics/captures + per-frame arg snapshots
+├── builtin/        # 11 registry modules: string, math, array, var, file, io,
+│                   # runtime/ini, output buffering, serialize, cursors, preg
+└── cli.ex          # phpx CLI + persistent REPL
 ```
 
 **Key design decisions:**
 
-- **Control flow as values**: `return`/`break`/`throw` propagate through the evaluator as `{:unwind, signal}` tuples carrying the latest interpreter state — statics, the object registry, and output buffers all survive exception paths (Elixir exceptions would discard accumulated state, so they are not used for control flow).
-- **Object registry**: values hold `{:object, id}` handles into `interp.objects`; property writes propagate to every holder, matching PHP's zval reference semantics.
-- **Array slot scheme**: monotonically increasing slots preserve insertion order; deletions leave holes and replacements keep their position; `max(historical int keys)+1` auto-indexing (including negative keys and the high-water mark after unset).
-- **Differential testing**: every `test/cases/*.php` runs on both local PHP 8.4 and phpx, with stdout compared byte for byte — 13 suites covering everything from arithmetic corners (`018` illegal octal, `"1abc"+1` warns then yields 1) to the full semantics of OOP, exceptions, and references.
+- **Control flow as values.** `return`/`break`/`throw` propagate as `{:unwind, signal}` tuples that always carry the latest interpreter state — statics, the object registry, and output buffers survive exception paths (Elixir exceptions would discard accumulated state).
+- **The interpreter state is threaded, never shared.** `{result, env, interp}` flows through everything; side effects (warnings, ob writes, argument evaluation) must return the new state or they are silently lost — a whole family of bugs this project has fixed the hard way.
+- **Objects are handles.** `{:object, id}` into `interp.objects`; property writes flow through the registry so every holder sees them — PHP reference semantics for free.
+- **Errors carry positions.** Statements wrap their source line; `Interp.cur_line` + a per-file stack feed every warning/fatal, and function calls push frames (with rendered arguments) for PHP 8.4-style uncaught traces.
+- **PCRE is PCRE.** Erlang's `:re` *is* PCRE, so patterns pass through with only delimiter/modifier translation.
 
-## Known deviations
+## Roadmap to WordPress
 
-- `__destruct` timing is not guaranteed (BEAM GC semantics); destructors all run at script end
-- No resource type or file I/O; no `eval()`, anonymous classes, `goto`, or enums
-- The tree-walking interpreter is 1–2 orders of magnitude slower than php-src (expected; performance is a milestone of the future compiled backend)
-- Visibility checks are lenient (private/protected reads are allowed; writes follow declarations)
+Measured against the actual WordPress source (every function it calls):
 
-## Roadmap
-
-- A PHP → Elixir AST compilation backend (native BEAM performance + hot code loading; the lexer/parser/value model is fully reused)
-- A Plug-based web runtime with one BEAM process per request (PHP's share-nothing model maps naturally onto BEAM processes)
-- Elixir interop (PHP calling Elixir functions), `eval`/file I/O
+1. ✅ Language core, include chain, preg_*, serialize, output buffering — **80% of WP's builtin demand covered**
+2. ▶ String/misc builtin sweep (`is_callable`, `parse_url`, `md5`, `ord`/`chr`, `compact`, …) → ~85%
+3. ◻ Resource streams (`fopen`/`fread`/`fseek` … — needs a resource value type), `trigger_error`, date/time family
+4. ◻ SPL (`ArrayObject`, iterators), sessions, `filter_var`
+5. ◻ `mysqli`/PDO over Elixir database drivers — the gate for a real site
+6. ◻ Performance: a PHP→Elixir AST compile backend (lexer/parser/value model fully reused) — the tree walker is 1–2 orders slower than php-src
 
 ## License
 
