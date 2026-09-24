@@ -659,25 +659,30 @@ defmodule PhpBeam.Eval do
         else
           case File.read(resolved) do
             {:ok, src} ->
+              # the included file may declare a namespace — save/restore it so
+              # declarations don't leak into the includer (sodium_compat!)
+              ns0 = i2.ns
+
               i3 = %{
                 i2
                 | included: Map.put(i2.included, resolved, true),
-                  file_stack: [resolved | i2.file_stack]
+                  file_stack: [resolved | i2.file_stack],
+                  ns: []
               }
 
               with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
                    {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
                 case Interp.exec_stmts(stmts, env2, i3) do
                   {:ok, env3, i4} ->
-                    {{:val, {:int, 1}}, env3, pop_file(i4)}
+                    {{:val, {:int, 1}}, env3, pop_file(restore_ns(i4, ns0))}
 
                   # return unwinds carry a nil env by convention — the
                   # include's value goes back to the caller's live env
                   {{:unwind, {:return, v}}, _env3, i4} ->
-                    {{:val, v}, env2, pop_file(i4)}
+                    {{:val, v}, env2, pop_file(restore_ns(i4, ns0))}
 
                   {{:unwind, _} = u, env3, i4} ->
-                    {u, env3, i4}
+                    {u, env3, restore_ns(i4, ns0)}
                 end
               else
                 {:error, msg, line} ->
@@ -693,6 +698,10 @@ defmodule PhpBeam.Eval do
   end
 
   defp pop_file(%{file_stack: [_ | rest]} = i), do: %{i | file_stack: rest}
+
+  defp pop_file_once(interp), do: pop_file(interp)
+
+  defp restore_ns(i, ns), do: %{i | ns: ns}
   defp pop_file(i), do: i
 
   # php order: include_path entries (relative to cwd), then the including
@@ -1171,7 +1180,7 @@ defmodule PhpBeam.Eval do
 
   defp call_named(parts, name, fq, args, env, interp) do
     case resolve_function(name, fq, interp) do
-      {:user, _params, _body} = fn_def ->
+      {:user, _params, _body, _def_file} = fn_def ->
         call_function(fn_def, name, args, env, interp, false)
 
       %{fun: _} = entry ->
@@ -1971,7 +1980,7 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  def call_function({:user, params, body}, name, args, env, interp, _from_method?) do
+  def call_function({:user, params, body, def_file}, name, args, env, interp, _from_method?) do
     fenv = Env.function_scope(name, name)
     {binds, vals, interp2} = bind_params(params, args, fenv, env, interp)
     interp2 = Interp.push_frame(interp2, name, vals)
@@ -1982,12 +1991,16 @@ defmodule PhpBeam.Eval do
         %{acc | vars: Map.put(acc.vars, n, v)}
       end)
 
+    # php attributes errors inside a function to its DEFINING file —
+    # push that file for the duration of the body
+    interp2 = %{interp2 | file_stack: [def_file | interp2.file_stack]}
+
     {res, _, interp3} = Interp.exec_stmts(body, fenv2, interp2)
 
     {interp4, env_out} =
       write_back_refs(params, args, env, fenv2, interp3)
 
-    interp5 = Interp.pop_frame(interp4)
+    interp5 = Interp.pop_frame(pop_file_once(interp4))
 
     case res do
       :ok -> {{:val, :null}, env_out, interp5}
@@ -2632,6 +2645,36 @@ defmodule PhpBeam.Eval do
 
       "PHP_VERSION" ->
         {:ok, {:string, "8.4.2"}}
+
+      "PHP_VERSION_ID" ->
+        {:ok, {:int, 80_402}}
+
+      "PHP_MAJOR_VERSION" ->
+        {:ok, {:int, 8}}
+
+      "PHP_MINOR_VERSION" ->
+        {:ok, {:int, 4}}
+
+      "PHP_RELEASE_VERSION" ->
+        {:ok, {:int, 2}}
+
+      "PHP_EXTRA_VERSION" ->
+        {:ok, {:string, ""}}
+
+      "PHP_ZTS" ->
+        {:ok, {:bool, false}}
+
+      "PHP_OS" ->
+        {:ok, {:string, "Darwin"}}
+
+      "PHP_FLOAT_DIG" ->
+        {:ok, {:int, 15}}
+
+      "PHP_MAXPATHLEN" ->
+        {:ok, {:int, 1024}}
+
+      "PHP_BINARY" ->
+        {:ok, {:string, "/opt/homebrew/bin/php"}}
 
       "PHP_OS" ->
         {:ok, {:string, "Darwin"}}

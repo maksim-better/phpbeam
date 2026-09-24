@@ -97,15 +97,18 @@ defmodule PhpBeam.Builtin.PatternFns do
   end
 
   defp replace_loop(subject, pat, repl, limit, pos, count, acc) do
-    tail = fn p -> binary_part(subject, p, byte_size(subject) - p) end
+    size = byte_size(subject)
+    tail = fn p -> binary_part(subject, min(p, size), max(0, size - min(p, size))) end
 
     if limit >= 0 and count >= limit do
       {IO.iodata_to_binary(Enum.reverse([tail.(pos) | acc])), count}
     else
       case Pattern.run_at(pat, subject, pos) do
         {:ok, pairs, next} ->
-          {s, l} = hd(pairs)
-          pre = binary_part(subject, pos, s - pos)
+          {s, _l} = hd(pairs)
+
+          # zero-width matches can push pos past the next match start
+          pre = binary_part(subject, pos, max(0, s - pos))
           piece = if repl == "", do: "", else: expand_refs(repl, pat, subject, pairs)
 
           replace_loop(subject, pat, repl, limit, max(next, pos + 1), count + 1, [

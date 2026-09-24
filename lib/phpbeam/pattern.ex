@@ -99,6 +99,20 @@ defmodule PhpBeam.Pattern do
   with {-1, 0} for trailing unmatched).
   """
   def run_at(%__MODULE__{re: re, ngroups: n}, subject, offset) do
+    # :re.run errors with :internal_error when the offset exceeds the subject
+    cond do
+      offset > byte_size(subject) ->
+        :nomatch
+
+      offset < 0 ->
+        :nomatch
+
+      true ->
+        run_at_guarded(re, n, subject, offset)
+    end
+  end
+
+  defp run_at_guarded(re, n, subject, offset) do
     case :re.run(subject, re, [{:capture, :all, :index}, {:offset, offset}]) do
       {:match, idx_pairs} ->
         padded = pad_groups(idx_pairs, n + 1)

@@ -783,7 +783,7 @@ defmodule PhpBeam.Builtin.MiscFns do
 
   @known_exts ~w(core date pcre spl standard json session filter hash iconv mbstring
                   xml openssl curl dom simplexml xmlreader xmlwriter fileinfo ctype
-                  posix pdo mysqlnd reflection zlib sqlite3 pdo_sqlite phar)
+                  posix pdo mysqli mysqlnd reflection zlib sqlite3 pdo_sqlite phar sodium)
 
   defp extension_loaded_v(vals, i), do: {:ok, {:bool, down(s(vals)) in @known_exts}, i}
 
@@ -835,7 +835,22 @@ defmodule PhpBeam.Builtin.MiscFns do
 
   ## ───────────────────── runtime no-ops ─────────────────────
 
-  defp header_v(_vals, i), do: {:ok, :null, i}
+  defp header_v(_vals, i) do
+    case i.output_origin do
+      {file, line} when file != nil ->
+        i2 =
+          PhpBeam.Interp.warn(
+            i,
+            "Cannot modify header information - headers already sent by (output started at #{file}:#{line})"
+          )
+
+        {:ok, :null, i2}
+
+      _ ->
+        {:ok, :null, i}
+    end
+  end
+
   defp setcookie_v(_vals, i), do: {:ok, {:bool, true}, i}
 
   defp headers_sent_v(_vals, i),

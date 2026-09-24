@@ -33,7 +33,40 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "restore_include_path" => &restore_include_path/2,
       "error_get_last" => &error_get_last/2,
       "error_clear_last" => &error_clear_last/2,
-      "gc_collect_cycles" => &gc_collect_cycles/2
+      "gc_collect_cycles" => &gc_collect_cycles/2,
+      "mysqli_connect" => &mysqli_stub/2,
+      "mysqli_real_connect" => &mysqli_stub/2,
+      "mysqli_query" => &mysqli_stub/2,
+      "mysqli_fetch_assoc" => &mysqli_stub/2,
+      "mysqli_fetch_array" => &mysqli_stub/2,
+      "mysqli_fetch_row" => &mysqli_stub/2,
+      "mysqli_error" => &mysqli_stub/2,
+      "mysqli_errno" => &mysqli_stub/2,
+      "mysqli_close" => &mysqli_stub/2,
+      "mysqli_select_db" => &mysqli_stub/2,
+      "mysqli_real_escape_string" => &mysqli_stub/2,
+      "mysqli_get_client_info" => &mysqli_client_info/2,
+      "mysqli_set_charset" => &mysqli_stub/2,
+      "mysqli_ping" => &mysqli_stub/2,
+      "mysqli_num_rows" => &mysqli_stub/2,
+      "mysqli_free_result" => &mysqli_stub/2,
+      "sodium_crypto_box" => &sodium_stub/2,
+      "sodium_crypto_box_open" => &sodium_stub/2,
+      "sodium_crypto_sign" => &sodium_stub/2,
+      "sodium_crypto_sign_open" => &sodium_stub/2,
+      "sodium_crypto_secretbox" => &sodium_stub/2,
+      "sodium_crypto_generichash" => &sodium_stub/2,
+      "sodium_memzero" => &sodium_stub/2,
+      "sodium_crypto_box_keypair" => &sodium_stub/2,
+      "sodium_crypto_box_publickey" => &sodium_stub/2,
+      "sodium_crypto_box_secretkey" => &sodium_stub/2,
+      "sodium_crypto_box_seed_keypair" => &sodium_stub/2,
+      "sodium_bin2hex" => &sodium_stub/2,
+      "sodium_hex2bin" => &sodium_stub/2,
+      "sodium_increment" => &sodium_stub/2,
+      "sodium_compare" => &sodium_stub/2,
+      "sodium_pad" => &sodium_stub/2,
+      "sodium_unpad" => &sodium_stub/2
     }
 
     Enum.reduce(entries, fns, fn {name, fun}, acc ->
@@ -183,6 +216,17 @@ defmodule PhpBeam.Builtin.RuntimeFns do
   defp getmypid(_vals, i), do: {:ok, {:int, :os.getpid() |> List.to_integer()}, i}
 
   defp gc_collect_cycles(_vals, i), do: {:ok, {:int, 0}, i}
+
+  # real connections come with the database milestone; for now the presence
+  # of these satisfies WP's function_exists() bootstrap gates
+  defp mysqli_stub(vals, i), do: {:ok, {:bool, false}, i}
+
+  defp mysqli_client_info(_vals, i), do: {:ok, {:string, "mysqlnd 8.4.2"}, i}
+
+  # claiming the sodium extension (matching the reference php-cli) means the
+  # function entry points must exist too — WP's compat.php polyfills on
+  # function_exists('sodium_crypto_box')
+  defp sodium_stub(_vals, i), do: {:ok, {:bool, false}, i}
 
   # no locale support: report the requested locale as active (non-empty),
   # matching the common `setlocale(...) === false` guards

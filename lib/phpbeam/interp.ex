@@ -46,7 +46,8 @@ defmodule PhpBeam.Interp do
             cur_line: 0,
             call_stack: [],
             resources: %{},
-            next_res: 5
+            next_res: 5,
+            output_origin: nil
 
   @type t :: %__MODULE__{}
 
@@ -91,7 +92,10 @@ defmodule PhpBeam.Interp do
   def run(src, file \\ nil) do
     # the caller (cli) decides the spelling: real path for files,
     # "Command line code" for -r — matching php's __FILE__
-    interp = register_builtins(%__MODULE__{file_stack: if(file, do: [file], else: [])})
+    interp =
+      register_builtins(%__MODULE__{file_stack: if(file, do: [file], else: [])})
+      |> seed_server(file)
+
     env = Env.global_scope(argv_info(src))
 
     with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
@@ -221,6 +225,13 @@ defmodule PhpBeam.Interp do
 
   # writes land in the innermost open output buffer when ob_start is active
   def write(interp, data) when is_binary(data) do
+    interp =
+      if interp.output_origin == nil and data != "" do
+        %{interp | output_origin: {current_file(interp), interp.cur_line}}
+      else
+        interp
+      end
+
     case interp.ob_stack do
       [top | rest] -> %{interp | ob_stack: [%{top | buf: [data | top.buf]} | rest]}
       [] -> %{interp | out: [data | interp.out]}
@@ -307,6 +318,30 @@ defmodule PhpBeam.Interp do
   end
 
   def pop_frame(%{call_stack: [_ | rest]} = interp), do: %{interp | call_stack: rest}
+
+  # php-cli populates $_SERVER with structural keys (env keys are machine
+  # specific and stay absent); WP's bootstrap reads PHP_SELF/SCRIPT_FILENAME
+  defp seed_server(interp, nil), do: interp
+
+  defp seed_server(interp, file) do
+    now = System.system_time(:second)
+
+    server =
+      PArray.from_pairs([
+        {{:string, "PHP_SELF"}, {:string, file}},
+        {{:string, "SCRIPT_NAME"}, {:string, file}},
+        {{:string, "SCRIPT_FILENAME"}, {:string, file}},
+        {{:string, "REQUEST_TIME"}, {:int, now}},
+        {{:string, "REQUEST_TIME_FLOAT"}, {:float, System.system_time(:millisecond) / 1000}},
+        {{:string, "argv"}, {:array, PArray.from_pairs([{nil, {:string, file}}])}},
+        {{:string, "argc"}, {:int, 1}},
+        {{:string, "SERVER_PROTOCOL"}, {:string, "HTTP/1.1"}},
+        {{:string, "REQUEST_METHOD"}, {:string, "GET"}},
+        {{:string, "SERVER_SOFTWARE"}, {:string, "phpbeam/phpx"}}
+      ])
+
+    %{interp | globals: Map.put(interp.globals, "_SERVER", {:array, server})}
+  end
 
   # ───────────────────────── stream resources ─────────────────────────
 
@@ -901,10 +936,13 @@ defmodule PhpBeam.Interp do
   end
 
   def exec_stmt({:func_def, name, params, body}, env, interp) do
+    def_file = current_file(interp)
+
     if Map.has_key?(interp.functions, name) do
       {:ok, env, warn(interp, "Cannot redeclare function #{name}()")}
     else
-      {:ok, env, %{interp | functions: Map.put(interp.functions, name, {:user, params, body})}}
+      {:ok, env,
+       %{interp | functions: Map.put(interp.functions, name, {:user, params, body, def_file})}}
     end
   end
 

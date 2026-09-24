@@ -1565,7 +1565,9 @@ defmodule PhpBeam.Parser do
   # `(` cast-type `)` unary  |  `(` expr `)`
   defp maybe_cast([{:op, _, "("}, {:name, _, nv}, {:op, _, ")"} | rest] = ts) do
     if Token.cast_type?(String.downcase(nv)) do
-      {e, r} = unary(rest)
+      # the operand may be an include/require (also ternary-bound like
+      # include itself): `(array) include $file` appears in WP's l10n
+      {e, r} = cast_operand(rest)
       {{:cast, Token.cast_kind(String.downcase(nv)), e}, r}
     else
       group_expr(ts)
@@ -1573,6 +1575,13 @@ defmodule PhpBeam.Parser do
   end
 
   defp maybe_cast([{:op, _, "("} | _] = ts), do: group_expr(ts)
+
+  # casts bind tighter than include in the grammar, but `(array) include $f`
+  # needs the ternary-level operand (include is parsed there)
+  defp cast_operand([{:name, _, kw} | _] = ts) when kw in @include_kws,
+    do: ternary(ts)
+
+  defp cast_operand(ts), do: unary(ts)
 
   defp group_expr([{_, _, "("} | rest]) do
     {e, r} = expr(rest)
@@ -1823,21 +1832,59 @@ defmodule PhpBeam.Parser do
 
   defp name_primary(n, ts) do
     case n do
-      "true" -> {{:bool, true}, tl(ts)}
-      "false" -> {{:bool, false}, tl(ts)}
-      "null" -> {:null, tl(ts)}
-      "array" -> array_paren(ts)
-      "list" -> list_pattern(ts)
-      "isset" -> isset_expr(ts)
-      "empty" -> empty_expr(ts)
-      "function" -> closure(ts)
-      "fn" -> arrow_fn(ts)
-      "match" -> match_expr(ts)
-      "new" -> new_expr(ts)
-      "exit" -> exit_expr(ts)
-      "die" -> exit_expr(ts)
-      "static" -> {{:cname, false, ["static"]}, tl(ts)}
-      _ -> qualified_name_expr(ts)
+      "true" ->
+        {{:bool, true}, tl(ts)}
+
+      "false" ->
+        {{:bool, false}, tl(ts)}
+
+      "null" ->
+        {:null, tl(ts)}
+
+      "array" ->
+        array_paren(ts)
+
+      "list" ->
+        list_pattern(ts)
+
+      "isset" ->
+        isset_expr(ts)
+
+      "empty" ->
+        empty_expr(ts)
+
+      "function" ->
+        closure(ts)
+
+      "fn" ->
+        arrow_fn(ts)
+
+      # `static function () : T {}` / `static fn() =>` — closures never bind
+      # $this in this interpreter, so the static marker is consumed and dropped
+      "static" ->
+        case tl(ts) do
+          [{:name, _, "function"} | r] -> closure([{:name, 0, "function"} | r])
+          [{:name, _, "fn"} | r] -> arrow_fn([{:name, 0, "fn"} | r])
+          _ -> {{:cname, false, ["static"]}, tl(ts)}
+        end
+
+      "match" ->
+        match_expr(ts)
+
+      "new" ->
+        new_expr(ts)
+
+      "exit" ->
+        exit_expr(ts)
+
+      "die" ->
+        exit_expr(ts)
+
+      "static" ->
+        {{:cname, false, ["static"]}, tl(ts)}
+
+      _ ->
+        qualified_name_expr(ts)
     end
   end
 
