@@ -250,6 +250,17 @@ defmodule PhpBeam.Interp do
       "\nFatal error: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n"
   end
 
+  # levelled variant: Notice:/Deprecated:/Warning: prefix instead of Warning
+  def warn_level(interp, level, msg) do
+    if interp.suppress > 0 do
+      interp
+    else
+      interp
+      |> write("\n#{level}: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
+      |> Map.update!(:warnings, &(&1 + 1))
+    end
+  end
+
   defp current_file(%{file_stack: [f | _]}), do: f
 
   defp current_file(_), do: "Command line code"

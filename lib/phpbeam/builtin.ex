@@ -10,6 +10,7 @@ defmodule PhpBeam.Builtin do
     CursorFns,
     FileFns,
     MathFns,
+    MiscFns,
     ObFns,
     PatternFns,
     RuntimeFns,
@@ -28,6 +29,7 @@ defmodule PhpBeam.Builtin do
     |> VarFns.register()
     |> RuntimeFns.register()
     |> FileFns.register()
+    |> MiscFns.register()
     |> PatternFns.register()
     |> SerializeFns.register()
     |> CursorFns.register()

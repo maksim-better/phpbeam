@@ -757,9 +757,14 @@ defmodule PhpBeam.Eval do
         {{:val, v}, env2, interp2} = eval(e, env, interp)
 
         case v do
-          {:int, n} -> {{:unwind, {:halt, n}}, env2, interp2}
-          {:string, s} -> {{:unwind, {:halt_write, s}}, env2, interp2}
-          _ -> {{:unwind, {:halt, 0}}, env2, interp2}
+          {:int, n} ->
+            {{:unwind, {:halt, n}}, env2, interp2}
+
+          {:string, s} ->
+            {{:unwind, {:halt, 0}}, env2, Interp.write(interp2, s)}
+
+          _ ->
+            {{:unwind, {:halt, 0}}, env2, interp2}
         end
     end
   end
@@ -1184,7 +1189,7 @@ defmodule PhpBeam.Eval do
     cond do
       # sorts + preg $matches writers need raw argument lvalues for writeback;
       # the callback variant needs the callback AST
-      name in ~w(usort uasort uksort preg_match preg_match_all preg_replace_callback) ->
+      name in ~w(usort uasort uksort preg_match preg_match_all preg_replace_callback array_any array_all parse_str) ->
         unwrap_args =
           Enum.map(args, fn
             {:arg, e, _, _} -> e
@@ -1193,7 +1198,7 @@ defmodule PhpBeam.Eval do
 
         dispatch_ho(name, unwrap_args, env, interp)
 
-      name in ~w(call_user_func call_user_func_array array_map array_filter array_reduce array_walk eval func_get_args func_get_arg func_num_args) ->
+      name in ~w(call_user_func call_user_func_array array_map array_filter array_reduce array_walk eval func_get_args func_get_arg func_num_args compact extract exit die) ->
         case resolve_args(eval_args(args, env, interp, false)) do
           {:ok, vals, it} -> dispatch_ho(name, vals, env, it || interp)
           {:unwind, u, it} -> {{:unwind, u}, env, it || interp}
@@ -1342,6 +1347,209 @@ defmodule PhpBeam.Eval do
     do: {{:val, {:bool, false}}, env, interp}
 
   # user-comparator sorts mutate their array argument (writeback via lvalue)
+  # ───────────────────── scope-writing misc ─────────────────────
+
+  # compact("a", ["b", ...]) — reads the CALLING scope; skips undefined vars
+  defp dispatch_ho("compact", vals, env, interp) do
+    names =
+      vals
+      |> Enum.flat_map(fn
+        {:string, n} -> [n]
+        {:array, arr} -> Enum.map(PArray.values(arr), &Value.cast_string_unsafe/1)
+        _ -> []
+      end)
+      |> Enum.uniq()
+
+    pairs =
+      for n <- names,
+          {:ok, v} <- [Env.lookup(env, interp, n)] do
+        {{:string, n}, v}
+      end
+
+    {{:val, {:array, PArray.from_pairs(pairs)}}, env, interp}
+  end
+
+  # parse_str(qs) → current scope vars; parse_str(qs, $arr) → writes the array
+  defp dispatch_ho("parse_str", [q_arg | rest], env, interp) do
+    {{:val, qv}, _, i1} = eval(q_arg, env, interp)
+    parsed = parse_query(Value.cast_string_unsafe(qv))
+
+    case rest do
+      [] ->
+        # global scope writes land in interp.globals — thread BOTH returns
+        {env2, interp2} =
+          Enum.reduce(parsed, {env, i1}, fn {k, v}, {e, it} ->
+            {:ok, e2, it2} = Env.bind_var(e, it, k, v)
+            {e2, it2}
+          end)
+
+        {{:val, :null}, env2, interp2}
+
+      [arr_lval | _] ->
+        arr = PArray.from_pairs(Enum.map(parsed, fn {k, v} -> {{:string, k}, v} end))
+        {env2, i2} = assign(arr_lval, {:array, arr}, env, i1)
+        {{:val, :null}, env2, i2}
+    end
+  end
+
+  # php nests bracket keys: b[0]=x&c[y]=z
+  defp parse_query(q) do
+    # duplicate base keys (arr[0]=..&arr[q]=..) merge into ONE tree
+    URI.decode_query(q)
+    |> Enum.reduce(PArray.new(), fn {k, v}, acc ->
+      case Regex.split(~r/\[|\]/, k, trim: true) do
+        [base] ->
+          {:ok, a2} = PArray.put(acc, {:string, base}, {:string, v})
+          a2
+
+        [base | path] ->
+          inner =
+            case PArray.fetch(acc, {:string, base}) do
+              {:ok, {:array, in2}} -> in2
+              _ -> PArray.new()
+            end
+
+          {:ok, a2} =
+            PArray.put(acc, {:string, base}, {:array, put_path(inner, path, {:string, v})})
+
+          a2
+      end
+    end)
+    |> PArray.to_pairs()
+    |> Enum.map(fn {k, v} -> {k, v} end)
+  end
+
+  defp put_path(arr, [last], v) do
+    if last == "" do
+      {:ok, a2} = PArray.push(arr, v)
+      a2
+    else
+      case PArray.fetch(arr, {:string, last}) do
+        {:ok, {:array, inner}} ->
+          {:ok, a2} = PArray.put(arr, {:string, last}, {:array, put_path(inner, [], v)})
+          a2
+
+        _ ->
+          {:ok, a2} = PArray.put(arr, {:string, last}, v)
+          a2
+      end
+    end
+  end
+
+  defp put_path(arr, [head | rest], v) do
+    inner =
+      case PArray.fetch(arr, {:string, head}) do
+        {:ok, {:array, in2}} -> in2
+        _ -> PArray.new()
+      end
+
+    {:ok, a2} = PArray.put(arr, {:string, head}, {:array, put_path(inner, rest, v)})
+    a2
+  end
+
+  defp put_path(arr, [], v) do
+    {:ok, a2} = PArray.push(arr, v)
+    a2
+  end
+
+  defp dispatch_ho("extract", vals, env, interp) do
+    case Enum.at(vals, 0) do
+      {:array, arr} ->
+        flags = extract_flags(vals)
+
+        {env2, interp2, count} =
+          Enum.reduce(PArray.to_pairs(arr), {env, interp, 0}, fn {k, v}, {e, it, n} ->
+            name = if is_binary(k), do: k, else: Integer.to_string(k)
+
+            if String.match?(name, ~r/^[a-zA-Z_]/) do
+              skip? =
+                (flags == 1 and match?({:ok, _}, Env.lookup(e, interp, name))) or
+                  (flags == 6 and match?(:error, map_fetch_env(e, interp, name)))
+
+              if skip? do
+                {e, it, n}
+              else
+                {:ok, e2, it2} = Env.bind_var(e, it, name, v)
+                {e2, it2, n + 1}
+              end
+            else
+              {e, it, n}
+            end
+          end)
+
+        {{:val, {:int, count}}, env2, interp2}
+
+      _ ->
+        {{:val, {:int, 0}}, env, interp}
+    end
+  end
+
+  defp extract_flags(vals) do
+    case Enum.at(vals, 1) do
+      {:int, f} -> f
+      _ -> 0
+    end
+  end
+
+  defp map_fetch_env(env, interp, name) do
+    case Env.lookup(env, interp, name) do
+      {:ok, _} -> {:ok, :found}
+      _ -> :error
+    end
+  end
+
+  # exit()/die() invoked as function calls
+  defp dispatch_ho("exit", vals, env, interp), do: exit_call(vals, env, interp)
+  defp dispatch_ho("die", vals, env, interp), do: exit_call(vals, env, interp)
+
+  defp exit_call(vals, env, interp) do
+    case Enum.at(vals, 0) do
+      {:int, code} ->
+        {{:unwind, {:halt, code}}, env, interp}
+
+      {:string, msg} ->
+        interp2 = Interp.write(interp, msg)
+        {{:unwind, {:halt, 0}}, env, interp2}
+
+      nil ->
+        {{:unwind, {:halt, 0}}, env, interp}
+
+      _ ->
+        {{:unwind, {:halt, 0}}, env, interp}
+    end
+  end
+
+  # php 8.4 array_any/array_all with callback (raw AST)
+  defp dispatch_ho("array_any", [arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
+
+    any =
+      PArray.values(arr)
+      |> Enum.any?(fn v ->
+        case call_cb_raw(cb_arg, [v], env, i1) do
+          {{:val, r}, _, _} -> Value.truthy?(r)
+          _ -> false
+        end
+      end)
+
+    {{:val, {:bool, any}}, env, i1}
+  end
+
+  defp dispatch_ho("array_all", [arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
+
+    all =
+      PArray.values(arr)
+      |> Enum.all?(fn v ->
+        case call_cb_raw(cb_arg, [v], env, i1) do
+          {{:val, r}, _, _} -> Value.truthy?(r)
+          _ -> false
+        end
+      end)
+
+    {{:val, {:bool, all}}, env, i1}
+  end
+
   # ───────────────────────── preg family ─────────────────────────
 
   defp dispatch_ho("preg_match", [pat_arg, subj_arg | rest], env, interp) do
@@ -1888,7 +2096,30 @@ defmodule PhpBeam.Eval do
   defp call_builtin(entry, _name, args, env, interp) do
     %{fun: fun, refs: ref_positions} = entry
 
-    case args |> eval_args(env, interp, false) |> resolve_args() do
+    {arg_list, ref_set} =
+      {args, MapSet.new(ref_positions || [])}
+
+    {results, _env2, _it2} =
+      Enum.reduce(arg_list |> Enum.with_index(), {[], env, interp}, fn {a, idx}, {acc, en, it} ->
+        if MapSet.member?(ref_set, idx) do
+          # by-ref args are OUTPUT slots — evaluating them would warn on
+          # undefined vars php never reads
+          {[{{:val, :null}, en, it} | acc], en, it}
+        else
+          e =
+            case a do
+              {:arg, x, _, _} -> x
+              {:arg_spread, x, _} -> x
+            end
+
+          case eval(e, en, it) do
+            {{:val, v}, en2, it2} -> {[{{:val, v}, en2, it2} | acc], en2, it2}
+            {{:unwind, _} = unw, en2, it2} -> {[{unw, en2, it2} | acc], en2, it2}
+          end
+        end
+      end)
+
+    case resolve_args(Enum.reverse(results)) do
       {:unwind, u, it} ->
         {{:unwind, u}, env, it || interp}
 
@@ -2578,6 +2809,69 @@ defmodule PhpBeam.Eval do
         {:ok, {:int, 1}}
 
       "PREG_NO_ERROR" ->
+        {:ok, {:int, 0}}
+
+      "PHP_URL_SCHEME" ->
+        {:ok, {:int, 0}}
+
+      "PHP_URL_HOST" ->
+        {:ok, {:int, 1}}
+
+      "PHP_URL_PORT" ->
+        {:ok, {:int, 2}}
+
+      "PHP_URL_USER" ->
+        {:ok, {:int, 3}}
+
+      "PHP_URL_PASS" ->
+        {:ok, {:int, 4}}
+
+      "PHP_URL_PATH" ->
+        {:ok, {:int, 5}}
+
+      "PHP_URL_QUERY" ->
+        {:ok, {:int, 6}}
+
+      "PHP_URL_FRAGMENT" ->
+        {:ok, {:int, 7}}
+
+      "PATHINFO_DIRNAME" ->
+        {:ok, {:int, 1}}
+
+      "PATHINFO_BASENAME" ->
+        {:ok, {:int, 2}}
+
+      "PATHINFO_EXTENSION" ->
+        {:ok, {:int, 4}}
+
+      "PATHINFO_FILENAME" ->
+        {:ok, {:int, 3}}
+
+      "FILE_IGNORE_NEW_LINES" ->
+        {:ok, {:int, 2}}
+
+      "FILE_SKIP_EMPTY_LINES" ->
+        {:ok, {:int, 4}}
+
+      "EXTR_OVERWRITE" ->
+        {:ok, {:int, 0}}
+
+      "EXTR_SKIP" ->
+        {:ok, {:int, 1}}
+
+      "EXTR_PREFIX_SAME" ->
+        {:ok, {:int, 2}}
+
+      "EXTR_IF_EXISTS" ->
+        {:ok, {:int, 6}}
+
+      "PHP_QUERY_RFC1738" ->
+        {:ok, {:int, 1738}}
+
+      "PHP_QUERY_RFC3986" ->
+        {:ok, {:int, 3986}}
+
+      "JSON_ERROR_NONE" ->
         {:ok, {:int, 0}}
 
       "PREG_PATTERN_ORDER" ->
