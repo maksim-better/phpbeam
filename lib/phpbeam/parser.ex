@@ -140,6 +140,12 @@ defmodule PhpBeam.Parser do
     {{:stmt_line, line, stmt}, rest}
   end
 
+  defp statement_raw([{_, _, _}, {:op, _, ":"} | _] = ts) do
+    # `label:` statement (goto target)
+    [{:name, _, label}, {:op, _, ":"} | rest] = ts
+    {{:label, String.downcase(label)}, rest}
+  end
+
   defp statement_raw(ts) do
     case peek(ts) do
       {:inline_html, _, text} ->
@@ -167,36 +173,97 @@ defmodule PhpBeam.Parser do
 
   defp keyword_statement(name, ts) do
     case name do
-      "echo" -> echo_stmt(ts)
-      "print" -> expr_statement(ts)
-      "if" -> if_stmt(ts)
-      "while" -> while_stmt(ts)
-      "do" -> do_while_stmt(ts)
-      "for" -> for_stmt(ts)
-      "foreach" -> foreach_stmt(ts)
-      "switch" -> switch_stmt(ts)
-      "break" -> break_stmt(ts, :break)
-      "continue" -> break_stmt(ts, :continue)
-      "return" -> return_stmt(ts)
-      "global" -> global_stmt(ts)
-      "static" -> static_stmt(ts)
-      "unset" -> unset_stmt(ts)
-      "function" -> maybe_func_def(ts)
-      "throw" -> throw_stmt(ts)
-      "try" -> try_stmt(ts)
-      "namespace" -> namespace_stmt(ts)
-      "use" -> use_stmt(ts)
-      "declare" -> declare_stmt(ts)
-      "__halt_compiler" -> halt_stmt(ts)
-      "const" -> const_stmt(ts)
-      "class" -> class_stmt([], ts)
-      "interface" -> class_stmt([], ts)
-      "trait" -> class_stmt([], ts)
-      "abstract" -> modifier_then_class(ts, "abstract")
-      "final" -> modifier_then_class(ts, "final")
-      "enum" -> raise(ParseError, message: "enums are not supported yet", line: peek_line(ts))
-      "goto" -> raise(ParseError, message: "goto is not supported", line: peek_line(ts))
-      _ -> expr_statement(ts)
+      "echo" ->
+        echo_stmt(ts)
+
+      "print" ->
+        expr_statement(ts)
+
+      "if" ->
+        if_stmt(ts)
+
+      "while" ->
+        while_stmt(ts)
+
+      "do" ->
+        do_while_stmt(ts)
+
+      "for" ->
+        for_stmt(ts)
+
+      "foreach" ->
+        foreach_stmt(ts)
+
+      "switch" ->
+        switch_stmt(ts)
+
+      "break" ->
+        break_stmt(ts, :break)
+
+      "continue" ->
+        break_stmt(ts, :continue)
+
+      "return" ->
+        return_stmt(ts)
+
+      "global" ->
+        global_stmt(ts)
+
+      "static" ->
+        static_stmt(ts)
+
+      "unset" ->
+        unset_stmt(ts)
+
+      "function" ->
+        maybe_func_def(ts)
+
+      "throw" ->
+        throw_stmt(ts)
+
+      "try" ->
+        try_stmt(ts)
+
+      "namespace" ->
+        namespace_stmt(ts)
+
+      "use" ->
+        use_stmt(ts)
+
+      "declare" ->
+        declare_stmt(ts)
+
+      "__halt_compiler" ->
+        halt_stmt(ts)
+
+      "const" ->
+        const_stmt(ts)
+
+      "class" ->
+        class_stmt([], ts)
+
+      "interface" ->
+        class_stmt([], ts)
+
+      "trait" ->
+        class_stmt([], ts)
+
+      "abstract" ->
+        modifier_then_class(ts, "abstract")
+
+      "final" ->
+        modifier_then_class(ts, "final")
+
+      "enum" ->
+        raise(ParseError, message: "enums are not supported yet", line: peek_line(ts))
+
+      # forward goto (labels resolved at execution time)
+      "goto" ->
+        {name, r1} = take_ident(tl(ts))
+        {{:goto, String.downcase(name)}, expect_semi(r1)}
+
+      _ ->
+        expr_statement(ts)
     end
   end
 
@@ -1217,7 +1284,8 @@ defmodule PhpBeam.Parser do
         {t, r} = param_type_atom(tl(ts))
         type_union_tail(r, acc <> "|" <> t)
 
-      at_op?(ts, "&") ->
+      # `&` followed by a variable is the by-ref marker, not an intersection
+      at_op?(ts, "&") and not match?([{:variable, _, _} | _], tl(ts)) ->
         {t, r} = param_type_atom(tl(ts))
         type_union_tail(r, acc <> "&" <> t)
 

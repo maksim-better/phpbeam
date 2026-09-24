@@ -2932,6 +2932,48 @@ defmodule PhpBeam.Eval do
       "LOCK_UN" ->
         {:ok, {:int, 3}}
 
+      "MYSQLI_REPORT_OFF" ->
+        {:ok, {:int, 0}}
+
+      "MYSQLI_REPORT_ERROR" ->
+        {:ok, {:int, 1}}
+
+      "MYSQLI_REPORT_STRICT" ->
+        {:ok, {:int, 2}}
+
+      "MYSQLI_REPORT_INDEX" ->
+        {:ok, {:int, 4}}
+
+      "MYSQLI_REPORT_ALL" ->
+        {:ok, {:int, 255}}
+
+      "MYSQLI_ASSOC" ->
+        {:ok, {:int, 1}}
+
+      "MYSQLI_NUM" ->
+        {:ok, {:int, 2}}
+
+      "MYSQLI_BOTH" ->
+        {:ok, {:int, 3}}
+
+      "MYSQLI_CLIENT_COMPRESS" ->
+        {:ok, {:int, 32}}
+
+      "MYSQLI_OPT_INT_AND_FLOAT_NATIVE" ->
+        {:ok, {:int, 205}}
+
+      "DATE_W3C" ->
+        {:ok, {:string, "Y-m-d\\TH:i:sP"}}
+
+      "DATE_ATOM" ->
+        {:ok, {:string, "Y-m-d\\TH:i:sP"}}
+
+      "DATE_ISO8601" ->
+        {:ok, {:string, "Y-m-d\\TH:i:sO"}}
+
+      "DATE_RFC2822" ->
+        {:ok, {:string, "D, d M Y H:i:s O"}}
+
       "PREG_PATTERN_ORDER" ->
         {:ok, {:int, 1}}
 

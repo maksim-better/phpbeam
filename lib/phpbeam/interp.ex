@@ -398,14 +398,44 @@ defmodule PhpBeam.Interp do
 
   def exec_stmts([s | rest], env, interp, :ok) do
     case exec_stmt(s, env, interp) do
-      {:ok, env2, interp2} -> exec_stmts(rest, env2, interp2, :ok)
-      {{:unwind, u}, env2, interp2} -> exec_stmts([], env2, interp2, {:unwind, u})
+      {:ok, env2, interp2} ->
+        exec_stmts(rest, env2, interp2, :ok)
+
+      # forward goto: if the target label lives later in THIS list, resume
+      # from just after it; otherwise let the unwind keep propagating
+      {{:unwind, {:goto, label}}, env2, interp2} ->
+        case split_at_label(rest, label) do
+          {:found, after_label} -> exec_stmts(after_label, env2, interp2, :ok)
+          :not_found -> exec_stmts([], env2, interp2, {:unwind, {:goto, label}})
+        end
+
+      {{:unwind, u}, env2, interp2} ->
+        exec_stmts([], env2, interp2, {:unwind, u})
+    end
+  end
+
+  defp split_at_label(stmts, label) do
+    case Enum.find_index(stmts, fn
+           {:stmt_line, _, {:label, ^label}} -> true
+           _ -> false
+         end) do
+      nil -> :not_found
+      idx -> {:found, Enum.drop(stmts, idx + 1)}
     end
   end
 
   # statements carry their source line; tracked for warnings/fatal rendering
   def exec_stmt({:stmt_line, line, stmt}, env, interp),
     do: exec_stmt(stmt, env, %{interp | cur_line: line})
+
+  def exec_stmt({:label, _name}, env, interp), do: {:ok, env, interp}
+
+  # `goto l;` parses as an expression statement — emit the unwind
+  def exec_stmt({:expr_stmt, {:goto, name}}, env, interp),
+    do: {{:unwind, {:goto, name}}, env, interp}
+
+  def exec_stmt({:goto, name}, env, interp),
+    do: {{:unwind, {:goto, name}}, env, interp}
 
   def exec_stmt({:html, text}, env, interp), do: {:ok, env, write(interp, text)}
 

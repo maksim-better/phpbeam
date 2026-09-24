@@ -66,7 +66,26 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "sodium_increment" => &sodium_stub/2,
       "sodium_compare" => &sodium_stub/2,
       "sodium_pad" => &sodium_stub/2,
-      "sodium_unpad" => &sodium_stub/2
+      "sodium_unpad" => &sodium_stub/2,
+      "date_default_timezone_set" => &tz_set/2,
+      "date_default_timezone_get" => &tz_get/2,
+      "date" => &date_v/2,
+      "gmdate" => &date_v/2,
+      "time" => &time_v/2,
+      "strtotime" => &strtotime_v/2,
+      "mysqli_report" => &mysqli_stub/2,
+      "mysqli_init" => &mysqli_stub/2,
+      "mysqli_options" => &mysqli_stub/2,
+      "mysqli_begin_transaction" => &mysqli_stub/2,
+      "mysqli_commit" => &mysqli_stub/2,
+      "mysqli_rollback" => &mysqli_stub/2,
+      "mysqli_insert_id" => &mysqli_stub/2,
+      "mysqli_affected_rows" => &mysqli_stub/2,
+      "mysqli_escape_string" => &mysqli_stub/2,
+      "mysqli_set_opt" => &mysqli_stub/2,
+      "timezone_version_get" => &tz_version/2,
+      "timezone_open" => &tz_open/2,
+      "wp_timezone" => &tz_get/2
     }
 
     Enum.reduce(entries, fns, fn {name, fun}, acc ->
@@ -227,6 +246,112 @@ defmodule PhpBeam.Builtin.RuntimeFns do
   # function entry points must exist too — WP's compat.php polyfills on
   # function_exists('sodium_crypto_box')
   defp sodium_stub(_vals, i), do: {:ok, {:bool, false}, i}
+
+  # ───────────────────────── date/time (UTC, gmdate-parity) ─────────────────────────
+
+  defp tz_set(_vals, i), do: {:ok, {:bool, true}, i}
+
+  defp tz_version(_vals, i), do: {:ok, {:string, "2024.1"}, i}
+
+  defp tz_open(vals, i) do
+    case vals do
+      [{:string, "UTC"} | _] -> {:ok, :null, i}
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp tz_get(_vals, i), do: {:ok, {:string, "UTC"}, i}
+
+  defp time_v(_vals, i), do: {:ok, {:int, System.system_time(:second)}, i}
+
+  # common-format date(): Y-m-d H:i:s and friends (php-format matrix subset)
+  @date_formats %{
+    "Y-m-d H:i:s" => :ymd_his,
+    "Y-m-d" => :ymd,
+    "H:i:s" => :his,
+    "Y" => :y,
+    "c" => :iso8601,
+    "U" => :epoch
+  }
+
+  defp date_v(vals, i) do
+    fmt =
+      case vals do
+        [{:string, f} | _] -> f
+        _ -> "Y-m-d H:i:s"
+      end
+
+    ts =
+      case Enum.at(vals, 1) do
+        {:int, t} -> t
+        _ -> System.system_time(:second)
+      end
+
+    {{y, mo, d}, {h, mi, s}} = calendar(ts)
+
+    out =
+      case Map.get(@date_formats, fmt) do
+        :ymd_his ->
+          cal2(y) <>
+            "-" <>
+            cal2(mo) <> "-" <> cal2(d) <> " " <> cal2(h) <> ":" <> cal2(mi) <> ":" <> cal2(s)
+
+        :ymd ->
+          cal2(y) <> "-" <> cal2(mo) <> "-" <> cal2(d)
+
+        :his ->
+          cal2(h) <> ":" <> cal2(mi) <> ":" <> cal2(s)
+
+        :y ->
+          Integer.to_string(y)
+
+        :iso8601 ->
+          cal2(y) <>
+            "-" <>
+            cal2(mo) <>
+            "-" <> cal2(d) <> "T" <> cal2(h) <> ":" <> cal2(mi) <> ":" <> cal2(s) <> "+00:00"
+
+        :epoch ->
+          Integer.to_string(ts)
+
+        _ ->
+          cal2(y) <>
+            "-" <>
+            cal2(mo) <> "-" <> cal2(d) <> " " <> cal2(h) <> ":" <> cal2(mi) <> ":" <> cal2(s)
+      end
+
+    {:ok, {:string, out}, i}
+  end
+
+  defp calendar(ts) do
+    {{y, mo, d}, {h, mi, s}} =
+      :calendar.gregorian_seconds_to_datetime(ts + 62_167_219_200)
+
+    {{y, mo, d}, {h, mi, s}}
+  end
+
+  defp cal2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
+
+  defp strtotime_v(vals, i) do
+    import PhpBeam.Value, only: [cast_string_unsafe: 1]
+    s = cast_string_unsafe(Enum.at(vals, 0))
+
+    case Regex.run(~r/\A(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})\z/, s) do
+      [_, y, mo, d, h, mi, sec] ->
+        dt = {
+          {String.to_integer(y), String.to_integer(mo), String.to_integer(d)},
+          {String.to_integer(h), String.to_integer(mi), String.to_integer(sec)}
+        }
+
+        {:ok, {:int, :calendar.datetime_to_gregorian_seconds(dt) - 62_167_219_200}, i}
+
+      _ ->
+        case Integer.parse(s) do
+          {n, ""} -> {:ok, {:int, n}, i}
+          _ -> {:ok, {:bool, false}, i}
+        end
+    end
+  end
 
   # no locale support: report the requested locale as active (non-empty),
   # matching the common `setlocale(...) === false` guards
