@@ -32,6 +32,9 @@ defmodule PhpBeam.Env do
 
   def superglobal?(name), do: name in @superglobals
 
+  # defensive: nil/foreign env (unwind convention leaks) behaves as undefined
+  def lookup(env, _interp, _name) when not is_map(env), do: :undefined
+
   def lookup(%__MODULE__{} = env, interp, name) do
     cond do
       name == "this" ->

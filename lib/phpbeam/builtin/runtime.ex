@@ -85,7 +85,11 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "mysqli_set_opt" => &mysqli_stub/2,
       "timezone_version_get" => &tz_version/2,
       "timezone_open" => &tz_open/2,
-      "wp_timezone" => &tz_get/2
+      "wp_timezone" => &tz_get/2,
+      "header_remove" => &header_remove_v/2,
+      "headers_list" => &headers_list_v/2,
+      "http_response_code" => &http_response_code_v/2,
+      "set_time_limit" => &set_time_limit/2
     }
 
     Enum.reduce(entries, fns, fn {name, fun}, acc ->
@@ -248,6 +252,12 @@ defmodule PhpBeam.Builtin.RuntimeFns do
   defp sodium_stub(_vals, i), do: {:ok, {:bool, false}, i}
 
   # ───────────────────────── date/time (UTC, gmdate-parity) ─────────────────────────
+
+  defp header_remove_v(_vals, i), do: {:ok, :null, i}
+
+  defp headers_list_v(_vals, i), do: {:ok, {:array, PhpBeam.PArray.new()}, i}
+
+  defp http_response_code_v(_vals, i), do: {:ok, {:int, 200}, i}
 
   defp tz_set(_vals, i), do: {:ok, {:bool, true}, i}
 
