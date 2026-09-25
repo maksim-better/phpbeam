@@ -34,17 +34,16 @@
 - [x] 验收：`test/phpbeam/http_test.exs` 双服务器（phpx serve + php -S）6 例 curl 差分（根 GET 带参/POST 表单/静态/目录索引/重定向/前端控制器回退）全部一致（归一化 Host/Date/Connection/CL/X-Powered-By）。
 - 后续待补（低优先）：`$_FILES` 物化、chunked body、keep-alive、HTTP/1.0
 
-## L1：语法冲刺（1–2 会话）
+## L1：语法冲刺（**已完成**，`c602d64`）
 
-- [ ] 构造器属性提升（含默认值/可见性/readonly 修饰）
-- [ ] 命名参数（调用点 + attribute 实参 + 跳参）
-- [ ] heredoc/nowdoc（含缩进 heredoc、`{$expr}` 插值）
-- [ ] 数组字面量展开（含字符串键规则）
-- [ ] 枚举（case/backed/::cases()/match on enum/纯枚举 ===）
-- [ ] readonly 属性与 readonly 类（写即 Error）
-- [ ] 一等可调用 `f(...)`/`$obj->m(...)`
-- [ ] nullsafe 边缘加固（链式、写路径、`?->` 后方法链）
-- [ ] 差分用例 25_laravel_syntax.php 固化
+- [x] 构造器属性提升（可见性+readonly 前缀解析；类构建时糖解构为声明属性 + 前置 `$this->x = $x;` 赋值；byte-diff 一致）
+- [x] **枚举**（php 8.1）：case/backed `enum S: string { case A = "a"; }`；case 单例在声明时物化（name/value 属性）；`Suit::Hearts` 经类常量通道解析；`::cases()/from()/tryFrom()` 闭包携带枚举 key；var_dump 渲染 `enum(Cls::Case)`
+- [x] readonly：`readonly class`/`final readonly class` 解析；写已初始化 readonly 属性抛可捕获 Error（物化 + php 措辞）
+- [x] 数组字面量展开 `[...$a, 'k' => v]`（字符串键保留、int 键顺序重编）；`PArray.from_pairs` 接受裸键
+- [x] 一等可调用 `strlen(...)`/`$obj->m(...)`/`Cls::m(...)`（裸名 FCC 产字符串可调用不做常量求值；`usort($a, strcmp(...))` 可用）
+- [x] **重大修复**：`strict_eq` 对对象句柄（整数 id）——**自 M1 起 `===` 对对象恒 false**（object_identity 只匹配全 map 形态）
+- [x] 命名参数与 heredoc 经探针验证此前已可用
+- [ ] 差分 25_laravel_syntax.php 固化（下轮随手）
 
 ## L2：Composer vendor 实战（1 会话）
 
