@@ -1800,7 +1800,12 @@ defmodule PhpBeam.Parser do
     {yes, rest2} = take_op(rest, ",")
 
     if yes do
-      call_args_list(rest2, [arg | acc])
+      # php 7.3+: trailing comma in function calls
+      if at_op?(rest2, ")") do
+        {Enum.reverse([arg | acc]), rest2}
+      else
+        call_args_list(rest2, [arg | acc])
+      end
     else
       {Enum.reverse([arg | acc]), rest}
     end
@@ -2084,35 +2089,61 @@ defmodule PhpBeam.Parser do
   end
 
   defp new_expr([{_, _, "new"} | rest]) do
-    {cls, rest2} =
-      case peek(rest) do
-        {:name, _, "class"} ->
-          raise(ParseError,
-            message: "anonymous classes are not supported yet",
-            line: peek_line(rest)
-          )
+    case peek(rest) do
+      {:name, _, "class"} ->
+        anon_class_expr(rest)
 
-        {:name, _, _} ->
-          {parts, r, fq} = qualified_name(rest)
-          {{:cname, fq, parts}, r}
+      _ ->
+        {cls, rest2} =
+          case peek(rest) do
+            {:name, _, _} ->
+              {parts, r, fq} = qualified_name(rest)
+              {{:cname, fq, parts}, r}
 
-        {:op, _, "\\"} ->
-          {parts, r, fq} = qualified_name(rest)
-          {{:cname, fq, parts}, r}
+            {:op, _, "\\"} ->
+              {parts, r, fq} = qualified_name(rest)
+              {{:cname, fq, parts}, r}
 
-        {:variable, _, _} ->
-          var_or_expr(rest)
+            {:variable, _, _} ->
+              var_or_expr(rest)
 
-        {:op, _, "("} ->
-          {e, r} = expr(rest)
-          {e, expect_op(r, ")")}
+            {:op, _, "("} ->
+              {e, r} = expr(rest)
+              {e, expect_op(r, ")")}
 
-        _ ->
-          raise(ParseError, message: "expected class name after 'new'", line: peek_line(rest))
-      end
+            _ ->
+              raise(ParseError, message: "expected class name after 'new'", line: peek_line(rest))
+          end
 
-    {args, rest3} = ctor_args(rest2)
-    {{:new, cls, args}, rest3}
+        {args, rest3} = ctor_args(rest2)
+        {{:new, cls, args}, rest3}
+    end
+  end
+
+  # `new class(args) extends P implements A, B { members }` — the construction
+  # args attach to the ctor call; the class body is declared inline
+  defp anon_class_expr([{_, _, "class"} | rest]) do
+    {args, rest2} = ctor_args(rest)
+    {extends, rest3} = optional_extends("class", rest2)
+    {implements, rest4} = optional_implements("class", rest3)
+
+    rest5 = expect_op(rest4, "{")
+    {members, rest6} = class_members(rest5, [], "class@anonymous")
+    rest7 = expect_op(rest6, "}")
+
+    decl = %{
+      name: "class@anonymous",
+      kind: :class,
+      modifiers: [],
+      extends: extends,
+      implements: implements,
+      consts: List.flatten(Keyword.get_values(members, :consts)),
+      props: List.flatten(Keyword.get_values(members, :props)),
+      methods: List.flatten(Keyword.get_values(members, :methods)),
+      uses: Keyword.get_values(members, :uses)
+    }
+
+    {{:anon_class, decl, args}, rest7}
   end
 
   defp ctor_args(ts) do

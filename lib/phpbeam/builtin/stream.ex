@@ -106,12 +106,20 @@ defmodule PhpBeam.Builtin.StreamFns do
     |> Enum.flat_map(fn v -> [v] end)
   end
 
+  # ops that implement real std-stream behavior; the rest stub out
+  # (php: fseek on a pipe → -1, ftell/rewind → false)
+  @std_aware ~w(fwrite fread fclose fflush feof)
+
   defp with_stream(fn_name, vals, i, f) do
     case val(vals) do
       {:resource, _} = r ->
         case PhpBeam.Interp.get_resource(i, r) do
           %{closed: false} = res ->
-            f.(r, res)
+            if Map.has_key?(res, :std) and fn_name not in @std_aware do
+              std_stub(fn_name, i)
+            else
+              f.(r, res)
+            end
 
           _ ->
             closed_type_error(fn_name, vals, i)
@@ -121,6 +129,10 @@ defmodule PhpBeam.Builtin.StreamFns do
         stream_type_error(fn_name, vals, i)
     end
   end
+
+  defp std_stub("fseek", i), do: {:ok, {:int, -1}, i}
+  defp std_stub("ftell", i), do: {:ok, {:bool, false}, i}
+  defp std_stub(_, i), do: {:ok, {:bool, false}, i}
 
   ## ───────────────────────── open/close ─────────────────────────
 
@@ -185,7 +197,7 @@ defmodule PhpBeam.Builtin.StreamFns do
 
   defp fclose_v(vals, i) do
     with_stream("fclose", vals, i, fn r, res ->
-      :file.close(res.device)
+      unless Map.has_key?(res, :std), do: :file.close(res.device)
       i2 = PhpBeam.Interp.put_resource(i, r, %{res | closed: true})
       {:ok, {:bool, true}, i2}
     end)
@@ -219,15 +231,22 @@ defmodule PhpBeam.Builtin.StreamFns do
     len = int(vals, 1, 8192)
 
     with_stream("fread", vals, i, fn r, res ->
-      case :file.read(res.device, len) do
-        {:ok, data} ->
-          eof? = byte_size(data) < len
-          i2 = PhpBeam.Interp.put_resource(i, r, %{res | eof: eof?})
-          {:ok, {:string, data}, i2}
+      case res do
+        # non-interactive stdin reads EOF immediately
+        %{std: _} ->
+          {:ok, {:string, ""}, i}
 
-        :eof ->
-          i2 = PhpBeam.Interp.put_resource(i, r, %{res | eof: true})
-          {:ok, {:string, ""}, i2}
+        _ ->
+          case :file.read(res.device, len) do
+            {:ok, data} ->
+              eof? = byte_size(data) < len
+              i2 = PhpBeam.Interp.put_resource(i, r, %{res | eof: eof?})
+              {:ok, {:string, data}, i2}
+
+            :eof ->
+              i2 = PhpBeam.Interp.put_resource(i, r, %{res | eof: true})
+              {:ok, {:string, ""}, i2}
+          end
       end
     end)
   end
@@ -308,9 +327,28 @@ defmodule PhpBeam.Builtin.StreamFns do
       end
 
     with_stream("fwrite", vals, i, fn _r, res ->
-      case :file.write(res.device, data) do
-        :ok -> {:ok, {:int, byte_size(data)}, i}
-        {:error, _} -> {:ok, {:int, 0}, i}
+      case res do
+        # php-cli: STDOUT/STDERR are live process streams. We model STDOUT as
+        # the program output buffer; STDERR bytes vanish (the differential
+        # convention drops stderr on both sides)
+        %{std: :stdout} ->
+          {:ok, {:int, byte_size(data)}, PhpBeam.Interp.write(i, data)}
+
+        # real stderr: immediate, unbuffered — the differential convention
+        # drops stderr on both sides, so bytes written here never surface in
+        # comparisons; it also makes engine debugging possible on hangs
+        %{std: :stderr} ->
+          IO.write(:standard_error, data)
+          {:ok, {:int, byte_size(data)}, i}
+
+        %{std: :stdin} ->
+          {:ok, {:int, 0}, i}
+
+        _ ->
+          case :file.write(res.device, data) do
+            :ok -> {:ok, {:int, byte_size(data)}, i}
+            {:error, _} -> {:ok, {:int, 0}, i}
+          end
       end
     end)
   end
@@ -365,7 +403,7 @@ defmodule PhpBeam.Builtin.StreamFns do
 
   defp fflush_v(vals, i) do
     with_stream("fflush", vals, i, fn _r, res ->
-      :file.sync(res.device)
+      unless Map.has_key?(res, :std), do: :file.sync(res.device)
       {:ok, {:bool, true}, i}
     end)
   end

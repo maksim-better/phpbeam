@@ -123,8 +123,23 @@ defmodule PhpBeam.Builtin do
     fns =
       put.(fns, "define", fn vals, interp, _ctx ->
         case vals do
-          [{:string, name}, v | _] ->
-            {:ok, {:bool, true}, %{interp | consts: Map.put(interp.consts, name, v)}}
+          [{:string, name}, v | rest] ->
+            it =
+              if rest != [] do
+                PhpBeam.Interp.warn(
+                  interp,
+                  "define(): Argument #3 ($case_insensitive) is ignored since declaration of case-insensitive constants is no longer supported"
+                )
+              else
+                interp
+              end
+
+            if Map.has_key?(it.consts, name) do
+              # php keeps the original value and returns false
+              {:ok, {:bool, false}, PhpBeam.Interp.warn(it, "Constant #{name} already defined")}
+            else
+              {:ok, {:bool, true}, %{it | consts: Map.put(it.consts, name, v)}}
+            end
 
           _ ->
             {:ok, {:bool, false}, interp}

@@ -42,7 +42,6 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "strtotime" => &strtotime_v/2,
       "timezone_version_get" => &tz_version/2,
       "timezone_open" => &tz_open/2,
-      "wp_timezone" => &tz_get/2,
       "header_remove" => &header_remove_v/2,
       "headers_list" => &headers_list_v/2,
       "http_response_code" => &http_response_code_v/2,

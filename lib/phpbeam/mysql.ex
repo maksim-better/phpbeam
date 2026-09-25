@@ -88,7 +88,11 @@ defmodule PhpBeam.MySQL do
   php's conversion rules to strings, exactly like the protocol client did.
   """
   def query(%__MODULE__{conn: conn} = st, sql) do
-    case MyXQL.query(conn, to_string(sql)) do
+    # :text = raw COM_QUERY, matching mysqlnd's unprepared path. MyXQL's
+    # default :binary wraps every statement in the prepared protocol, which
+    # the server rejects for `USE` (WP's real_connect passes dbname=null and
+    # then calls select_db)
+    case MyXQL.query(conn, to_string(sql), [], query_type: :text) do
       {:ok, %MyXQL.Result{} = r} ->
         meta = %{
           columns: r.columns || [],

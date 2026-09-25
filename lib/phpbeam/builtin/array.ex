@@ -25,6 +25,7 @@ defmodule PhpBeam.Builtin.ArrayFns do
       "array_unique" => &array_unique/2,
       "array_combine" => &array_combine/2,
       "array_fill" => &array_fill/2,
+      "array_fill_keys" => &array_fill_keys/2,
       "array_pad" => &array_pad/2,
       "array_chunk" => &array_chunk/2,
       "array_column" => &array_column/2,
@@ -362,6 +363,20 @@ defmodule PhpBeam.Builtin.ArrayFns do
   defp array_fill([{:int, start}, {:int, num}, v | _], i) do
     pairs = for idx <- start..(start + num - 1), do: {{:int, idx}, v}
     {:ok, {:array, PArray.from_pairs(pairs)}, i}
+  end
+
+  defp array_fill_keys([{:array, a}, v | _], i) do
+    pairs = Enum.map(PArray.values(a), &{nil, &1})
+
+    arr =
+      Enum.reduce(pairs, PArray.new(), fn {nil, k}, acc ->
+        case PArray.put(acc, k, v) do
+          {:ok, a2} -> a2
+          _ -> acc
+        end
+      end)
+
+    {:ok, {:array, arr}, i}
   end
 
   defp array_pad([{:array, a}, {:int, size}, v | _], i) do

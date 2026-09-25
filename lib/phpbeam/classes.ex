@@ -146,6 +146,9 @@ defmodule PhpBeam.Classes do
     end
   end
 
+  @doc "Public namespaced-key lookup for dynamically declared classes (anonymous classes)"
+  def full_key_of(name, interp), do: full_key(name, interp)
+
   defp display_name(name, interp) do
     if interp.ns == [], do: name, else: Enum.join(interp.ns ++ [name], "\\")
   end

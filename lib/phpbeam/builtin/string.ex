@@ -52,6 +52,8 @@ defmodule PhpBeam.Builtin.StringFns do
         {name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []}}
       end)
     )
+    # str_replace's 4th arg is &$count — the ref_call result writes it back
+    |> Map.update!("str_replace", &%{&1 | refs: [3]})
   end
 
   defp s({:string, s}), do: s
@@ -128,18 +130,29 @@ defmodule PhpBeam.Builtin.StringFns do
   defp str_replace([search, replace, subject | _], i) do
     {se, rp} = {maybe_list(search), maybe_list(replace)}
 
-    out =
-      Enum.reduce(Enum.with_index(se), s(subject), fn {needle, idx}, acc ->
+    {out, count} =
+      Enum.reduce(Enum.with_index(se), {s(subject), 0}, fn {needle, idx}, {acc, n} ->
         rep =
           case Enum.at(rp, idx) do
             nil -> if(rp == [], do: s(replace), else: "")
             r -> s(r)
           end
 
-        String.replace(acc, s(needle), rep)
+        needle_s = s(needle)
+
+        # php: an empty search string leaves the subject untouched (Elixir's
+        # String.replace/3 would insert between every grapheme instead)
+        if needle_s == "" do
+          {acc, n}
+        else
+          hits = length(:binary.split(acc, needle_s, [:global])) - 1
+
+          {String.replace(acc, needle_s, rep), n + hits}
+        end
       end)
 
-    {:ok, {:string, out}, i}
+    # &$count write-back (4th arg): _deep_replace() loops until it sees 0
+    {:ref_call, {:string, out}, [nil, nil, nil, {:int, count}], i}
   end
 
   defp maybe_list({:array, arr}), do: PArray.values(arr)

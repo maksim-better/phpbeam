@@ -23,7 +23,10 @@ defmodule PhpBeam.Eval do
   def eval({:lit_val, v}, env, interp), do: {{:val, v}, env, interp}
 
   def eval({:var, name}, env, interp) do
-    if name == "GLOBALS" and env.function != nil do
+    if name == "GLOBALS" do
+      # $GLOBALS is the global symbol table itself — writes through it must
+      # reach the real global slots (php: wp_cache_init assigns
+      # $GLOBALS['wp_object_cache'])
       {{:val, globals_array(interp)}, env, interp}
     else
       case Env.lookup(env, interp, name) do
@@ -173,13 +176,36 @@ defmodule PhpBeam.Eval do
                 {{:val, :null}, env2, interp3}
 
               m ->
-                call_php_method(
-                  obj_ref,
-                  m,
-                  [{:arg, {:lit_val, {:string, key}}, false, nil}],
-                  env2,
-                  interp2
-                )
+                gkey = {elem(obj_ref, 1), String.downcase(key)}
+
+                if MapSet.member?(interp2.get_guards, gkey) do
+                  # php re-reading the same property inside its own __get:
+                  # no second dispatch — null + undefined-property warning
+                  interp3 =
+                    warn(
+                      env2,
+                      interp2,
+                      "Undefined property: #{display_class(interp2, obj.class)}::$#{key}"
+                    )
+
+                  {{:val, :null}, env2, interp3}
+                else
+                  it3 = %{interp2 | get_guards: MapSet.put(interp2.get_guards, gkey)}
+
+                  case call_php_method(
+                         obj_ref,
+                         m,
+                         [{:arg, {:lit_val, {:string, key}}, false, nil}],
+                         env2,
+                         it3
+                       ) do
+                    {{:val, v}, e3, it4} ->
+                      {{:val, v}, e3, %{it4 | get_guards: MapSet.delete(it4.get_guards, gkey)}}
+
+                    {{:unwind, _} = u, e3, it4} ->
+                      {u, e3, %{it4 | get_guards: MapSet.delete(it4.get_guards, gkey)}}
+                  end
+                end
             end
         end
 
@@ -238,14 +264,30 @@ defmodule PhpBeam.Eval do
               end
 
             m ->
-              margs = [
-                {:arg, {:lit_val, {:string, key}}, false, nil},
-                {:arg, {:lit_val, v}, false, nil}
-              ]
+              gkey = {elem(obj_ref, 1), key}
 
-              case call_php_method(obj_ref, m, margs, env2, interp2) do
-                {{:val, _}, _, i3} -> {env2, i3}
-                _ -> {env2, interp2}
+              if MapSet.member?(interp2.set_guards, gkey) do
+                # php: writing the same property inside its own __set does
+                # not re-dispatch — the dynamic property is created directly
+                case PArray.put(obj.props, {:string, key}, v) do
+                  {:ok, props2} -> {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
+                  _ -> {env2, interp2}
+                end
+              else
+                margs = [
+                  {:arg, {:lit_val, {:string, key}}, false, nil},
+                  {:arg, {:lit_val, v}, false, nil}
+                ]
+
+                it3 = %{interp2 | set_guards: MapSet.put(interp2.set_guards, gkey)}
+
+                case call_php_method(obj_ref, m, margs, env2, it3) do
+                  {{:val, _}, _, i4} ->
+                    {env2, %{i4 | set_guards: MapSet.delete(i4.set_guards, gkey)}}
+
+                  _ ->
+                    {env2, interp2}
+                end
               end
           end
         end
@@ -949,6 +991,50 @@ defmodule PhpBeam.Eval do
           _ ->
             {{:unwind, {:halt, 0}}, env2, interp2}
         end
+    end
+  end
+
+  def eval({:anon_class, decl, args}, env, interp) do
+    # php names anonymous classes `Parent@anonymous file:line$id` — the
+    # per-site counter makes the name unique across instantiations
+    file = eval_file(interp)
+    line = interp.cur_line
+
+    {n, interp} =
+      Map.get_and_update(interp, :anon_sites, fn sites ->
+        nn = Map.get(sites, {file, line}, 0)
+        {nn, Map.put(sites, {file, line}, nn + 1)}
+      end)
+
+    parent =
+      case decl.extends do
+        [{parts, _fq} | _] ->
+          case resolve_class_key({:cname, false, parts}, env, interp) do
+            {:ok, pkey} ->
+              case PhpBeam.Classes.get_class(interp, pkey) do
+                %{name: pn} -> pn
+                _ -> Enum.join(parts, "\\")
+              end
+
+            _ ->
+              Enum.join(parts, "\\")
+          end
+
+        _ ->
+          "class"
+      end
+
+    name = "#{parent}@anonymous\0#{file}:#{line}$#{n}"
+    anon_decl = %{decl | name: name}
+
+    case PhpBeam.Classes.register(anon_decl, interp) do
+      {:ok, interp2} ->
+        key = PhpBeam.Classes.full_key_of(name, interp2)
+        {{:object, _} = obj_ref, interp3} = make_instance(interp2, key)
+        call_constructor(obj_ref, args, env, interp3)
+
+      {:error, msg} ->
+        {{:unwind, {:engine_fatal, msg}}, env, interp}
     end
   end
 
@@ -2113,8 +2199,25 @@ defmodule PhpBeam.Eval do
     call_named([fname], String.downcase(fname), false, wrap_args(call_args), env, interp)
   end
 
-  def call_cb({:array, _} = _method_pair, _call_args, env, interp) do
-    {{:unwind, {:fatal, "callable arrays require class support (M5)"}}, env, interp}
+  def call_cb({:array, arr}, call_args, env, interp) do
+    case PArray.values(arr) do
+      [{:object, _} = obj_ref, {:string, m}] ->
+        eval(
+          {:method_call, {:lit_val, obj_ref}, {:lit_name, m}, wrap_args(call_args), false},
+          env,
+          interp
+        )
+
+      [{:string, c}, {:string, m}] ->
+        eval(
+          {:static_call, {:cname, false, [c]}, {:lit_name, m}, wrap_args(call_args)},
+          env,
+          interp
+        )
+
+      _ ->
+        {{:unwind, {:fatal, "Value not callable"}}, env, interp}
+    end
   end
 
   def call_cb(_, _call_args, env, interp) do
@@ -2472,7 +2575,8 @@ defmodule PhpBeam.Eval do
         {{:unwind, u}, env, interp3}
 
       {:ref_call, v, new_vals, interp3} ->
-        {{:val, v}, env, write_back_ref_args(args, new_vals, env, interp3, ref_positions)}
+        {env4, it4} = write_back_ref_args(args, new_vals, env, interp3, ref_positions)
+        {{:val, v}, env4, it4}
     end
   end
 
@@ -2512,24 +2616,24 @@ defmodule PhpBeam.Eval do
   end
 
   defp write_back_ref_args(_args, _new_vals, env, interp, []) do
-    interp
+    {env, interp}
   end
 
   defp write_back_ref_args(args, new_vals, env, interp, positions) do
-    Enum.reduce(positions, interp, fn pos, it ->
+    Enum.reduce(positions, {env, interp}, fn pos, {en, it} ->
       case Enum.at(args, pos) do
         {:arg, lval, _, _} ->
           case Enum.at(new_vals, pos) do
             nil ->
-              it
+              {en, it}
 
             new_v ->
-              {_e2, it2} = assign(lval, new_v, env, it)
-              it2
+              {e2, it2} = assign(lval, new_v, en, it)
+              {e2, it2}
           end
 
         _ ->
-          it
+          {en, it}
       end
     end)
   end
@@ -3007,6 +3111,15 @@ defmodule PhpBeam.Eval do
       "PHP_OS_FAMILY" ->
         {:ok, {:string, "Darwin"}}
 
+      "PHP_SAPI" ->
+        {:ok, {:string, "cli"}}
+
+      "PHP_DEBUG" ->
+        {:ok, {:bool, false}}
+
+      "PHP_WINDOWS_VERSION_MAJOR" ->
+        {:ok, {:bool, false}}
+
       "M_PI" ->
         {:ok, {:float, :math.pi()}}
 
@@ -3444,6 +3557,24 @@ defmodule PhpBeam.Eval do
   end
 
   # nested writes into member containers: $this->arr[$k] = v / self::$a[] = v
+  # $GLOBALS['k'] = v writes the real global slot; nested writes
+  # ($GLOBALS['a']['b'] = v) flow through the generic path, whose write-back
+  # lands here too
+  def assign({:index, {:var, "GLOBALS"}, idx}, v, env, interp) when idx != nil do
+    {{:val, key}, env2, interp2} = eval(idx, env, interp)
+
+    case key do
+      {:string, k} ->
+        {env2, %{interp2 | globals: Map.put(interp2.globals, k, v)}}
+
+      {:int, n} ->
+        {env2, %{interp2 | globals: Map.put(interp2.globals, Integer.to_string(n), v)}}
+
+      _ ->
+        {env2, interp2}
+    end
+  end
+
   def assign({:index, {:prop, _, _} = prop_t, idx}, v, env, interp) do
     nested_member_write(prop_t, idx, v, env, interp)
   end
@@ -3452,7 +3583,26 @@ defmodule PhpBeam.Eval do
     nested_member_write(prop_t, idx, v, env, interp)
   end
 
+  # deeper chains rooted at a property ($obj->p[$i][$j] = v): lvalue_path
+  # can't build a var path for these, so mutate level by level and write back
+  def assign({:index, container, idx}, v, env, interp) when elem(container, 0) == :index do
+    if prop_rooted?(container) do
+      nested_member_write(container, idx, v, env, interp)
+    else
+      generic_index_assign(container, idx, v, env, interp)
+    end
+  end
+
+  defp prop_rooted?({:index, inner, _}), do: prop_rooted?(inner)
+  defp prop_rooted?({:prop, _, _}), do: true
+  defp prop_rooted?({:static_prop, _, _}), do: true
+  defp prop_rooted?(_), do: false
+
   def assign({:index, container, idx}, v, env, interp) do
+    generic_index_assign(container, idx, v, env, interp)
+  end
+
+  defp generic_index_assign(container, idx, v, env, interp) do
     {path, env2, interp2} = build_path(container, env, interp)
 
     case idx do
@@ -3465,40 +3615,87 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  defp nested_member_write({:index, inner, idx}, v, env, interp) do
+    {{:val, container}, e2, i2} = quiet_read(inner, env, interp)
+    container2 = mutate_member(container, idx, v, e2, i2)
+    assign(inner, container2, e2, i2)
+  end
+
   defp nested_member_write(prop_t, idx, v, env, interp) do
-    {{:val, container}, e2, i2} = eval(prop_t, env, interp)
-
-    container2 =
-      case container do
-        {:array, arr} ->
-          case idx do
-            nil ->
-              {:array, PArray.push(arr, v)}
-
-            _ ->
-              {{:val, key}, _, _} = eval(idx, e2, i2)
-
-              case PArray.put(arr, key, v) do
-                {:ok, a2} -> {:array, a2}
-                _ -> container
-              end
-          end
-
-        :null ->
-          case idx do
-            nil ->
-              {:array, PArray.from_pairs([{nil, v}])}
-
-            _ ->
-              {{:val, key}, _, _} = eval(idx, e2, i2)
-              {:array, PArray.from_pairs([{key, v}])}
-          end
-
-        _ ->
-          container
-      end
-
+    {{:val, container}, e2, i2} = quiet_read(prop_t, env, interp)
+    container2 = mutate_member(container, idx, v, e2, i2)
     assign(prop_t, container2, e2, i2)
+  end
+
+  # write-context reads autovivify silently: php does not warn for missing
+  # array keys / properties along `$a->p[$missing] = v` paths (undefined
+  # VARIABLES along the path still warn, so those keep normal eval)
+  defp quiet_read({:index, cont, idx}, env, interp) do
+    {{:val, c}, e2, i2} = quiet_read(cont, env, interp)
+
+    case idx do
+      nil ->
+        {{:val, :null}, e2, i2}
+
+      _ ->
+        {{:val, k}, e3, i3} = eval(idx, e2, i2)
+
+        case c do
+          {:array, arr} -> {{:val, PArray.get(arr, k, :null)}, e3, i3}
+          _ -> {{:val, :null}, e3, i3}
+        end
+    end
+  end
+
+  defp quiet_read({:prop, obj_e, name_e} = ast, env, interp) do
+    {{:val, ov}, e2, i2} = eval(obj_e, env, interp)
+
+    case ov do
+      {:object, _} = obj_ref ->
+        obj = get_object(i2, obj_ref)
+        key = String.downcase(prop_name_string(name_e, e2, i2))
+
+        case PArray.fetch(obj.props, {:string, key}) do
+          {:ok, v} -> {{:val, deref(v, i2)}, e2, i2}
+          _ -> {{:val, :null}, e2, i2}
+        end
+
+      _ ->
+        eval(ast, env, interp)
+    end
+  end
+
+  defp quiet_read(other, env, interp), do: eval(other, env, interp)
+
+  defp mutate_member(container, idx, v, e2, i2) do
+    case container do
+      {:array, arr} ->
+        case idx do
+          nil ->
+            {:array, PArray.push(arr, v)}
+
+          _ ->
+            {{:val, key}, _, _} = eval(idx, e2, i2)
+
+            case PArray.put(arr, key, v) do
+              {:ok, a2} -> {:array, a2}
+              _ -> container
+            end
+        end
+
+      :null ->
+        case idx do
+          nil ->
+            {:array, PArray.from_pairs([{nil, v}])}
+
+          _ ->
+            {{:val, key}, _, _} = eval(idx, e2, i2)
+            {:array, PArray.from_pairs([{key, v}])}
+        end
+
+      _ ->
+        container
+    end
   end
 
   def assign(_, _v, env, interp), do: {env, interp}

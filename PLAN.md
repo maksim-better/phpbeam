@@ -10,11 +10,14 @@
 - [x] Zend 抽样护栏：`test/phpbeam/zend_sample_test.exs`（确定性 199 例抽样，`--only zend`，阈值 0.12）；实测 12.6%（修前基线 ~11%）。
 - 已知残留（非本族）：抽样中 8 例引擎崩溃在 yield 生成器（gh18581 等）、`__NAMESPACE__`、nullsafe `new $x?->y`、attributes 家族。
 
-## M24：WordPress install 实测
+## M24：WordPress install 实测（进行中，`2026-09-25`）
 
-- [ ] Docker MySQL（容器 `phpbeam-mysql`，库 wp_test）建 WP 表，跑 `wp-admin/install.php`
-- [ ] 安装向导第一步走 wpdb `query()/insert()` 全链路，检验 MyXQL 路径的真实负载
-- [ ] 差分对比安装页输出
+- [x] **引擎修复大丰收（15+ 处，全部 php 探针/源码实证）**：MyXQL 默认 prepare 协议拒 `USE`（改 `query_type: :text` 走 COM_QUERY，M20 遗留）；`__get`/`__set` 重入守卫（同对象同属性不二入，php 语义——WP wpdb 全靠它）；`$GLOBALS['k']=v` 写穿到真实全局槽（wp_cache_init 靠它）；嵌套属性写 `$obj->p[$i][$j]=v` 走递归 read-modify-write（曾把整个 env 搞丢）；写上下文静默自动装配（quiet_read）；`str_replace` 空搜索串原样返回 + `&$count` 计数写回（_deep_replace 曾死循环）+ refs 写回线程化 env（函数作用域曾丢）；可调用数组 `[obj,'m']`（M5 占位终结）；匿名类（`父类@anonymous\0文件:行$序号` 命名精确）；调用尾随逗号（php 7.3+）；STDIN/STDOUT/STDERR 可写流（STDOUT→输出缓冲、STDERR→真实 stderr 即时可见）；display_errors ini 生效；define() 重定义警告+保留原值+返回 false；wp_timezone 内置摘除（WP 自定义被劫持）；命名空间函数定义注册 `ns\name`；array_fill_keys；PHP_SAPI 族常量。
+- [x] **wp-load 带真库完整 exit 0**（1.4s，php 0.2s）；install.php 差分推进到 wp-settings:273。
+- [ ] **硬墙：生成器（yield）**——WP html-api 遍地用（class-wp-html-tag-processor.php:1246 等），不实现则 install 页出不来。即 M25 的核心工程（新执行模型构件）。
+- [ ] 待收尾：install.php 差分对齐（含 translations API 网络数据——考虑离线固定 fixture 或过滤）、向导 step 模拟建表。
+- [ ] 顺带发现的缺口（低危，排队列）：函数/类顶层声明提升（php 编译期 hoist）；动态属性 Deprecated 警告（需 error_reporting 分级过滤配套，否则反而多话）；`explode('')` 应 ValueError；null 方法调用 Error 应可 catch（现为引擎 fatal）。
+- 差分：21_m24_engine.php（byte 级一致）；phpt 273→274/697。
 
 ## M25+：按价值排序的队列
 

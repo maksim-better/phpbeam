@@ -32,6 +32,7 @@ defmodule PhpBeam.Interp do
               "serialize_precision" => "-1",
               "error_reporting" => "22527",
               "default_charset" => "UTF-8",
+              "display_errors" => "1",
               "include_path" => ".:/opt/homebrew/Cellar/php/8.4.2/share/php/pear",
               "input_encoding" => "",
               "internal_encoding" => "",
@@ -45,10 +46,24 @@ defmodule PhpBeam.Interp do
             included: %{},
             cur_line: 0,
             call_stack: [],
-            resources: %{},
+            resources: %{
+              # 0/1/2 = STDIN/STDOUT/STDERR (php-cli constants); STDIN is at
+              # EOF (non-interactive), STDOUT/STDERR are writable
+              0 => %{std: :stdin, closed: false, eof: true},
+              1 => %{std: :stdout, closed: false, eof: false},
+              2 => %{std: :stderr, closed: false, eof: false}
+            },
             next_res: 5,
             output_origin: nil,
             throw_pos: nil,
+            # php's __get recursion guard: {obj_id, prop_key} pairs currently
+            # inside their own __get — re-reads yield null + warning
+            get_guards: MapSet.new(),
+            # same guard for __set — re-writes create the property directly
+            set_guards: MapSet.new(),
+            # {file, line} => nth instantiation, for php's
+            # `Parent@anonymous file:line$id` class naming
+            anon_sites: %{},
             mysqli_report: 3
 
   @type t :: %__MODULE__{}
@@ -247,8 +262,17 @@ defmodule PhpBeam.Interp do
       interp
     else
       interp
-      |> write("\nWarning: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
+      |> display("\nWarning: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
       |> Map.update!(:warnings, &(&1 + 1))
+    end
+  end
+
+  # php routes warnings through display_errors: STDOUT shows them on stdout;
+  # 0/off (what wp-config sets via @ini_set) hides them entirely
+  defp display(interp, text) do
+    case Map.get(interp.ini, "display_errors", "1") |> String.downcase() do
+      v when v in ~w(1 on true yes stdout) -> write(interp, text)
+      _ -> interp
     end
   end
 
@@ -272,7 +296,7 @@ defmodule PhpBeam.Interp do
       interp
     else
       interp
-      |> write("\n#{level}: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
+      |> display("\n#{level}: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
       |> Map.update!(:warnings, &(&1 + 1))
     end
   end
@@ -1006,8 +1030,12 @@ defmodule PhpBeam.Interp do
 
   def exec_stmt({:func_def, name, params, body}, env, interp) do
     def_file = current_file(interp)
+    # php function names are case-insensitive and namespace-qualified: inside
+    # `namespace Sodium;` a define lands under sodium\name (calls resolve the
+    # ns-prefixed key first, then fall back to the global/builtin one)
+    full = full_fn_key(name, interp)
 
-    if Map.has_key?(interp.functions, name) do
+    if Map.has_key?(interp.functions, full) do
       {:ok, env, warn(interp, "Cannot redeclare function #{name}()")}
     else
       {:ok, env,
@@ -1016,10 +1044,18 @@ defmodule PhpBeam.Interp do
          | functions:
              Map.put(
                interp.functions,
-               name,
+               full,
                {:user, params, body, def_file, interp.cur_line}
              )
        }}
+    end
+  end
+
+  defp full_fn_key(name, interp) do
+    if interp.ns == [] do
+      String.downcase(name)
+    else
+      (interp.ns ++ [name]) |> Enum.join("\\") |> String.downcase()
     end
   end
 
