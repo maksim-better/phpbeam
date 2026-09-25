@@ -31,6 +31,17 @@ defmodule PhpBeam.Builtin.StringFns do
       "strcasecmp" => &strcasecmp/2,
       "strncmp" => &strncmp/2,
       "str_word_count" => &str_word_count/2,
+      "strip_tags" => &strip_tags/2,
+      "addslashes" => &addslashes_v/2,
+      "stripslashes" => &stripslashes_v/2,
+      "mb_check_encoding" => &mb_check_encoding/2,
+      "mb_strlen" => &mb_strlen/2,
+      "mb_strpos" => &mb_strpos/2,
+      "mb_substr" => &mb_substr/2,
+      "mb_strtolower" => &mb_strtolower/2,
+      "mb_strtoupper" => &mb_strtoupper/2,
+      "mb_detect_encoding" => &mb_detect_encoding/2,
+      "mb_internal_encoding" => &mb_internal_encoding/2,
       "nl2br" => &nl2br/2,
       "htmlspecialchars" => &htmlspecialchars/2,
       "htmlentities" => &htmlspecialchars/2,
@@ -396,5 +407,134 @@ defmodule PhpBeam.Builtin.StringFns do
 
   defp drop_while_set(list, set) do
     Enum.drop_while(list, &MapSet.member?(set, &1))
+  end
+
+  # php: strips HTML/PHP tags; allowed tags keep only their open/close forms
+  defp strip_tags([v | rest], i) do
+    str = s(v)
+
+    allowed =
+      case rest do
+        [{:string, a} | _] -> parse_allowed_tags(a)
+        _ -> []
+      end
+
+    out =
+      str
+      |> strip_tags_scan(allowed, "")
+      |> String.replace("\0", "")
+
+    {:ok, {:string, out}, i}
+  end
+
+  defp parse_allowed_tags(a) do
+    a |> String.split(">", trim: true) |> Enum.map(&String.trim_leading(&1, "<"))
+  end
+
+  defp strip_tags_scan("", _allowed, acc), do: acc
+
+  defp strip_tags_scan("<" <> rest, allowed, acc) do
+    case find_tag_end(rest, "") do
+      {tag_body, rest2} ->
+        name = tag_body |> tag_name() |> String.downcase()
+
+        if name in allowed do
+          strip_tags_scan(rest2, allowed, acc <> "<" <> tag_body <> ">")
+        else
+          strip_tags_scan(rest2, allowed, acc)
+        end
+
+      nil ->
+        acc <> "<"
+    end
+  end
+
+  defp strip_tags_scan(<<c::utf8, rest::binary>>, allowed, acc),
+    do: strip_tags_scan(rest, allowed, acc <> <<c::utf8>>)
+
+  defp find_tag_end("", _buf), do: nil
+
+  defp find_tag_end(">" <> rest, buf), do: {buf, rest}
+
+  defp find_tag_end(<<c::utf8, rest::binary>>, buf),
+    do: find_tag_end(rest, buf <> <<c::utf8>>)
+
+  defp tag_name(t), do: t |> String.split(" ") |> hd() |> String.trim_leading("/")
+
+  # ── mbstring family (UTF-8 fast paths over our binary strings) ──
+  defp mb_check_encoding([v | _], i), do: {:ok, {:bool, String.valid?(s(v))}, i}
+
+  defp mb_strlen([v | _], i), do: {:ok, {:int, String.length(s(v))}, i}
+
+  defp mb_strpos([h, n | _], i) do
+    hs = s(h)
+    ns = s(n)
+
+    case :binary.match(hs, ns) do
+      :nomatch ->
+        {:ok, {:bool, false}, i}
+
+      {at, _len} ->
+        # php counts CHARACTERS (not bytes) up to the match
+        chars = binary_part(hs, 0, at) |> String.length()
+        {:ok, {:int, chars}, i}
+    end
+  end
+
+  defp mb_substr([v, {:int, start} | rest], i) do
+    str = String.graphemes(s(v))
+    len = length(str)
+
+    {from, take} =
+      case rest do
+        [{:int, nil_len} | _] when is_nil(nil_len) ->
+          {norm_start(start, len), len}
+
+        [{:int, l} | _] ->
+          {norm_start(start, len), l}
+
+        _ ->
+          {norm_start(start, len), len}
+      end
+
+    out =
+      str
+      |> Enum.slice(from, max(take, 0))
+      |> Enum.join()
+
+    {:ok, {:string, out}, i}
+  end
+
+  defp mb_strtolower([v | _], i), do: {:ok, {:string, String.downcase(s(v))}, i}
+  defp mb_strtoupper([v | _], i), do: {:ok, {:string, String.upcase(s(v))}, i}
+  defp mb_detect_encoding([_v | _], i), do: {:ok, {:string, "UTF-8"}, i}
+  defp mb_internal_encoding(_vals, i), do: {:ok, {:string, "UTF-8"}, i}
+
+  defp norm_start(st, len) when st < 0, do: max(len + st, 0)
+  defp norm_start(st, _len), do: st
+
+  defp addslashes_v([v | _], i) do
+    out =
+      s(v)
+      |> String.replace("\\", "\\\\")
+      |> String.replace("'", "\\'")
+      |> String.replace("\"", "\\\"")
+      |> String.replace("\0", "\\0")
+
+    {:ok, {:string, out}, i}
+  end
+
+  defp stripslashes_v([v | _], i) do
+    # php processes escapes left-to-right; replace the escaped forms in one
+    # pass to avoid un-escaping a backslash that quotes a later char
+    out =
+      Regex.replace(~r/\\(['"\\0])/, s(v), fn _, c ->
+        case c do
+          "0" -> "\0"
+          other -> other
+        end
+      end)
+
+    {:ok, {:string, out}, i}
   end
 end

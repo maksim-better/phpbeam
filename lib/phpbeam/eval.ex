@@ -60,7 +60,7 @@ defmodule PhpBeam.Eval do
   def eval({:const, parts, fq}, env, interp) do
     name = Enum.join(parts, "\\")
 
-    case resolve_const(name, fq, interp) do
+    case resolve_const(name, fq, env, interp) do
       {:ok, v} -> {{:val, v}, env, interp}
       :error -> {{:unwind, {:fatal, "Undefined constant \"#{name}\""}}, env, interp}
     end
@@ -475,6 +475,15 @@ defmodule PhpBeam.Eval do
   end
 
   # the display name keeps the source spelling (keys are lowercased)
+  defp class_display_via_resolve({:cname, _, _} = c, env, interp) do
+    case resolve_class_display(c, env, interp) do
+      disp when is_binary(disp) -> disp
+      _ -> class_display_string(c, env, interp)
+    end
+  end
+
+  defp class_display_via_resolve(e, env, interp), do: class_display_string(e, env, interp)
+
   defp class_display_string({:cname, _fq, parts}, _env, _interp), do: Enum.join(parts, "\\")
 
   defp class_display_string(e, env, interp) do
@@ -501,31 +510,41 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:class_const, cname_e, cname}, env, interp) do
-    with {:ok, key} <- class_key_of(cname_e, env, interp),
-         true <- not is_nil(PhpBeam.Classes.get_class(interp, key)) do
-      case PhpBeam.Classes.find_const(interp, key, cname) do
-        {:ok, v} ->
-          {{:val, v}, env, interp}
+    with {:ok, key} <- class_key_of(cname_e, env, interp) do
+      {_, interp1} = fetch_class(interp, key, class_display_via_resolve(cname_e, env, interp))
 
-        :error ->
-          # unknown constants fall back to global constants
-          case Map.fetch(interp.consts, cname) do
-            {:ok, v} ->
-              {{:val, v}, env, interp}
+      if is_nil(PhpBeam.Classes.get_class(interp1, key)) do
+        class_const_missing(interp1, key, cname, env)
+      else
+        case PhpBeam.Classes.find_const_lazy(interp1, key, cname) do
+          {:ok, v, interp2} ->
+            {{:val, v}, env, interp2}
 
-            :error ->
-              {{:unwind, {:fatal, "Undefined constant #{display_class(interp, key)}::#{cname}"}},
-               env, interp}
-          end
+          :error ->
+            # unknown constants fall back to global constants
+            case Map.fetch(interp1.consts, cname) do
+              {:ok, v} ->
+                {{:val, v}, env, interp1}
+
+              :error ->
+                {{:unwind,
+                  {:fatal, "Undefined constant #{display_class(interp1, key)}::#{cname}"}}, env,
+                 interp1}
+            end
+
+          _ ->
+            class_const_missing(interp1, key, cname, env)
+        end
       end
     else
       {:error, msg} ->
         {{:unwind, {:fatal, msg}}, env, interp}
-
-      false ->
-        {{:unwind, {:fatal, "Class \"#{class_display_string(cname_e, env, interp)}\" not found"}},
-         env, interp}
     end
+  end
+
+  defp class_const_missing(interp, key, cname, env) do
+    {{:unwind, {:fatal, "Undefined constant #{display_class(interp, key)}::#{cname}"}}, env,
+     interp}
   end
 
   def eval({:assign, target, rhs}, env, interp) do
@@ -703,7 +722,7 @@ defmodule PhpBeam.Eval do
           case other do
             :float -> Value.to_float(v) |> elem(1)
             :bool -> {:bool, Value.truthy?(v)}
-            :string -> Value.cast_string(v) |> string_of_cast()
+            :string -> Value.cast_string(v) |> string_of_cast() |> wrap_string()
             :array -> Value.to_array(v)
             :object -> v
           end
@@ -713,24 +732,42 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:binop, :&&, l, r}, env, interp) do
-    {{:val, lv}, env2, interp2} = eval(l, env, interp)
+    case eval(l, env, interp) do
+      {{:val, lv}, env2, interp2} ->
+        if Value.truthy?(lv) do
+          case eval(r, env2, interp2) do
+            {{:val, rv}, env3, interp3} ->
+              {{:val, {:bool, Value.truthy?(rv)}}, env3, interp3}
 
-    if Value.truthy?(lv) do
-      {{:val, rv}, env3, interp3} = eval(r, env2, interp2)
-      {{:val, {:bool, Value.truthy?(rv)}}, env3, interp3}
-    else
-      {{:val, {:bool, false}}, env2, interp2}
+            {{:unwind, _} = u, env3, interp3} ->
+              {u, env3, interp3}
+          end
+        else
+          {{:val, {:bool, false}}, env2, interp2}
+        end
+
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
     end
   end
 
   def eval({:binop, :||, l, r}, env, interp) do
-    {{:val, lv}, env2, interp2} = eval(l, env, interp)
+    case eval(l, env, interp) do
+      {{:val, lv}, env2, interp2} ->
+        if Value.truthy?(lv) do
+          {{:val, {:bool, true}}, env2, interp2}
+        else
+          case eval(r, env2, interp2) do
+            {{:val, rv}, env3, interp3} ->
+              {{:val, {:bool, Value.truthy?(rv)}}, env3, interp3}
 
-    if Value.truthy?(lv) do
-      {{:val, {:bool, true}}, env2, interp2}
-    else
-      {{:val, rv}, env3, interp3} = eval(r, env2, interp2)
-      {{:val, {:bool, Value.truthy?(rv)}}, env3, interp3}
+            {{:unwind, _} = u, env3, interp3} ->
+              {u, env3, interp3}
+          end
+        end
+
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
     end
   end
 
@@ -917,8 +954,289 @@ defmodule PhpBeam.Eval do
 
   defp pop_file_once(interp), do: pop_file(interp)
 
+  # php: the auto key counter starts at 0; an explicit int key advances it to
+  # key+1 (probe-verified: `yield 10 => b; yield c;` gives c the key 11)
+  def eval({:yield_bare}, env, interp) do
+    i2 = adv_key(interp, nil)
+    gen_yield(env, i2, wrap_bare(interp.gen_ctx[:key]), :null, i2.gen_ctx)
+  end
+
+  def eval({:yield, e}, env, interp) do
+    {{:val, v}, env2, i2} = eval(e, env, interp)
+    i3 = adv_key(i2, nil)
+    k = wrap_bare(i2.gen_ctx[:key])
+    gen_yield(env2, i3, k, v, i3.gen_ctx)
+  end
+
+  def eval({:yield_kv, ke, ve}, env, interp) do
+    {{:val, k}, env2, i2} = eval(ke, env, interp)
+    {{:val, v}, env3, i3} = eval(ve, env2, i2)
+    i4 = adv_key(i3, k)
+    gen_yield(env3, i4, k, v, i4.gen_ctx)
+  end
+
+  # yield from: delegate to an inner generator/iterable, yielding each pair
+  def eval({:yield_from, e}, env, interp) do
+    {{:val, src}, env2, i2} = eval(e, env, interp)
+
+    case src do
+      {:object, _} = obj_ref ->
+        obj = get_object(i2, obj_ref)
+
+        if obj.class == "generator" do
+          yield_from_gen(obj_ref, env2, i2, :start)
+        else
+          i3 = adv_key(i2, nil)
+          gen_yield(env2, i3, wrap_bare(i2.gen_ctx[:key]), src, i3.gen_ctx)
+        end
+
+      {:array, arr} ->
+        yield_from_array(PArray.to_pairs(arr), env2, i2)
+
+      _ ->
+        {{:unwind, {:fatal, "Can only yield from generators and arrays"}}, env2, i2}
+    end
+  end
+
+  defp yield_from_array([], env, interp), do: {{:val, :null}, env, interp}
+
+  defp yield_from_array([{k, v} | rest], env, interp) do
+    i2 = adv_key(interp, unwrap_key(k))
+
+    case gen_yield(env, i2, wrap_bare(unwrap_key(k)), v, i2.gen_ctx) do
+      {{:val, _}, env2, i3} -> yield_from_array(rest, env2, i3)
+      other -> other
+    end
+  end
+
+  defp yield_from_gen(obj_ref, env, interp, first) do
+    case gen_resume(obj_ref, first, interp) do
+      {:yielded, k, v, i2} ->
+        i3 = adv_key(i2, nil)
+
+        case gen_yield(env, i3, k, v, i3.gen_ctx) do
+          {{:val, _}, env2, i4} -> yield_from_gen(obj_ref, env2, i4, :null)
+          other -> other
+        end
+
+      {:done, _ret, i2} ->
+        {{:val, :null}, env, i2}
+
+      {:thrown, u, i2} ->
+        {{:unwind, u}, env, i2}
+    end
+  end
+
+  defp auto_key(%{gen_ctx: %{key: n}}), do: n
+  defp auto_key(_), do: 0
+
+  defp adv_key(%{gen_ctx: ctx} = i, k) do
+    case k do
+      {:int, n} -> %{i | gen_ctx: %{ctx | key: n + 1}}
+      _ -> %{i | gen_ctx: %{ctx | key: ctx[:key] + 1}}
+    end
+  end
+
+  defp wrap_bare(n) when is_integer(n), do: {:int, n}
+  defp wrap_bare(other), do: other
+
+  defp unwrap_key({:int, n}), do: {:int, n}
+  defp unwrap_key({:string, _} = s), do: s
+  defp unwrap_key(other), do: other
+
   defp restore_ns(i, ns), do: %{i | ns: ns}
   defp pop_file(i), do: i
+
+  # ───────────────────────── generators (yield) ─────────────────────────
+  # A generator body runs in its own BEAM process; the interpreter struct —
+  # the shared world (objects, output, statics) — shuttles across on every
+  # resume/yield, so side effects stay visible on both sides. The body's
+  # suspended Elixir stack (its env + program counter) lives only in that
+  # process, which blocks in receive at each yield.
+
+  @doc """
+  Creates a Generator object for a (sub)body that contains yield. `fenv`
+  already has params bound; nothing executes until the first resume (php
+  generators are lazy).
+  """
+  def start_generator(fenv, body, env, interp) do
+    me = self()
+
+    pid =
+      spawn(fn ->
+        receive do
+          {:gen_start, driver, ii} ->
+            ctx = %{
+              driver: driver,
+              key: 0,
+              file: top_file(ii),
+              ns: ii.ns,
+              uses: ii.uses
+            }
+
+            i0 = %{ii | gen_ctx: ctx}
+
+            case Interp.exec_stmts(body, fenv, i0) do
+              {:ok, _, i2} ->
+                send(
+                  i2.gen_ctx.driver,
+                  {:gen_done, :null, strip_gen(strip_def_file(i2, i2.gen_ctx.file))}
+                )
+
+              {{:unwind, {:return, v}}, _, i2} ->
+                send(
+                  i2.gen_ctx.driver,
+                  {:gen_done, v, strip_gen(strip_def_file(i2, i2.gen_ctx.file))}
+                )
+
+              {{:unwind, u}, _, i2} ->
+                send(
+                  i2.gen_ctx.driver,
+                  {:gen_throw, u, strip_gen(strip_def_file(i2, i2.gen_ctx.file))}
+                )
+            end
+        end
+      end)
+
+    {obj_ref, interp2} = make_instance(interp, "generator")
+    obj = get_object(interp2, obj_ref)
+
+    st = %{pid: pid, started: false, done: false, k: :null, v: :null, ret: :null}
+
+    props =
+      case PArray.put(obj.props, {:string, "gen_state"}, {:gen_state, st}) do
+        {:ok, p2} -> p2
+        _ -> obj.props
+      end
+
+    {{:val, obj_ref}, env, put_object(interp2, obj_ref, %{obj | props: props})}
+  end
+
+  @doc """
+  Resumes a Generator object. `:start` boots a fresh generator to its first
+  yield; `:null` is next(); any other value is send(). Returns
+  `{:yielded, k, v, interp}` | `{:done, ret, interp}` | `{:thrown, u, interp}`
+  with the latest interpreter state.
+  """
+  def gen_resume({:object, _} = obj_ref, send_v, interp) do
+    obj = get_object(interp, obj_ref)
+
+    case PArray.get(obj.props, {:string, "gen_state"}) do
+      {:gen_state, st} ->
+        cond do
+          st.done ->
+            {:done, st.ret, interp}
+
+          st.pid == nil ->
+            {:done, :null, interp}
+
+          true ->
+            my_ctx = interp.gen_ctx
+            my_ns = interp.ns
+            my_uses = interp.uses
+            ref = :erlang.monitor(:process, st.pid)
+
+            msg =
+              case {st.started, send_v} do
+                {false, :start} ->
+                  {:gen_start, self(), strip_gen(interp)}
+
+                {false, v} ->
+                  [
+                    {:gen_start, self(), strip_gen(interp)},
+                    {:gen_resume, self(), v, strip_gen(interp)}
+                  ]
+
+                {true, :start} ->
+                  {:gen_resume, self(), :null, strip_gen(interp)}
+
+                {true, v} ->
+                  {:gen_resume, self(), v, strip_gen(interp)}
+              end
+
+            send_each(st.pid, msg)
+
+            receive do
+              {:gen_yield, k, v, i2} ->
+                :erlang.demonitor(ref, [:flush])
+                i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: false, k: k, v: v})
+                {:yielded, k, v, %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses}}
+
+              {:gen_done, ret, i2} ->
+                :erlang.demonitor(ref, [:flush])
+                i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: true, ret: ret})
+                {:done, ret, %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses}}
+
+              {:gen_throw, u, i2} ->
+                :erlang.demonitor(ref, [:flush])
+                i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: true})
+                {:thrown, u, %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses}}
+
+              {:DOWN, _, :process, _, reason} ->
+                {:thrown, {:fatal, "generator process died: #{inspect(reason)}"}, interp}
+            end
+        end
+    end
+  end
+
+  def gen_resume(_, _, interp), do: {:done, :null, interp}
+
+  defp send_each(pid, msgs) when is_list(msgs), do: Enum.each(msgs, &send(pid, &1))
+  defp send_each(pid, msg), do: send(pid, msg)
+
+  defp top_file(%{file_stack: [f | _]}) when is_binary(f), do: f
+  defp top_file(_), do: nil
+
+  defp strip_gen(%{gen_ctx: _} = i), do: %{i | gen_ctx: nil}
+
+  defp put_gen_state(interp, {:object, id}, st) do
+    obj = get_object(interp, {:object, id})
+
+    props =
+      case PArray.put(obj.props, {:string, "gen_state"}, {:gen_state, st}) do
+        {:ok, p2} -> p2
+        _ -> obj.props
+      end
+
+    put_object(interp, {:object, id}, %{obj | props: props})
+  end
+
+  # yield: hand k/v + the latest world to the driver, block until resumed.
+  # The resumed interp carries the DRIVER's gen_ctx — restore ours (with the
+  # advanced auto-key counter and the new driver pid). The body's defining
+  # file (pushed by the factory call) is stripped for the driver and restored
+  # on resume, so __DIR__/warning attribution stays correct on both sides.
+  defp gen_yield(env, interp, k, v, ctx2) do
+    ctx = interp.gen_ctx
+
+    case ctx do
+      nil ->
+        {{:unwind, {:fatal, "Cannot use \"yield\" outside of a generator"}}, env, interp}
+
+      _ ->
+        def_file = Map.get(ctx, :file)
+        stripped = strip_def_file(interp, def_file)
+
+        send(ctx.driver, {:gen_yield, k, v, %{stripped | gen_ctx: ctx2}})
+
+        receive do
+          {:gen_resume, driver2, send_v, i3} ->
+            restored =
+              case {def_file, i3.file_stack} do
+                {f, stack} when is_binary(f) -> %{i3 | file_stack: [f | stack]}
+                _ -> i3
+              end
+
+            body_scope = %{restored | ns: ctx2.ns, uses: ctx2.uses}
+            {{:val, send_v}, env, %{body_scope | gen_ctx: %{ctx2 | driver: driver2}}}
+        end
+    end
+  end
+
+  defp strip_def_file(%{file_stack: [f | rest]} = i, f) when is_binary(f),
+    do: %{i | file_stack: rest}
+
+  defp strip_def_file(i, _), do: i
 
   # php order: include_path entries (relative to cwd), then the including
   # file's directory, then cwd
@@ -1040,21 +1358,24 @@ defmodule PhpBeam.Eval do
 
   def eval({:new, cls, args}, env, interp) do
     with {:ok, key} <- class_key_of(cls, env, interp) do
-      case PhpBeam.Classes.get_class(interp, key) do
+      {klass, interp1} = fetch_class(interp, key, class_display_via_resolve(cls, env, interp))
+
+      case klass do
         nil ->
-          {{:unwind, {:fatal, "Class \"#{display_class(interp, key)}\" not found"}}, env, interp}
+          {{:unwind, {:fatal, "Class \"#{display_class(interp, key)}\" not found"}}, env, interp1}
 
         class ->
           cond do
             class.abstract? ->
               {{:unwind, {:fatal, "Cannot instantiate abstract class #{class.name}"}}, env,
-               interp}
+               interp1}
 
             class.kind == :interface or class.kind == :trait ->
-              {{:unwind, {:fatal, "Cannot instantiate #{class.kind} #{class.name}"}}, env, interp}
+              {{:unwind, {:fatal, "Cannot instantiate #{class.kind} #{class.name}"}}, env,
+               interp1}
 
             true ->
-              {{:object, _} = obj_ref, interp2} = make_instance(interp, key)
+              {{:object, _} = obj_ref, interp2} = make_instance(interp1, key)
               call_constructor(obj_ref, args, env, interp2)
           end
       end
@@ -1182,9 +1503,12 @@ defmodule PhpBeam.Eval do
       end
 
     # php names closures `{closure:file:line}` (definition site) in error
-    # messages and stack traces — carry the site in the runtime value
-    {{:val, {:closure, params, body, captures, arrow?, eval_file(interp), interp.cur_line}}, env2,
-     interp2}
+    # messages and stack traces — carry the site in the runtime value; a
+    # body containing yield makes the closure a generator factory
+    gen? = PhpBeam.Ast.has_yield?(body)
+
+    {{:val, {:closure, params, body, captures, arrow?, eval_file(interp), interp.cur_line, gen?}},
+     env2, interp2}
   end
 
   def eval({:method_call, obj_e, name_e, args, nullsafe?}, env, interp) do
@@ -1331,19 +1655,36 @@ defmodule PhpBeam.Eval do
               %{acc | vars: Map.put(acc.vars, n, v)}
             end)
 
-          interp2 = Interp.push_frame(interp2, "#{defc}->#{method.name}", vals)
+          {ns0, uses0, interp2} = push_class_scope(interp2, ckey)
 
-          {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
+          result =
+            if method.gen? do
+              # php binds __DIR__/__FILE__ to the DEFINING file at compile time
+              interp2 = %{interp2 | file_stack: [cfile | interp2.file_stack]}
+              {res, env2, interp2b} = start_generator(fenv2, method.body, env, interp2)
+              {res, env2, pop_file(interp2b)}
+            else
+              interp2 = Interp.push_frame(interp2, "#{defc}->#{method.name}", vals)
+              # method bodies evaluate __DIR__ etc. against their defining file
+              interp2 = %{interp2 | file_stack: [cfile | interp2.file_stack]}
 
-          {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+              {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
 
-          interp5 = Interp.pop_frame(interp4)
+              {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
 
-          case res do
-            :ok -> {{:val, :null}, env_out, interp5}
-            {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
-            # a throw escaping keeps its frame alive for the uncaught trace
-            {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+              interp5 = Interp.pop_frame(pop_file_once(interp4))
+
+              case res do
+                :ok -> {{:val, :null}, env_out, interp5}
+                {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
+                # a throw escaping keeps its frame alive for the uncaught trace
+                {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+              end
+            end
+
+          case result do
+            {{:val, v}, e, i} -> {{:val, v}, e, pop_class_scope(i, ns0, uses0)}
+            {{:unwind, u}, e, i} -> {{:unwind, u}, e, pop_class_scope(i, ns0, uses0)}
           end
 
         {{:unwind, _} = u, _, it2} ->
@@ -1355,38 +1696,48 @@ defmodule PhpBeam.Eval do
   def eval({:static_call, cname_e, name_e, args}, env, interp) do
     name = prop_name_string(name_e, env, interp)
 
-    with {:ok, key} <- class_key_of(cname_e, env, interp),
-         class when class != nil <- PhpBeam.Classes.get_class(interp, key) || :none do
-      case PhpBeam.Classes.find_method(interp, key, name) do
+    with {:ok, key} <- class_key_of(cname_e, env, interp) do
+      {klass, interp1} = fetch_class(interp, key, class_display_via_resolve(cname_e, env, interp))
+
+      case klass do
         nil ->
-          magic_static_call(key, name, args, env, interp)
+          {{:unwind,
+            {:fatal, "Class \"#{class_display_string(cname_e, env, interp)}\" not found"}}, env,
+           interp1}
 
-        method ->
-          cond do
-            method.static? ->
-              try do
-                call_static_method(key, method, args, env, interp)
-              catch
-                {:fatal_violation, msg, e, i} -> {{:unwind, {:fatal, msg}}, e, i}
-              end
-
-            # parent::method() / self::method() inside an instance method
-            env != nil and env.this != nil ->
-              call_php_method(env.this, method, args, env, interp)
-
-            true ->
-              msg =
-                "Non-static method #{display_class(interp, key)}::#{name}() cannot be called statically"
-
-              {{:unwind, {:fatal, msg}}, env, warn(env, interp, msg)}
-          end
+        _class ->
+          static_call_found(key, name, args, env, interp1)
       end
     else
-      :none ->
-        {{:unwind, {:fatal, "Class \"#{inspect(cname_e)}\" not found"}}, env, interp}
-
       {:error, msg} ->
         {{:unwind, {:fatal, msg}}, env, interp}
+    end
+  end
+
+  defp static_call_found(key, name, args, env, interp) do
+    case PhpBeam.Classes.find_method(interp, key, name) do
+      nil ->
+        magic_static_call(key, name, args, env, interp)
+
+      method ->
+        cond do
+          method.static? ->
+            try do
+              call_static_method(key, method, args, env, interp)
+            catch
+              {:fatal_violation, msg, e, i} -> {{:unwind, {:fatal, msg}}, e, i}
+            end
+
+          # parent::method() / self::method() inside an instance method
+          env != nil and env.this != nil ->
+            call_php_method(env.this, method, args, env, interp)
+
+          true ->
+            msg =
+              "Non-static method #{display_class(interp, key)}::#{name}() cannot be called statically"
+
+            {{:unwind, {:fatal, msg}}, env, warn(env, interp, msg)}
+        end
     end
   end
 
@@ -1457,16 +1808,41 @@ defmodule PhpBeam.Eval do
               %{acc | vars: Map.put(acc.vars, n, v)}
             end)
 
-          interp2 = Interp.push_frame(interp2, "#{defc}::#{method.name}", vals)
+          {ns0, uses0, interp2} = push_class_scope(interp2, ckey)
 
-          {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
-          {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+          result =
+            if method.gen? do
+              {res, env2, interp3} =
+                start_generator(fenv2, method.body, env, %{
+                  interp2
+                  | file_stack: [cfile | interp2.file_stack]
+                })
 
-          case res do
-            :ok -> {{:val, :null}, env_out, Interp.pop_frame(interp4)}
-            {:unwind, {:return, v}} -> {{:val, v}, env_out, Interp.pop_frame(interp4)}
-            # a throw escaping keeps its frame alive for the uncaught trace
-            {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+              {res, env2, pop_file(interp3)}
+            else
+              interp2 = Interp.push_frame(interp2, "#{defc}::#{method.name}", vals)
+              # static bodies also evaluate __DIR__ against their defining file
+              interp2 = %{interp2 | file_stack: [cfile | interp2.file_stack]}
+
+              {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
+              {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+
+              case res do
+                :ok ->
+                  {{:val, :null}, env_out, Interp.pop_frame(pop_file_once(interp4))}
+
+                {:unwind, {:return, v}} ->
+                  {{:val, v}, env_out, Interp.pop_frame(pop_file_once(interp4))}
+
+                # a throw escaping keeps its frame alive for the uncaught trace
+                {:unwind, _} = u ->
+                  {{:unwind, elem(u, 1)}, env_out, interp4}
+              end
+            end
+
+          case result do
+            {{:val, v}, e, i} -> {{:val, v}, e, pop_class_scope(i, ns0, uses0)}
+            {{:unwind, u}, e, i} -> {{:unwind, u}, e, pop_class_scope(i, ns0, uses0)}
           end
 
         {{:unwind, _} = u, _, it2} ->
@@ -1515,12 +1891,47 @@ defmodule PhpBeam.Eval do
       {:user, _params, _body, _def_file, _def_line} = fn_def ->
         call_function(fn_def, name, args, env, interp, false)
 
+      {:user_gen, _params, _body, _def_file, _def_line} = fn_def ->
+        call_generator_fn(fn_def, name, args, env, interp)
+
       %{fun: _} = entry ->
         call_builtin(entry, name, args, env, interp)
 
       :error ->
         fname = Enum.join(parts, "\\")
         {{:unwind, {:fatal, "Call to undefined function " <> fname <> "()"}}, env, interp}
+    end
+  end
+
+  # generator factory call: bind params (ArgumentCountError still applies at
+  # call time), then hand the prepared env/body to the lazy generator
+  defp call_generator_fn(
+         {:user_gen, params, body, def_file, def_line},
+         name,
+         args,
+         env,
+         interp
+       ) do
+    fenv = Env.function_scope(name, name)
+
+    case bind_params(params, args, fenv, env, interp, name, name, {def_file, def_line}) do
+      {:ok, binds, vals, interp2} ->
+        fenv2 =
+          Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
+            %{acc | vars: Map.put(acc.vars, n, v)}
+          end)
+
+        # generator bodies evaluate __DIR__ against their defining file
+        {res, env2, interp3} =
+          start_generator(fenv2, body, env, %{
+            interp2
+            | file_stack: [def_file | interp2.file_stack]
+          })
+
+        {res, env2, pop_file(interp3)}
+
+      {{:unwind, _} = u, _, it2} ->
+        {u, env, it2}
     end
   end
 
@@ -2185,7 +2596,7 @@ defmodule PhpBeam.Eval do
   # call a PHP callable value
   def call_cb(cb, call_args, env, interp)
 
-  def call_cb({:closure, _, _, _, _, _, _} = closure_value, call_args, env, interp),
+  def call_cb({:closure, _, _, _, _, _, _, _} = closure_value, call_args, env, interp),
     do: call_value(closure_value, wrap_args(call_args), env, interp)
 
   def call_cb({:closure, _, _, _, _, _} = closure_ast, call_args, env, interp) do
@@ -2297,7 +2708,7 @@ defmodule PhpBeam.Eval do
   end
 
   defp call_value(
-         {:closure, params, body, captures, _arrow?, def_file, def_line},
+         {:closure, params, body, captures, _arrow?, def_file, def_line, gen?},
          args,
          env,
          interp
@@ -2324,17 +2735,34 @@ defmodule PhpBeam.Eval do
 
     case bind_params(params, args, fenv, env, interp, cname, cname, {def_file, def_line}) do
       {:ok, binds, vals, interp2} ->
-        interp2 = Interp.push_frame(interp2, cname, vals)
-
         fenv2 =
           Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
             %{acc | vars: Map.put(acc.vars, n, v)}
           end)
 
-        case Interp.exec_stmts(body, fenv2, interp2) do
-          {:ok, e, i} -> {{:val, :null}, e, Interp.pop_frame(i)}
-          {{:unwind, {:return, v}}, _, i} -> {{:val, v}, env, Interp.pop_frame(i)}
-          {{:unwind, _} = u, _, _} -> {u, env, interp2}
+        if gen? do
+          {res, env2, interp3} =
+            start_generator(fenv2, body, env, %{
+              interp2
+              | file_stack: [def_file | interp2.file_stack]
+            })
+
+          {res, env2, pop_file(interp3)}
+        else
+          interp2 = Interp.push_frame(interp2, cname, vals)
+          # closure bodies evaluate __DIR__ against their defining file
+          interp2 = %{interp2 | file_stack: [def_file | interp2.file_stack]}
+
+          case Interp.exec_stmts(body, fenv2, interp2) do
+            {:ok, e, i} ->
+              {{:val, :null}, e, Interp.pop_frame(pop_file_once(i))}
+
+            {{:unwind, {:return, v}}, _, i} ->
+              {{:val, v}, env, Interp.pop_frame(pop_file_once(i))}
+
+            {{:unwind, _} = u, _, _} ->
+              {u, env, interp2}
+          end
         end
 
       {{:unwind, _} = u, _, it2} ->
@@ -2889,6 +3317,28 @@ defmodule PhpBeam.Eval do
   end
 
   defp string_of_cast({:ok, s}), do: s
+  defp wrap_string(s) when is_binary(s), do: {:string, s}
+  defp wrap_string(v), do: v
+
+  defp method_name(%{scope_class: sc, function: f}, interp)
+       when is_binary(sc) and is_binary(f),
+       do: "#{class_display(sc, interp)}::#{f}"
+
+  defp method_name(%{function: f}, _interp) when is_binary(f), do: f
+  defp method_name(_, _interp), do: ""
+
+  defp class_name_of(%{scope_class: sc}, interp) when is_binary(sc),
+    do: class_display(sc, interp)
+
+  defp class_name_of(_, _interp), do: ""
+
+  defp class_display(key, interp) do
+    case PhpBeam.Classes.get_class(interp, key) do
+      %{name: n} -> n
+      _ -> key
+    end
+  end
+
   defp string_of_cast({:warn_array, _}), do: "Array"
 
   defp name_of({:var, n}), do: n
@@ -2924,6 +3374,72 @@ defmodule PhpBeam.Eval do
   defp eval_const_expr(_), do: :null
 
   # resolve a class-name AST to a storage key (downcased, no leading backslash)
+  # class lookup with the registered spl autoloaders run on miss (php
+  # triggers them for new/static calls/class_exists-with-autoload). Returns
+  # {class_or_nil, interp} — the autoloaders' side effects (require files
+  # registering classes) thread back.
+  def fetch_class(interp, key, display_name) do
+    case PhpBeam.Classes.get_class(interp, key) do
+      nil when interp.autoload_fns != [] ->
+        # autoloaders resolve GLOBAL names — strip the active namespace, or
+        # `Autoload` inside `namespace WpOrg\Requests;` would recurse through
+        # fetch_class forever (ns\autoload misses -> autoload -> ...)
+        global = %{interp | ns: [], uses: %{normal: %{}, function: %{}, const: %{}}}
+
+        it2 =
+          Enum.reduce(interp.autoload_fns, global, fn cb, it ->
+            case PhpBeam.Classes.get_class(it, key) do
+              nil ->
+                case call_cb(deref(cb, it), [{:string, display_name}], nil_env(), it) do
+                  {{:val, _}, _, it2} -> it2
+                  {{:unwind, _}, _, it2} -> it2
+                end
+
+              _ ->
+                it
+            end
+          end)
+
+        {PhpBeam.Classes.get_class(it2, key), it2}
+
+      other ->
+        {other, interp}
+    end
+  end
+
+  defp nil_env(), do: %Env{}
+
+  # same resolution as resolve_class_key but PRESERVES case — php hands
+  # autoloaders the fully-qualified name (aliases applied), and PSR-4
+  # autoloaders build file paths from it
+  def resolve_class_display({:cname, fq, parts}, env, interp) do
+    first = hd(parts)
+    rest = tl(parts)
+
+    cond do
+      fq == true ->
+        Enum.join(parts, "\\")
+
+      first == "self" and env != nil and env.scope_class ->
+        env.scope_class
+
+      first == "static" and env != nil ->
+        env.called_class || env.scope_class
+
+      first == "parent" and env != nil and env.scope_class ->
+        parent_key(interp, env.scope_class) || Enum.join(parts, "\\")
+
+      alias_key = Map.get(interp.uses.normal, String.downcase(first)) ->
+        Enum.join([alias_key | rest], "\\")
+
+      interp.ns != [] and rest == [] ->
+        Enum.join(interp.ns ++ parts, "\\")
+
+      true ->
+        Enum.join(parts, "\\")
+    end
+  end
+
   def resolve_class_key({:cname, fq, parts}, env, interp) do
     first = hd(parts)
     rest = tl(parts)
@@ -2996,14 +3512,54 @@ defmodule PhpBeam.Eval do
   end
 
   # constant folding for class constants / property defaults / enum cases
-  def const_fold(ast, interp) do
-    case eval(ast, nil, interp) do
-      {{:val, v}, _, _} -> v
-      _ -> :null
+  def const_fold(ast, interp), do: const_fold(ast, interp, nil)
+
+  # folds in the declaring class's scope so self::CONST resolves; anything
+  # that can't fold eagerly (forward refs, function calls) defers to the AST
+  def const_fold(ast, interp, scope) do
+    env = if scope, do: %Env{scope_class: scope, called_class: scope}, else: nil
+
+    case eval(ast, env, interp) do
+      {{:val, :null}, _, _} ->
+        case ast do
+          :null -> {:ok, :null}
+          _ -> :defer
+        end
+
+      {{:val, v}, _, _} ->
+        {:ok, v}
+
+      _ ->
+        :defer
     end
   rescue
-    _ -> :null
+    _ -> :defer
   end
+
+  # lazy const-expr evaluation (deferred {:const_ast, ...} markers)
+  def const_eval(ast, interp, decl_key) do
+    env = %Env{scope_class: decl_key, called_class: decl_key}
+    {ns0, uses0, i0} = push_class_scope(interp, decl_key)
+
+    case eval(ast, env, i0) do
+      {{:val, v}, _, i2} -> {v, pop_class_scope(i2, ns0, uses0)}
+      {{:unwind, _}, _, i2} -> {:null, pop_class_scope(i2, ns0, uses0)}
+    end
+  end
+
+  # php compiles each class with its declaring file's namespace + use
+  # aliases; method/const evaluation runs under that scope
+  defp push_class_scope(interp, key) do
+    case PhpBeam.Classes.get_class(interp, key) do
+      %{ns: cns, uses: cuses} when is_list(cns) and is_map(cuses) ->
+        {interp.ns, interp.uses, %{interp | ns: cns, uses: cuses}}
+
+      _ ->
+        {interp.ns, interp.uses, interp}
+    end
+  end
+
+  defp pop_class_scope(interp, ns0, uses0), do: %{interp | ns: ns0, uses: uses0}
 
   defp resolve_function(name, fq, interp) do
     cond do
@@ -3020,8 +3576,8 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  defp resolve_const(name, _fq, interp) do
-    case magic_const(name, interp) do
+  defp resolve_const(name, _fq, env, interp) do
+    case magic_const(name, env, interp) do
       {:ok, _} = ok -> ok
       :error -> resolve_plain_const(name, interp)
     end
@@ -3035,7 +3591,7 @@ defmodule PhpBeam.Eval do
   end
 
   # magic constants are case-insensitive and resolve per file (include)
-  defp magic_const(name, interp) do
+  defp magic_const(name, env, interp) do
     current =
       case interp.file_stack do
         [cur | _] -> cur
@@ -3045,6 +3601,10 @@ defmodule PhpBeam.Eval do
     case String.upcase(name) do
       "__FILE__" -> {:ok, {:string, current}}
       "__DIR__" -> {:ok, {:string, Path.dirname(current)}}
+      "__FUNCTION__" -> {:ok, {:string, env.function || ""}}
+      "__METHOD__" -> {:ok, {:string, method_name(env, interp)}}
+      "__CLASS__" -> {:ok, {:string, class_name_of(env, interp)}}
+      "__NAMESPACE__" -> {:ok, {:string, Enum.join(interp.ns, "\\")}}
       _ -> :error
     end
   end
@@ -3563,7 +4123,7 @@ defmodule PhpBeam.Eval do
   def assign({:index, {:var, "GLOBALS"}, idx}, v, env, interp) when idx != nil do
     {{:val, key}, env2, interp2} = eval(idx, env, interp)
 
-    case key do
+    case deref(key, interp2) do
       {:string, k} ->
         {env2, %{interp2 | globals: Map.put(interp2.globals, k, v)}}
 
@@ -3611,7 +4171,7 @@ defmodule PhpBeam.Eval do
 
       idx_expr ->
         {{:val, key}, env3, interp3} = eval(idx_expr, env2, interp2)
-        path_set(path, key, v, env3, interp3)
+        path_set(path, deref(key, interp3), v, env3, interp3)
     end
   end
 
@@ -3641,7 +4201,7 @@ defmodule PhpBeam.Eval do
         {{:val, k}, e3, i3} = eval(idx, e2, i2)
 
         case c do
-          {:array, arr} -> {{:val, PArray.get(arr, k, :null)}, e3, i3}
+          {:array, arr} -> {{:val, PArray.get(arr, deref(k, i3), :null)}, e3, i3}
           _ -> {{:val, :null}, e3, i3}
         end
     end
@@ -3677,7 +4237,7 @@ defmodule PhpBeam.Eval do
           _ ->
             {{:val, key}, _, _} = eval(idx, e2, i2)
 
-            case PArray.put(arr, key, v) do
+            case PArray.put(arr, deref(key, i2), v) do
               {:ok, a2} -> {:array, a2}
               _ -> container
             end

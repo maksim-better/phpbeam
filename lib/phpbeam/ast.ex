@@ -51,3 +51,33 @@ defmodule PhpBeam.Ast do
 
   @type t :: term()
 end
+
+defmodule PhpBeam.Ast do
+  @moduledoc """
+  AST utilities shared by the parser, class registration and the evaluator.
+  """
+
+  @doc """
+  True when the statement/expression tree contains a `yield` node — the
+  containing function/method/closure is a generator factory (php decides at
+  compile time; we decide at registration). Nested scopes (closures, class
+  declarations) are their own generator-ness and are NOT descended into.
+  """
+  def has_yield?(tree) when is_list(tree), do: Enum.any?(tree, &has_yield?/1)
+
+  def has_yield?({:yield_bare}), do: true
+  def has_yield?({:yield, _}), do: true
+  def has_yield?({:yield_kv, _, _}), do: true
+  def has_yield?({:yield_from, _}), do: true
+
+  # scopes with independent generator-ness
+  def has_yield?({:closure, _, _, _, _, _}), do: false
+  def has_yield?({:class_def, _}), do: false
+  def has_yield?({:anon_class, _, _}), do: false
+
+  def has_yield?(t) when is_tuple(t) do
+    t |> Tuple.to_list() |> Enum.any?(&has_yield?/1)
+  end
+
+  def has_yield?(_), do: false
+end

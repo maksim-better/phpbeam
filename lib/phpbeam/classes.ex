@@ -19,7 +19,11 @@ defmodule PhpBeam.Classes do
             methods: %{},
             abstract?: false,
             final?: false,
-            file: ""
+            file: "",
+            # declaring-file scope: method bodies resolve unqualified names and
+            # use-aliases against these (php binds them at compile time)
+            ns: [],
+            uses: %{}
 
   @type t :: %__MODULE__{}
   @type obj :: %{__ref__: pos_integer(), class: binary(), props: PArray.t()}
@@ -46,8 +50,13 @@ defmodule PhpBeam.Classes do
     if Map.has_key?(interp.classes, key) do
       {:error, "Cannot declare class #{name} because the name is already in use"}
     else
-      parent_key = parent_key(extends, kind, interp)
-      iface_keys = Enum.map(implements, &resolve_decl_name(&1, interp))
+      parent_key0 = parent_key(extends, kind, interp)
+      iface_keys0 = Enum.map(implements, &resolve_decl_name(&1, interp))
+
+      # php autoloads missing parents/interfaces before the link checks —
+      # WpOrg\Requests\Hooks extends parents declared in sibling files
+      {parent_key, iface_keys, interp} =
+        autoload_missing_links(interp, parent_key0, iface_keys0, extends, implements)
 
       missing =
         [parent_key | iface_keys]
@@ -88,7 +97,16 @@ defmodule PhpBeam.Classes do
   end
 
   defp build_class(name, kind, key, parent_key, iface_keys, consts, props, methods, mods, interp) do
-    consts_map = Map.new(consts, fn {cname, cexpr} -> {cname, Eval.const_fold(cexpr, interp)} end)
+    # php allows forward refs and self::CONST in const expressions (they
+    # resolve with full class scope) — non-literal folds defer to the AST and
+    # evaluate lazily on first access
+    consts_map =
+      Map.new(consts, fn {cname, cexpr} ->
+        case Eval.const_fold(cexpr, interp, key) do
+          {:ok, v} -> {cname, v}
+          :defer -> {cname, {:const_ast, cexpr, key}}
+        end
+      end)
 
     props_list =
       Enum.map(props, fn {vis, static?, pname, default} ->
@@ -97,7 +115,11 @@ defmodule PhpBeam.Classes do
           display: pname,
           visibility: vis,
           static?: static?,
-          default: Eval.const_fold(default || :null, interp)
+          default:
+            case Eval.const_fold(default || :null, interp, key) do
+              {:ok, v} -> v
+              :defer -> :null
+            end
         }
       end)
 
@@ -114,6 +136,7 @@ defmodule PhpBeam.Classes do
            body: body,
            class: key,
            line: line,
+           gen?: PhpBeam.Ast.has_yield?(body),
            native: nil
          }}
       end)
@@ -131,7 +154,9 @@ defmodule PhpBeam.Classes do
       final?: "final" in mods,
       # php attributes method-declared errors (ArgumentCountError) to the
       # file containing the class declaration
-      file: decl_file(interp)
+      file: decl_file(interp),
+      ns: interp.ns,
+      uses: interp.uses
     }
   end
 
@@ -145,6 +170,54 @@ defmodule PhpBeam.Classes do
       (interp.ns ++ [name]) |> Enum.join("\\") |> String.downcase()
     end
   end
+
+  # runs the spl autoloaders for unresolved parents/interfaces (php semantics)
+  defp autoload_missing_links(interp, parent_key, iface_keys, extends, implements) do
+    needs =
+      [parent_key | iface_keys]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reject(&Map.has_key?(interp.classes, &1))
+
+    if needs == [] or interp.autoload_fns == [] do
+      {parent_key, iface_keys, interp}
+    else
+      displays = Enum.map(extends ++ implements, &display_decl(&1, interp))
+
+      all = [parent_key | iface_keys] |> Enum.reject(&is_nil/1)
+      display_for = Map.new(Enum.zip(all, displays ++ all))
+
+      interp2 =
+        Enum.reduce(needs, interp, fn k, it ->
+          {_, it2} = Eval.fetch_class(it, k, Map.get(display_for, k, k))
+          it2
+        end)
+
+      {parent_key, iface_keys, interp2}
+    end
+  end
+
+  # fully-qualified display name (aliases applied, ns-prefixed, case kept) —
+  # what php hands to autoloaders
+  defp display_decl({parts, _fq}, interp) when is_list(parts),
+    do: display_decl(parts, interp)
+
+  defp display_decl(parts, interp) when is_list(parts) do
+    first = hd(parts)
+    rest = tl(parts)
+
+    cond do
+      alias_disp = Map.get(interp.uses.normal, String.downcase(first)) ->
+        Enum.join([alias_disp | rest], "\\")
+
+      interp.ns != [] and rest == [] ->
+        Enum.join(interp.ns ++ parts, "\\")
+
+      true ->
+        Enum.join(parts, "\\")
+    end
+  end
+
+  defp display_decl(other, _interp), do: inspect(other)
 
   @doc "Public namespaced-key lookup for dynamically declared classes (anonymous classes)"
   def full_key_of(name, interp), do: full_key(name, interp)
@@ -187,6 +260,24 @@ defmodule PhpBeam.Classes do
 
   defp apply_traits_pair(class, trait_names, adaptions, interp) do
     trait_keys = Enum.map(trait_names, &resolve_decl_name(&1, interp))
+
+    # php autoloads used traits (HookDispatcher lives in a sibling file)
+    interp =
+      Enum.reduce(trait_keys, interp, fn key, it ->
+        case Map.get(it.classes, key) do
+          %{kind: :trait} ->
+            it
+
+          _ ->
+            display =
+              trait_names
+              |> Enum.find(fn parts -> resolve_decl_name(parts, it) == key end)
+              |> then(&display_decl(&1, it))
+
+            {_, it2} = Eval.fetch_class(it, key, display)
+            it2
+        end
+      end)
 
     bad =
       Enum.find(trait_keys, fn key ->
@@ -526,6 +617,32 @@ defmodule PhpBeam.Classes do
     find_up(interp, key, name, &Map.fetch(&1.consts, name), interfaces: true)
   end
 
+  @doc """
+  Class-const lookup with lazy folding: `{:const_ast, expr, declaring_key}`
+  markers evaluate in the declaring class's scope (self::CONST, forward
+  refs) and cache the folded value back. Returns `{:ok, v, interp}` |
+  `:error` | nil.
+  """
+  def find_const_lazy(interp, key, name) do
+    case find_up(interp, key, name, &Map.fetch(&1.consts, name), interfaces: true) do
+      {:ok, {:const_ast, ast, decl}} ->
+        {v, i2} = Eval.const_eval(ast, interp, decl)
+
+        cached =
+          update_in(i2, [Access.key!(:classes), decl, Access.key!(:consts)], fn consts ->
+            Map.put(consts, name, v)
+          end)
+
+        {:ok, v, cached}
+
+      {:ok, v} ->
+        {:ok, v, interp}
+
+      other ->
+        other
+    end
+  end
+
   defp find_up(interp, key, target, fetch, opts \\ []) do
     do_find_up(interp, key, fetch, opts, MapSet.new())
   end
@@ -610,6 +727,7 @@ defmodule PhpBeam.Classes do
   @doc "Class map for Throwable and friends; methods are native closures."
   def native_classes do
     base = %{
+      "stdclass" => native_stdclass(),
       "throwable" => native_class("Throwable", nil, []),
       "exception" => native_class("Exception", "throwable", []),
       "error" => native_class("Error", "throwable", []),
@@ -647,14 +765,200 @@ defmodule PhpBeam.Classes do
       )
 
     base
-    |> Enum.reduce(base, fn {key, class}, acc ->
-      if key == "throwable" do
+    |> Enum.reduce(base, fn {key, _class}, acc ->
+      # only the exception hierarchy gets Throwable's methods — stdClass
+      # would otherwise inherit its constructor (and its message/code props)
+      if key in ~w(throwable stdclass) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
       end
     end)
     |> Map.merge(ifaces)
+    |> Map.put("generator", native_generator_class())
+  end
+
+  # Generator objects are created by Eval.start_generator; the state
+  # (pid, caches) lives in a `gen_state` prop, the methods are native
+  defp native_generator_class do
+    %__MODULE__{
+      name: "Generator",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods: %{
+        "current" => native_fn("current", &gen_native_current/3),
+        "key" => native_fn("key", &gen_native_key/3),
+        "valid" => native_fn("valid", &gen_native_valid/3),
+        "next" => native_fn("next", &gen_native_next/3),
+        "send" => native_fn("send", &gen_native_send/3),
+        "rewind" => native_fn("rewind", &gen_native_rewind/3),
+        "getreturn" => native_fn("getReturn", &gen_native_get_return/3)
+      },
+      abstract?: false,
+      final?: true,
+      file: ""
+    }
+  end
+
+  defp gen_state_of(obj) do
+    case PArray.get(obj.props, {:string, "gen_state"}) do
+      {:gen_state, m} -> m
+      _ -> %{pid: nil, started: false, done: false, k: :null, v: :null, ret: :null}
+    end
+  end
+
+  defp put_gen_state(obj, st) do
+    case PArray.put(obj.props, {:string, "gen_state"}, {:gen_state, st}) do
+      {:ok, p2} -> %{obj | props: p2}
+      _ -> obj
+    end
+  end
+
+  defp gen_native_current(obj, _args, interp) do
+    {obj2, interp2} = gen_autostart(obj, interp)
+    st = gen_state_of(obj2)
+
+    v = if st.done, do: :null, else: st.v
+    {:ok, {v, obj2}, interp2}
+  end
+
+  defp gen_native_key(obj, _args, interp) do
+    {obj2, interp2} = gen_autostart(obj, interp)
+    st = gen_state_of(obj2)
+
+    k = if st.done, do: :null, else: st.k
+    {:ok, {k, obj2}, interp2}
+  end
+
+  defp gen_native_valid(obj, _args, interp) do
+    {obj2, interp2} = gen_autostart(obj, interp)
+    st = gen_state_of(obj2)
+    {:ok, {{:bool, not st.done}, obj2}, interp2}
+  end
+
+  # php's current()/key()/valid() implicitly start (rewind) a fresh generator
+  defp gen_autostart(obj, interp) do
+    st = gen_state_of(obj)
+
+    if st.started or st.done or st.pid == nil do
+      {obj, interp}
+    else
+      case Eval.gen_resume({:object, obj.__ref__}, :start, interp) do
+        {:yielded, _k, _v, i2} -> {Eval.get_object(i2, {:object, obj.__ref__}), i2}
+        {:done, _ret, i2} -> {Eval.get_object(i2, {:object, obj.__ref__}), i2}
+        {:thrown, _u, _i2} -> {obj, interp}
+      end
+    end
+  end
+
+  defp gen_native_next(obj, _args, interp) do
+    st0 = gen_state_of(obj)
+
+    if st0.done do
+      {:ok, {:null, obj}, interp}
+    else
+      v = if st0.started, do: :null, else: :start
+
+      case Eval.gen_resume({:object, obj.__ref__}, v, interp) do
+        {:yielded, _k, _v, i2} ->
+          obj2 = Eval.get_object(i2, {:object, obj.__ref__})
+          {:ok, {:null, obj2}, i2}
+
+        {:done, _ret, i2} ->
+          obj2 = Eval.get_object(i2, {:object, obj.__ref__})
+          {:ok, {:null, obj2}, i2}
+
+        {:thrown, u, i2} ->
+          {{:unwind, u}, nil, i2}
+      end
+    end
+  end
+
+  defp gen_native_send(obj, args, interp) do
+    st0 = gen_state_of(obj)
+    v = Enum.at(args, 0, :null)
+
+    if st0.done do
+      {:ok, {:null, obj}, interp}
+    else
+      # send() on an unstarted generator rewinds it first, then delivers
+      resume_v =
+        if st0.started do
+          v
+        else
+          case Eval.gen_resume({:object, obj.__ref__}, :start, interp) do
+            {:yielded, _, _, i1} -> v
+            {:done, _r, i1} -> :done_no_more
+            {:thrown, u, i1} -> {:thrown_early, u, i1}
+          end
+        end
+
+      case resume_v do
+        {:done_no_more} ->
+          obj2 = Eval.get_object(interp, {:object, obj.__ref__})
+          {:ok, {:null, obj2}, interp}
+
+        {:thrown_early, u, i1} ->
+          {{:unwind, u}, nil, i1}
+
+        vv ->
+          case Eval.gen_resume({:object, obj.__ref__}, vv, interp) do
+            {:yielded, _k, _v, i2} ->
+              obj2 = Eval.get_object(i2, {:object, obj.__ref__})
+              st = gen_state_of(obj2)
+              cur = if st.done, do: :null, else: st.v
+              {:ok, {cur, obj2}, i2}
+
+            {:done, _ret, i2} ->
+              obj2 = Eval.get_object(i2, {:object, obj.__ref__})
+              {:ok, {:null, obj2}, i2}
+
+            {:thrown, u, i2} ->
+              {{:unwind, u}, nil, i2}
+          end
+      end
+    end
+  end
+
+  defp gen_native_rewind(obj, _args, interp) do
+    st = gen_state_of(obj)
+
+    if st.started do
+      # php throws Exception "Cannot rewind a generator that was already run"
+      {{:unwind,
+        {:php_throw,
+         {:native_error, "Exception", "Cannot rewind a generator that was already run"}}}, nil,
+       interp}
+    else
+      case Eval.gen_resume({:object, obj.__ref__}, :start, interp) do
+        {:yielded, _k, _v, i2} ->
+          obj2 = Eval.get_object(i2, {:object, obj.__ref__})
+          {:ok, {:null, obj2}, i2}
+
+        {:done, _ret, i2} ->
+          obj2 = Eval.get_object(i2, {:object, obj.__ref__})
+          {:ok, {:null, obj2}, i2}
+
+        {:thrown, u, i2} ->
+          {{:unwind, u}, nil, i2}
+      end
+    end
+  end
+
+  defp gen_native_get_return(obj, _args, interp) do
+    st = gen_state_of(obj)
+
+    if st.done do
+      {:ok, {st.ret, obj}, interp}
+    else
+      {{:unwind,
+        {:php_throw,
+         {:native_error, "Error", "Cannot get return value of a generator that hasn't returned"}}},
+       nil, interp}
+    end
   end
 
   defp native_iface(name) do
@@ -666,6 +970,19 @@ defmodule PhpBeam.Classes do
       consts: %{},
       props: [],
       methods: %{}
+    }
+  end
+
+  defp native_stdclass do
+    %__MODULE__{
+      name: "stdClass",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods: %{},
+      file: ""
     }
   end
 

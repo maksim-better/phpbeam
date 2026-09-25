@@ -509,8 +509,15 @@ defmodule PhpBeam.Parser do
       match?([{:variable, _, _} | _], rest) ->
         prop_member(rest, vis, static?)
 
-      # typed property: `public int $x` (param_type consumes the hint)
+      # typed property: `public int $x` / `public ?WP_Error $e` (param_type
+      # consumes the hint, including nullable `?` and unions)
       match?([{:name, _, _} | _], rest) ->
+        prop_member(rest, vis, static?)
+
+      match?([{:op, _, "?"} | _], rest) ->
+        prop_member(rest, vis, static?)
+
+      match?([{:op, _, "\\"} | _], rest) ->
         prop_member(rest, vis, static?)
 
       true ->
@@ -1622,8 +1629,46 @@ defmodule PhpBeam.Parser do
         {e, r} = unary(tl(ts))
         {{:clone, e}, r}
 
+      {:name, _, "yield"} ->
+        yield_expr(tl(ts))
+
       _ ->
         pow(ts)
+    end
+  end
+
+  # yield [from] expr [=> expr] — bare when directly followed by a terminator.
+  # The value expression parses at full expression level (assignment binds
+  # tighter is a php subtlety we don't need for statement-position yields).
+  defp yield_expr([{_, _, "from"} | rest]) do
+    {e, r} = expr(rest)
+    {{:yield_from, e}, r}
+  end
+
+  defp yield_expr(ts) do
+    if yield_bare?(ts) do
+      {{:yield_bare}, ts}
+    else
+      {e, r} = expr(ts)
+
+      case peek(r) do
+        {:op, _, "=>"} ->
+          {v, r2} = expr(tl(r))
+          {{:yield_kv, e, v}, r2}
+
+        _ ->
+          {{:yield, e}, r}
+      end
+    end
+  end
+
+  defp yield_bare?([]), do: true
+
+  defp yield_bare?([{kind, _, txt} | _]) do
+    case kind do
+      :op -> txt in [";", ")", ",", "]", "}", ">", "?", ":", "&&", "||", "??"]
+      :eof -> true
+      _ -> false
     end
   end
 

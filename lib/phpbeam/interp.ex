@@ -64,6 +64,8 @@ defmodule PhpBeam.Interp do
             # {file, line} => nth instantiation, for php's
             # `Parent@anonymous file:line$id` class naming
             anon_sites: %{},
+            # set inside a generator body process: %{driver: pid, key: int}
+            gen_ctx: nil,
             mysqli_report: 3
 
   @type t :: %__MODULE__{}
@@ -647,11 +649,69 @@ defmodule PhpBeam.Interp do
           foreach_val(pairs, key_t, val_t, body, env2, interp2, false)
         end
 
+      {:object, _} = obj_ref ->
+        obj = Eval.get_object(interp2, obj_ref)
+
+        if obj.class == "generator" do
+          foreach_gen(obj_ref, key_t, val_t, body, env2, interp2)
+        else
+          interp3 = warn(interp2, "foreach() argument must be of type array")
+          {:ok, env2, interp3}
+        end
+
       _other ->
         interp3 = warn(interp2, "foreach() argument must be of type array")
         {:ok, env2, interp3}
     end
   end
+
+  # php: iterating a Generator drives valid()/key()/current()/next(); body
+  # side effects (output, objects) ride the shuttled interp
+  defp foreach_gen(obj_ref, key_t, val_t, body, env, interp) do
+    case Eval.gen_resume(obj_ref, :start, interp) do
+      {:yielded, _k, _v, _i2} = y ->
+        gen_foreach_loop(y, obj_ref, key_t, val_t, body, env)
+
+      other ->
+        gen_foreach_end(other, env)
+    end
+  end
+
+  defp gen_foreach_loop({:yielded, k, v, i2}, obj_ref, key_t, val_t, body, env) do
+    v = Eval.deref(v, i2)
+    {env2, interp2} = bind_target(env, i2, val_t, v)
+    {env3, interp3} = bind_target(env2, interp2, key_t, k)
+
+    case exec_stmts(body, env3, interp3) do
+      {:ok, e4, i4} ->
+        cont_foreach_gen(obj_ref, key_t, val_t, body, e4, i4)
+
+      {{:unwind, {:break, 1}}, e4, i4} ->
+        {:ok, e4, i4}
+
+      {{:unwind, {:continue, 1}}, e4, i4} ->
+        cont_foreach_gen(obj_ref, key_t, val_t, body, e4, i4)
+
+      {{:unwind, {:break, n}}, e4, i4} ->
+        {{:unwind, {:break, n - 1}}, e4, i4}
+
+      {{:unwind, {:continue, n}}, e4, i4} ->
+        {{:unwind, {:continue, n - 1}}, e4, i4}
+
+      unw ->
+        unw
+    end
+  end
+
+  defp cont_foreach_gen(obj_ref, key_t, val_t, body, env, interp) do
+    case Eval.gen_resume(obj_ref, :null, interp) do
+      {:yielded, _, _, _} = y -> gen_foreach_loop(y, obj_ref, key_t, val_t, body, env)
+      other -> gen_foreach_end(other, env)
+    end
+  end
+
+  defp gen_foreach_end({:done, _ret, i2}, env), do: {:ok, env, i2}
+  defp gen_foreach_end({:thrown, u, i2}, env), do: {{:unwind, u}, env, i2}
 
   defp foreach_val([], _key_t, _val_t, _body, env, interp, _ref?), do: {:ok, env, interp}
 
@@ -1000,7 +1060,9 @@ defmodule PhpBeam.Interp do
       Enum.reduce(items, interp.uses, fn {parts, as}, acc ->
         full = if prefix, do: prefix ++ parts, else: parts
         short = as || List.last(full)
-        fq = full |> Enum.join("\\") |> String.downcase()
+        # keep original casing — PSR-4 autoloaders build file paths from the
+        # class NAME, and resolve_class_key downcases only the final key
+        fq = full |> Enum.join("\\")
 
         kind_map = Map.get(acc, kind, %{})
         Map.put(acc, kind, Map.put(kind_map, String.downcase(short), fq))
@@ -1022,7 +1084,10 @@ defmodule PhpBeam.Interp do
   def exec_stmt({:const_decl, entries}, env, interp) do
     consts =
       Enum.reduce(entries, interp.consts, fn {name, expr}, acc ->
-        Map.put(acc, name, Eval.const_fold(expr, interp))
+        case Eval.const_fold(expr, interp) do
+          {:ok, v} -> Map.put(acc, name, v)
+          :defer -> Map.put(acc, name, :null)
+        end
       end)
 
     {:ok, env, %{interp | consts: consts}}
@@ -1038,16 +1103,14 @@ defmodule PhpBeam.Interp do
     if Map.has_key?(interp.functions, full) do
       {:ok, env, warn(interp, "Cannot redeclare function #{name}()")}
     else
-      {:ok, env,
-       %{
-         interp
-         | functions:
-             Map.put(
-               interp.functions,
-               full,
-               {:user, params, body, def_file, interp.cur_line}
-             )
-       }}
+      entry =
+        if PhpBeam.Ast.has_yield?(body) do
+          {:user_gen, params, body, def_file, interp.cur_line}
+        else
+          {:user, params, body, def_file, interp.cur_line}
+        end
+
+      {:ok, env, %{interp | functions: Map.put(interp.functions, full, entry)}}
     end
   end
 

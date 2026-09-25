@@ -27,6 +27,14 @@ defmodule PhpBeam.Value do
 
   # ─────────────────────────── classification ───────────────────────────
 
+  # type/2-style defensive head: values are tagged tuples, but slips happen
+  # (bare binaries from older code paths) — classify them as strings
+  def type(v) when is_binary(v), do: :string
+  def type(v) when is_integer(v), do: :int
+  def type(v) when is_float(v), do: :float
+  def type(v) when is_boolean(v), do: :bool
+  def type(v) when is_atom(v) and not is_nil(v) and v != :null, do: :string
+  def type({:ref, _}), do: :null
   def type({:int, _}), do: :int
   def type({:float, _}), do: :float
   def type({:string, _}), do: :string
@@ -35,6 +43,7 @@ defmodule PhpBeam.Value do
   def type({:resource, _}), do: :resource
   def type({:array, _}), do: :array
   def type({:object, _}), do: :object
+  def type(_other), do: :string
 
   def gettype(v) do
     case type(foreign(v)) do
@@ -412,6 +421,13 @@ defmodule PhpBeam.Value do
   Three-way comparison for `<` `>` `<=` `>=` `<=>`: `-1 | 0 | 1`.
   """
   def compare(a, b)
+
+  # defensive: bare binaries slip through some older conversion paths
+  def compare(a, b) when is_binary(a) or is_binary(b),
+    do: compare(wrap_bin(a), wrap_bin(b))
+
+  defp wrap_bin(s) when is_binary(s), do: {:string, s}
+  defp wrap_bin(v), do: v
 
   # strings: numeric strings compare numerically
   def compare({:string, a}, {:string, b}) do

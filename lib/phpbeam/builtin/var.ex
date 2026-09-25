@@ -84,7 +84,10 @@ defmodule PhpBeam.Builtin.VarFns do
   defp boolval(vals, i), do: {:ok, {:bool, Value.truthy?(first_val(vals))}, i}
 
   defp is_type(type) do
-    fn vals, i -> {:ok, {:bool, Value.type(first_val(vals)) == type}, i} end
+    fn vals, i ->
+      v = PhpBeam.Eval.deref(first_val(vals), i)
+      {:ok, {:bool, Value.type(v) == type}, i}
+    end
   end
 
   defp is_numeric(vals, i) do

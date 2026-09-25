@@ -42,8 +42,10 @@ defmodule PhpBeam.PArray do
             {:ok, arr} = do_put(acc, key, v)
             arr
 
-          {:error, msg} ->
-            raise ArgumentError, msg
+          # php arrays can't hold non-scalar keys; skip the pair rather than
+          # crashing the engine when a conversion path produces one
+          {:error, _msg} ->
+            acc
         end
     end)
   end
@@ -293,9 +295,14 @@ defmodule PhpBeam.PArray do
 
   def normalize_key({:bool, b}), do: {:ok, if(b, do: 1, else: 0)}
   def normalize_key(:null), do: {:ok, ""}
+  # defensive: some value layer slips an untagged binary through
+  def normalize_key(b) when is_binary(b), do: normalize_key({:string, b})
   def normalize_key({:float, f}), do: {:ok, trunc(f) |> wrap_int()}
   def normalize_key({:array, _}), do: {:error, "Illegal offset type (array)"}
   def normalize_key({:object, _}), do: {:error, "Illegal offset type (object)"}
+  # refs/resources/exotic values: deref happens at the value layer; as keys
+  # php would have stringified them — treat as illegal rather than crashing
+  def normalize_key(_), do: {:error, "Illegal offset type"}
 
   defp wrap_int(i) when i > 9_223_372_036_854_775_807, do: 9_223_372_036_854_775_807
   defp wrap_int(i) when i < -9_223_372_036_854_775_808, do: -9_223_372_036_854_775_808

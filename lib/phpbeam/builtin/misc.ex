@@ -783,11 +783,11 @@ defmodule PhpBeam.Builtin.MiscFns do
   end
 
   defp callable_name({:string, n}), do: n
-  defp callable_name({:closure, _, _, _, _, _, _}), do: "Closure"
+  defp callable_name({:closure, _, _, _, _, _, _, _}), do: "Closure"
   defp callable_name({:array, _}), do: ""
   defp callable_name(_), do: ""
 
-  defp callable?({:closure, _, _, _, _, _, _}, _i), do: true
+  defp callable?({:closure, _, _, _, _, _, _, _}, _i), do: true
 
   defp callable?({:string, name}, i),
     do: Map.has_key?(i.functions, down(name))
