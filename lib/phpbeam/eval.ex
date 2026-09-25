@@ -342,6 +342,40 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  # php: Call to private/protected method A::f() from global scope / from scope B
+  defp method_violation(interp, class_key, method, env) do
+    vis = method.visibility
+
+    if vis in [:private, :protected] do
+      scope = env && env.scope_class
+
+      cond do
+        vis == :private and scope != nil and scope != method.class and scope != class_key ->
+          "Call to private method #{display_class(interp, method.class || class_key)}::#{method.name}() from scope #{display_class(interp, scope)}"
+
+        scope == nil ->
+          "Call to #{vis} method #{display_class(interp, method.class || class_key)}::#{method.name}() from global scope"
+
+        true ->
+          # trait-flattened methods carry the trait's key as their class —
+          # the USING class's chain also grants access
+          visible =
+            if vis == :private,
+              do: scope in [method.class, class_key],
+              else:
+                scope_in_chain?(interp, scope, method.class || class_key) or
+                  scope_in_chain?(interp, scope, class_key)
+
+          if visible,
+            do: nil,
+            else:
+              "Call to #{vis} method #{display_class(interp, method.class || class_key)}::#{method.name}() from scope #{display_class(interp, scope)}"
+      end
+    else
+      nil
+    end
+  end
+
   # static props have no "treat as undeclared" fallback — always a fatal
   defp static_prop_violation(interp, class_key, prop, env) do
     vis = prop.visibility
@@ -1110,8 +1144,21 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  def call_php_method({:object, _} = obj_ref, method, args, env, interp) do
+  def call_php_method(obj_ref, method, args, env, interp) do
+    try do
+      call_php_method_inner(obj_ref, method, args, env, interp)
+    catch
+      {:fatal_violation, msg, e, i} -> {{:unwind, {:fatal, msg}}, e, i}
+    end
+  end
+
+  defp call_php_method_inner({:object, _} = obj_ref, method, args, env, interp) do
     obj = get_object(interp, obj_ref)
+
+    case method_violation(interp, obj.class, method, env) do
+      nil -> :ok
+      msg -> throw({:fatal_violation, msg, env, interp})
+    end
 
     if method.native do
       {:native, native} = method.native
@@ -1175,7 +1222,11 @@ defmodule PhpBeam.Eval do
         method ->
           cond do
             method.static? ->
-              call_static_method(key, method, args, env, interp)
+              try do
+                call_static_method(key, method, args, env, interp)
+              catch
+                {:fatal_violation, msg, e, i} -> {{:unwind, {:fatal, msg}}, e, i}
+              end
 
             # parent::method() / self::method() inside an instance method
             env != nil and env.this != nil ->
@@ -1218,6 +1269,14 @@ defmodule PhpBeam.Eval do
   end
 
   defp call_static_method(key, method, args, env, interp) do
+    case method_violation(interp, key, method, env) do
+      nil ->
+        :ok
+
+      msg ->
+        throw({:fatal_violation, msg, env, interp})
+    end
+
     if method.native do
       {:native, native} = method.native
       {vals, interp} = arg_values(args, env, interp)
@@ -3057,6 +3116,15 @@ defmodule PhpBeam.Eval do
 
       "JSON_ERROR_NONE" ->
         {:ok, {:int, 0}}
+
+      "STDIN" ->
+        {:ok, {:resource, 0}}
+
+      "STDOUT" ->
+        {:ok, {:resource, 1}}
+
+      "STDERR" ->
+        {:ok, {:resource, 2}}
 
       "SEEK_SET" ->
         {:ok, {:int, 0}}
