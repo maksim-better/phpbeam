@@ -183,16 +183,30 @@ defmodule PhpBeam.Eval do
 
         hidden = prop_read_violation(interp2, obj.class, String.downcase(key), env)
 
-        case {hidden, PArray.fetch(obj.props, {:string, String.downcase(key)})} do
-          {nil, {:ok, v}} ->
-            {{:val, deref(v, interp2)}, env2, interp2}
+        declared_ro_uninit =
+          PArray.fetch(obj.props, {:string, String.downcase(key)}) == :error and
+            PhpBeam.Classes.find_prop(interp2, obj.class, key) != nil and
+            readonly_prop?(interp2, obj, String.downcase(key))
 
-          {msg, _} when is_binary(msg) ->
-            {{:unwind, {:fatal, msg}}, env2, interp2}
+        cond do
+          is_binary(hidden) ->
+            {{:unwind, {:fatal, hidden}}, env2, interp2}
 
-          _ ->
-            case PhpBeam.Classes.find_method(interp2, obj.class, "__get") do
-              nil ->
+          declared_ro_uninit ->
+            # readonly implies typed; php throws on the uninitialized read
+            msg =
+              "Typed property #{prop_declarer_display(interp2, obj, key)}::$#{key} must not be accessed before initialization"
+
+            {obj_ref2, i3} = materialize_native({:native_error, "Error", msg}, interp2)
+            {{:unwind, {:php_throw, obj_ref2}}, env2, i3}
+
+          true ->
+            case {PArray.fetch(obj.props, {:string, String.downcase(key)}),
+                  PhpBeam.Classes.find_method(interp2, obj.class, "__get")} do
+              {{:ok, v}, _} ->
+                {{:val, deref(v, interp2)}, env2, interp2}
+
+              {:error, nil} ->
                 interp3 =
                   warn(
                     env2,
@@ -202,7 +216,7 @@ defmodule PhpBeam.Eval do
 
                 {{:val, :null}, env2, interp3}
 
-              m ->
+              {:error, m} ->
                 gkey = {elem(obj_ref, 1), String.downcase(key)}
 
                 if MapSet.member?(interp2.get_guards, gkey) do
@@ -275,11 +289,27 @@ defmodule PhpBeam.Eval do
             PArray.has_key?(obj.props, {:string, key})
 
         readonly? = readonly_prop?(interp2, obj, key)
+        initialized = PArray.has_key?(obj.props, {:string, key})
 
         cond do
-          declared and readonly? and PArray.has_key?(obj.props, {:string, key}) ->
+          declared and readonly? and initialized ->
             msg =
-              "Cannot modify readonly property #{display_class(interp2, obj.class)}::$#{key}"
+              "Cannot modify readonly property #{prop_declarer_display(interp2, obj, key)}::$#{key}"
+
+            {obj_ref, i3} = materialize_native({:native_error, "Error", msg}, interp2)
+            throw({:readonly_throw, obj_ref, env2, i3})
+
+          declared and readonly? and not readonly_init_scope?(interp2, obj, key, env2) ->
+            # php 8.4 wording for out-of-scope INITIALIZATION attempts
+            scope =
+              case env_scope_class(env2) do
+                nil -> "global scope"
+                sc -> "scope #{display_class(interp2, sc)}"
+              end
+
+            msg =
+              "Cannot modify protected(set) readonly property " <>
+                "#{prop_declarer_display(interp2, obj, key)}::$#{key} from #{scope}"
 
             {obj_ref, i3} = materialize_native({:native_error, "Error", msg}, interp2)
             throw({:readonly_throw, obj_ref, env2, i3})
@@ -360,14 +390,57 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  # a prop is readonly if its declaration says so OR the whole class is
+  # `readonly class` (all instance props become readonly); inherited props
+  # consult their DECLARING class
   defp readonly_prop?(interp, obj, key) do
     case PhpBeam.Classes.get_class(interp, obj.class) do
       %{kind: :class} = c ->
         mods = Map.get(c, :modifiers) || []
-        "readonly" in mods
+
+        cond do
+          "readonly" in mods ->
+            true
+
+          true ->
+            case PhpBeam.Classes.prop_declarer(interp, obj.class, key) do
+              nil ->
+                false
+
+              dk ->
+                PhpBeam.Classes.get_class(interp, dk).props
+                |> Enum.find(&(&1.name == key))
+                |> case do
+                  %{readonly?: true} -> true
+                  _ -> false
+                end
+            end
+        end
 
       _ ->
         false
+    end
+  end
+
+  # readonly initialization is legal from the declaring class OR any
+  # subclass (php: any method of the hierarchy touching the instance)
+  defp readonly_init_scope?(interp, obj, key, env) do
+    case env_scope_class(env) do
+      nil ->
+        false
+
+      sc ->
+        case PhpBeam.Classes.prop_declarer(interp, obj.class, key) do
+          nil -> true
+          dk -> dk in PhpBeam.Classes.self_and_ancestors(interp, sc)
+        end
+    end
+  end
+
+  defp env_scope_class(env) do
+    case env do
+      %{scope_class: sc} when is_binary(sc) -> sc
+      _ -> nil
     end
   end
 
@@ -955,22 +1028,26 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:ternary, c, t, f}, env, interp) do
-    {{:val, cv}, env2, interp2} = eval(c, env, interp)
+    case eval(c, env, interp) do
+      {{:val, cv}, env2, interp2} ->
+        if Value.truthy?(cv), do: eval(t, env2, interp2), else: eval(f, env2, interp2)
 
-    if Value.truthy?(cv) do
-      eval(t, env2, interp2)
-    else
-      eval(f, env2, interp2)
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
     end
   end
 
   def eval({:short_ternary, c, f}, env, interp) do
-    {{:val, cv}, env2, interp2} = eval(c, env, interp)
+    case eval(c, env, interp) do
+      {{:val, cv}, env2, interp2} ->
+        if Value.truthy?(cv) do
+          {{:val, cv}, env2, interp2}
+        else
+          eval(f, env2, interp2)
+        end
 
-    if Value.truthy?(cv) do
-      {{:val, cv}, env2, interp2}
-    else
-      eval(f, env2, interp2)
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
     end
   end
 
@@ -1243,6 +1320,10 @@ defmodule PhpBeam.Eval do
             my_ctx = interp.gen_ctx
             my_ns = interp.ns
             my_uses = interp.uses
+            # file_stack is per-context like ns/uses: the generator's copy
+            # carries its (def-file-stripped) view — keep the driver's own,
+            # or every warning/throw after a generator use loses its file
+            my_files = interp.file_stack
             ref = :erlang.monitor(:process, st.pid)
 
             msg =
@@ -1269,17 +1350,23 @@ defmodule PhpBeam.Eval do
               {:gen_yield, k, v, i2} ->
                 :erlang.demonitor(ref, [:flush])
                 i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: false, k: k, v: v})
-                {:yielded, k, v, %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses}}
+
+                {:yielded, k, v,
+                 %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses, file_stack: my_files}}
 
               {:gen_done, ret, i2} ->
                 :erlang.demonitor(ref, [:flush])
                 i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: true, ret: ret})
-                {:done, ret, %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses}}
+
+                {:done, ret,
+                 %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses, file_stack: my_files}}
 
               {:gen_throw, u, i2} ->
                 :erlang.demonitor(ref, [:flush])
                 i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: true})
-                {:thrown, u, %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses}}
+
+                {:thrown, u,
+                 %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses, file_stack: my_files}}
 
               {:DOWN, _, :process, _, reason} ->
                 {:thrown, {:fatal, "generator process died: #{inspect(reason)}"}, interp}
@@ -1450,7 +1537,26 @@ defmodule PhpBeam.Eval do
 
   def eval({:static_fcc, cname_e, name_e}, env, interp) do
     with {:ok, key} <- class_key_of(cname_e, env, interp) do
-      {{:val, {:static_fcc, key, prop_name_string(name_e, env, interp)}}, env, interp}
+      mname = prop_name_string(name_e, env, interp)
+
+      # php validates at CREATION: `C::m(...)` for a non-static m throws
+      # immediately (unless collected from an instance scope, which never
+      # reaches here — that form goes through method_fcc)
+      case PhpBeam.Classes.find_method(interp, key, mname) do
+        %{static?: false} = m ->
+          if m.native do
+            {{:val, {:static_fcc, key, mname}}, env, interp}
+          else
+            msg =
+              "Non-static method #{display_class(interp, key)}::#{mname}() cannot be called statically"
+
+            {obj_ref, it2} = materialize_native({:native_error, "Error", msg}, interp)
+            {{:unwind, {:php_throw, obj_ref}}, env, it2}
+          end
+
+        _ ->
+          {{:val, {:static_fcc, key, mname}}, env, interp}
+      end
     else
       {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
     end
@@ -1535,8 +1641,19 @@ defmodule PhpBeam.Eval do
 
   defp display_class(interp, key) do
     case PhpBeam.Classes.get_class(interp, key) do
-      %{name: n} -> n
-      _ -> key
+      # messages render anonymous classes short: class@anonymous, without
+      # the \0file:line$id suffix get_class() reports
+      %{name: n} -> n |> String.split("\0") |> List.first()
+      _ -> key |> to_string() |> String.split("\0") |> List.first()
+    end
+  end
+
+  # readonly/typed-property messages name the DECLARING class (php: an
+  # inherited readonly prop reports its declarer, not the instance class)
+  defp prop_declarer_display(interp, obj, key) do
+    case PhpBeam.Classes.prop_declarer(interp, obj.class, key) do
+      nil -> display_class(interp, obj.class)
+      dk -> display_class(interp, dk)
     end
   end
 
@@ -1773,6 +1890,11 @@ defmodule PhpBeam.Eval do
           interp3 = put_object(interp2, obj_ref, obj2)
           {{:val, ret}, env, interp3}
 
+        # native throws (enum from()'s ValueError, generator rewind) carry no
+        # env — re-seat the caller's so catch machinery never sees nil
+        {{:unwind, _} = u, _, interp2} ->
+          {u, env, interp2}
+
         other ->
           other
       end
@@ -1800,7 +1922,7 @@ defmodule PhpBeam.Eval do
              "#{defc}->#{method.name}",
              {cfile, method.line || interp.cur_line}
            ) do
-        {:ok, binds, vals, interp2} ->
+        {:ok, binds, vals, srcs, interp2} ->
           fenv2 =
             binds
             |> Enum.reduce(%{fenv | args: vals}, fn {n, v}, acc ->
@@ -1822,7 +1944,7 @@ defmodule PhpBeam.Eval do
 
               {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
 
-              {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+              {interp4, env_out} = write_back_refs(method.params, srcs, env, fenv2, interp3)
 
               interp5 = Interp.pop_frame(pop_file_once(interp4))
 
@@ -1885,10 +2007,12 @@ defmodule PhpBeam.Eval do
             call_php_method(env.this, method, args, env, interp)
 
           true ->
+            # php 8 throws a catchable Error (no warning, no call frame)
             msg =
               "Non-static method #{display_class(interp, key)}::#{name}() cannot be called statically"
 
-            {{:unwind, {:fatal, msg}}, env, warn(env, interp, msg)}
+            {obj_ref, it2} = materialize_native({:native_error, "Error", msg}, interp)
+            {{:unwind, {:php_throw, obj_ref}}, env, it2}
         end
     end
   end
@@ -1928,6 +2052,7 @@ defmodule PhpBeam.Eval do
 
       case native.(%{__ref__: 0, class: key, props: PArray.new()}, vals, interp) do
         {:ok, {ret, _obj2}, interp2} -> {{:val, ret}, env, interp2}
+        {{:unwind, _} = u, _, interp2} -> {u, env, interp2}
         other -> other
       end
     else
@@ -1954,7 +2079,7 @@ defmodule PhpBeam.Eval do
              "#{defc}::#{method.name}",
              {cfile, method.line || interp.cur_line}
            ) do
-        {:ok, binds, vals, interp2} ->
+        {:ok, binds, vals, srcs, interp2} ->
           fenv2 =
             Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
               %{acc | vars: Map.put(acc.vars, n, v)}
@@ -1977,7 +2102,7 @@ defmodule PhpBeam.Eval do
               interp2 = %{interp2 | file_stack: [cfile | interp2.file_stack]}
 
               {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
-              {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+              {interp4, env_out} = write_back_refs(method.params, srcs, env, fenv2, interp3)
 
               case res do
                 :ok ->
@@ -2009,6 +2134,11 @@ defmodule PhpBeam.Eval do
 
   defp do_call(callee, args, env, interp) do
     case callee do
+      {:static_call, {:cname, _, ["Closure"]}, {:lit_name, "bind"}, _} = _skip ->
+        # ClassLoader's Closure::bind(...) — Closure is native; calling it
+        # statically lands here; route to the native method
+        eval({:static_call, {:cname, false, ["Closure"]}, {:lit_name, "bind"}, args}, env, interp)
+
       {:var, name} ->
         case Env.lookup(env, interp, name) do
           {:ok, v} -> call_value(deref(v, interp), args, env, interp)
@@ -2019,6 +2149,13 @@ defmodule PhpBeam.Eval do
         # IIFE: evaluate the closure then call it
         case eval(callee, env, interp) do
           {{:val, v}, e2, i2} -> call_value(deref(v, i2), args, e2, i2)
+          unw -> unw
+        end
+
+      # immediate FCC invocation: `strlen(...)("x")`, `$o->m(...)(7)`
+      fcc when elem(fcc, 0) in [:fcc, :method_fcc, :static_fcc, :value_fcc] ->
+        case eval(fcc, env, interp) do
+          {{:val, v}, e2, i2} -> call_value(v, args, e2, i2)
           unw -> unw
         end
 
@@ -2067,7 +2204,7 @@ defmodule PhpBeam.Eval do
     fenv = Env.function_scope(name, name)
 
     case bind_params(params, args, fenv, env, interp, name, name, {def_file, def_line}) do
-      {:ok, binds, vals, interp2} ->
+      {:ok, binds, vals, _srcs, interp2} ->
         fenv2 =
           Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
             %{acc | vars: Map.put(acc.vars, n, v)}
@@ -2923,7 +3060,7 @@ defmodule PhpBeam.Eval do
     cname = "{closure:#{def_file}:#{def_line}}"
 
     case bind_params(params, args, fenv, env, interp, cname, cname, {def_file, def_line}) do
-      {:ok, binds, vals, interp2} ->
+      {:ok, binds, vals, _srcs, interp2} ->
         fenv2 =
           Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
             %{acc | vars: Map.put(acc.vars, n, v)}
@@ -2970,7 +3107,7 @@ defmodule PhpBeam.Eval do
     fenv = Env.function_scope(name, name)
 
     case bind_params(params, args, fenv, env, interp, name, name, {def_file, def_line}) do
-      {:ok, binds, vals, interp2} ->
+      {:ok, binds, vals, srcs, interp2} ->
         interp2 = Interp.push_frame(interp2, name, vals)
 
         # write back by-ref arguments
@@ -2991,7 +3128,7 @@ defmodule PhpBeam.Eval do
         {res, _, interp3} = Interp.exec_stmts(body, fenv2, interp2)
 
         {interp4, env_out} =
-          write_back_refs(params, args, env, fenv2, interp3)
+          write_back_refs(params, srcs, env, fenv2, interp3)
 
         interp5 = Interp.pop_frame(pop_file_once(interp4))
 
@@ -3032,41 +3169,184 @@ defmodule PhpBeam.Eval do
     end)
   end
 
-  # returns {:ok, binds, vals, interp} or {{:unwind, u}, env, interp} — the
-  # unwind covers both argument-expression throws (spread_args) and
-  # ArgumentCountError (missing required params). msg_name/frame_disp feed the
-  # php-exact error message and stack frame; decl_site ({file, line}, the
-  # declaration) becomes the throw position: php raises the error at the
-  # function's RECV opcodes, so file/line = declaration site.
+  # returns {:ok, binds, vals, srcs, interp} or {{:unwind, u}, env, interp} — the
+  # unwind covers argument-expression throws, Unknown-named-parameter/overwrite
+  # Errors, and ArgumentCountError (missing required params). msg_name/frame_disp
+  # feed the php-exact error message and stack frame; decl_site ({file, line})
+  # becomes the throw position: php raises the error at the function's RECV
+  # opcodes, so file/line = declaration site. srcs aligns each param with the
+  # original arg AST node for by-ref writeback.
   defp bind_params(params, args, fenv, env, interp, msg_name, frame_disp, decl_site) do
-    args =
-      Enum.map(args, fn
-        {:arg, e, _, _} -> e
-        {:arg_spread, e, _} -> {:spread, e}
-      end)
-
-    case spread_args(args, env, interp) do
+    case eval_call_args(args, env, interp) do
       {:unwind, u, en2, it2} ->
         {{:unwind, u}, en2, it2}
 
-      {:ok, vals, env2, interp2} ->
-        case do_bind_params(params, vals, fenv, env2, interp2, []) do
-          {:ok, binds, interp3} ->
-            {:ok, binds, Enum.map(vals, fn {:val, v} -> v end), interp3}
+      {:ok, triples, env2, interp2} ->
+        case reorder_named(params, triples) do
+          {:error, {:unknown, name}} ->
+            named_arg_throw("Unknown named parameter $#{name}", env2, interp2)
 
-          {:missing, interp3} ->
-            arg_count_error(msg_name, frame_disp, params, vals, env2, interp3, decl_site)
+          {:error, {:overwrite, name}} ->
+            named_arg_throw(
+              "Named parameter $#{name} overwrites previous argument",
+              env2,
+              interp2
+            )
+
+          {:ok, slots, extra_named, pos_left} ->
+            {ordered, srcs, display} = align_slots(params, slots, extra_named, pos_left)
+
+            case do_bind_params(params, ordered, fenv, env2, interp2, []) do
+              {:ok, binds, interp3} ->
+                {:ok, binds, display, srcs, interp3}
+
+              {:missing, interp3, miss_idx} ->
+                arg_count_error(
+                  msg_name,
+                  frame_disp,
+                  params,
+                  triples,
+                  slots,
+                  miss_idx,
+                  extra_named,
+                  env2,
+                  interp3,
+                  decl_site
+                )
+            end
         end
     end
   end
 
-  defp spread_args(args, env, interp) do
+  # php named-argument binding, single pass in CALL order so overwrite
+  # detection matches php (a named arg landing on a slot already filled —
+  # positionally or by an earlier name — throws). Positional args fill the
+  # first still-empty slots in declaration order; leftover positionals and
+  # unknown-but-variadic named args collect into the variadic (positional
+  # extras keep 0.. int keys, named extras keep string keys, positionals
+  # first). Returns slots aligned to the non-variadic params ({v, src} | nil).
+  defp reorder_named(params, triples) do
+    fixed = Enum.reject(params, &match?({:param, _, _, _, _, true}, &1))
+    has_variadic = length(fixed) != length(params)
+    names = Enum.map(fixed, fn {:param, n, _, _, _, _} -> n end)
+
+    if Enum.all?(triples, &match?({:val, _, nil, _}, &1)) do
+      # fast path — purely positional (func/010 passes 16k args; the general
+      # path's per-arg slot scan is quadratic)
+      {taken, over} = Enum.split(triples, length(names))
+
+      slots =
+        Enum.map(taken, &{elem(&1, 1), elem(&1, 3)}) ++
+          List.duplicate(nil, length(names) - length(taken))
+
+      {:ok, slots, [], Enum.map(over, &{elem(&1, 1), elem(&1, 3)})}
+    else
+      reorder_named_general(names, has_variadic, triples)
+    end
+  end
+
+  defp reorder_named_general(names, has_variadic, triples) do
+    init = {List.duplicate(nil, length(names)), [], [], nil}
+
+    {slots, extra_named, pos_rev, err} =
+      Enum.reduce(triples, init, fn {:val, v, name, src}, {sl, extra, pos, e} ->
+        case name do
+          nil ->
+            case Enum.find_index(sl, &is_nil(&1)) do
+              # no empty slot left: with a variadic it collects there; php
+              # silently ignores extra positionals otherwise (func_get_args
+              # still shows them — known approximation)
+              nil -> {sl, extra, [{v, src} | pos], e}
+              i -> {List.replace_at(sl, i, {v, src}), extra, pos, e}
+            end
+
+          nm ->
+            idx = Enum.find_index(names, &(&1 == nm))
+
+            cond do
+              idx != nil and Enum.at(sl, idx) != nil ->
+                {sl, extra, pos, {:overwrite, nm}}
+
+              idx != nil ->
+                {List.replace_at(sl, idx, {v, src}), extra, pos, e}
+
+              has_variadic ->
+                {sl, extra ++ [{nm, v, src}], pos, e}
+
+              true ->
+                {sl, extra, pos, {:unknown, nm}}
+            end
+        end
+      end)
+
+    case err do
+      {kind, nm} -> {:error, {kind, nm}}
+      nil -> {:ok, slots, extra_named, Enum.reverse(pos_rev)}
+    end
+  end
+
+  # build do_bind_params input ({:bound, v} | :absent per param, variadic
+  # pre-bound to its extras array), the writeback src list, and the display
+  # vals (bound values in param order — what Env.args/frames show)
+  defp align_slots(params, slots, extra_named, pos_left) do
+    variadic_arr =
+      {:array,
+       PArray.from_pairs(
+         Enum.map(Enum.with_index(pos_left), fn {{v, _}, i} -> {i, v} end) ++
+           Enum.map(extra_named, fn {nm, v, _} -> {nm, v} end)
+       )}
+
+    {ordered, srcs, display, _} =
+      Enum.reduce(params, {[], [], [], slots}, fn
+        # func_get_args/frames FLATTEN the variadic's positional elements
+        # (probe(7, 9, 11, 13) snapshots [7, 9, 11, 13]) but EXCLUDE named
+        # extras collected by the variadic — v(1, 2, x: 9) snapshots [1, 2]
+        {:param, _, _, _, _, true}, {o, s, d, sl} ->
+          flat = Enum.map(pos_left, &elem(&1, 0))
+          {[{:bound, variadic_arr} | o], [nil | s], flat ++ d, sl}
+
+        {:param, _, _, _, _, _}, {o, s, d, [h | t]} ->
+          case h do
+            nil -> {[:absent | o], [nil | s], d, t}
+            {v, src} -> {[{:bound, v} | o], [src | s], [v | d], t}
+          end
+      end)
+
+    # no variadic to collect the extra positionals: func_get_args still
+    # reports them (php never errors on extra positional args)
+    extra_tail =
+      if Enum.any?(params, &match?({:param, _, _, _, _, true}, &1)),
+        do: [],
+        else: Enum.map(pos_left, &elem(&1, 0))
+
+    {Enum.reverse(ordered), Enum.reverse(srcs), Enum.reverse(display) ++ extra_tail}
+  end
+
+  # Unknown-named-parameter / overwrite Errors: catchable, thrown at the call
+  # site, and — unlike ArgumentCountError — WITHOUT a call frame (php's trace
+  # starts at {main})
+  defp named_arg_throw(msg, env, interp) do
+    {obj_ref, it2} = materialize_native({:native_error, "Error", msg}, interp)
+    {{:unwind, {:php_throw, obj_ref}}, env, it2}
+  end
+
+  # evaluates call arguments in order, threading the interpreter; spread
+  # arrays splice — int keys become positional arguments, string keys become
+  # NAMED arguments (php 8.1+). Result triples carry the source AST for
+  # by-ref writeback.
+  defp eval_call_args(args, env, interp) do
     args
     |> Enum.reduce_while({:ok, [], env, interp}, fn
-      {:spread, e}, {:ok, acc, en, it} ->
+      {:arg_spread, e, _}, {:ok, acc, en, it} ->
         case eval(e, en, it) do
           {{:val, {:array, arr}}, en2, it2} ->
-            {:cont, {:ok, acc ++ Enum.map(PArray.values(arr), &{:val, &1}), en2, it2}}
+            triples =
+              Enum.map(PArray.to_pairs(arr), fn
+                {k, v} when is_binary(k) -> {:val, v, k, {:arg_spread, e, nil}}
+                {_, v} -> {:val, v, nil, {:arg_spread, e, nil}}
+              end)
+
+            {:cont, {:ok, acc ++ triples, en2, it2}}
 
           {{:val, _}, en2, it2} ->
             {:cont, {:ok, acc, en2, warn(en2, it2, "only arrays can be spread")}}
@@ -3075,80 +3355,152 @@ defmodule PhpBeam.Eval do
             {:halt, {:unwind, u, en2, it2}}
         end
 
-      e, {:ok, acc, en, it} ->
+      {:arg, e, _, name}, {:ok, acc, en, it} ->
         case eval(e, en, it) do
-          {{:val, v}, en2, it2} -> {:cont, {:ok, acc ++ [{:val, v}], en2, it2}}
-          {{:unwind, u}, en2, it2} -> {:halt, {:unwind, u, en2, it2}}
+          {{:val, v}, en2, it2} ->
+            {:cont, {:ok, acc ++ [{:val, v, name, {:arg, e, false, name}}], en2, it2}}
+
+          {{:unwind, u}, en2, it2} ->
+            {:halt, {:unwind, u, en2, it2}}
         end
     end)
   end
 
-  # php: "Too few arguments to function %s(), %d passed in %s on line %d and
-  # %s %d expected" — name is scope-qualified (C::m even for instance calls,
-  # {closure:file:line} for closures); counts exclude variadics; "exactly" iff
-  # every declared param is required
-  defp arg_count_error(msg_name, frame_disp, params, vals, env, interp, {df, dl}) do
-    plain = Enum.map(vals, fn {:val, v} -> v end)
+  # php has TWO missing-argument messages. Pure positional shortfall:
+  # "Too few arguments to function %s(), %d passed in %s on line %d and
+  # %s %d expected" (name scope-qualified, counts exclude variadics,
+  # "exactly" iff every declared param is required; the "passed" count only
+  # counts args bound to DECLARED params — named args landing in a variadic
+  # don't count). A named-arg call that skips a param reports instead
+  # "%s(): Argument #%d ($%s) not passed" — chosen whenever any param AFTER
+  # the first missing one was filled.
+  defp arg_count_error(
+         msg_name,
+         frame_disp,
+         params,
+         _triples,
+         slots,
+         miss_idx,
+         extra_named,
+         env,
+         interp,
+         {df, dl}
+       ) do
     named = Enum.reject(params, &match?({:param, _, _, _, _, true}, &1))
     num = length(named)
     req = Enum.count(named, &match?({:param, _, _, nil, _, _}, &1))
-    how = if req == num, do: "exactly", else: "at least"
+    bound_count = Enum.count(slots, &(&1 != nil))
+
+    later_bound = Enum.any?(Enum.drop(slots, miss_idx), &(&1 != nil))
+
+    # frame/Env.args display: slots up to the highest bound one, :null for
+    # the gaps (php renders skipped RECVs as NULL: f(1, NULL, 9)); named
+    # args collected by a variadic render as `name: value` after them
+    display_vals =
+      case Enum.reverse(slots) |> Enum.find_index(&(&1 != nil)) do
+        nil ->
+          []
+
+        ridx ->
+          slots
+          |> Enum.take(length(slots) - ridx)
+          |> Enum.map(fn
+            nil -> :null
+            {v, _} -> v
+          end)
+      end
+
+    miss_param = Enum.at(params, miss_idx)
+    {:param, miss_name, _, _, _, _} = miss_param
 
     msg =
-      "Too few arguments to function #{msg_name}(), #{length(vals)} passed" <>
-        " in #{eval_file(interp)} on line #{interp.cur_line} and #{how} #{req} expected"
+      if later_bound do
+        "#{msg_name}(): Argument ##{miss_idx + 1} ($#{miss_name}) not passed"
+      else
+        how = if req == num, do: "exactly", else: "at least"
 
-    it2 = Interp.push_frame(interp, frame_disp, plain)
+        "Too few arguments to function #{msg_name}(), #{bound_count} passed" <>
+          " in #{eval_file(interp)} on line #{interp.cur_line} and #{how} #{req} expected"
+      end
+
+    rendered =
+      Interp.render_frame_args(display_vals, interp) <>
+        case extra_named do
+          [] ->
+            ""
+
+          _ ->
+            joined =
+              Enum.map_join(extra_named, ", ", fn {n, v, _src} ->
+                "#{n}: #{Interp.render_arg(v, interp)}"
+              end)
+
+            if display_vals == [], do: joined, else: ", " <> joined
+        end
+
+    it2 = Interp.push_frame(interp, "#{frame_disp}(#{rendered})")
     {obj_ref, it3} = materialize_native({:native_error, "ArgumentCountError", msg}, it2)
     # the exception's file/line is the declaration, not the propagation point
     {{:unwind, {:php_throw, obj_ref}}, env, %{it3 | throw_pos: {df, dl}}}
   end
 
+  # ordered: per-param {:bound, v} | :absent (variadic always {:bound, arr},
+  # precomputed by align_slots). miss_idx counts the FULL param list (variadic
+  # never missing) and feeds the "Argument #N ($name) not passed" variant.
+  defp do_bind_params(params, ordered, fenv, env, interp, acc)
+
+  defp do_bind_params([], [], _fenv, _env, interp, acc), do: {:ok, Enum.reverse(acc), interp}
+
   defp do_bind_params(
-         [{:param, name, _t, default, by_ref?, variadic?} | rest],
-         args,
+         [{:param, name, _t, _default, _by_ref?, true} | rest],
+         [{:bound, v} | more],
          fenv,
          env,
          interp,
          acc
        ) do
-    if variadic? do
-      rest_vals = Enum.map(args, fn {:val, v} -> v end)
-      acc2 = [{name, {:array, PArray.from_pairs(Enum.map(rest_vals, &{nil, &1}))}} | acc]
-      do_bind_params(rest, [], fenv, env, interp, acc2)
-    else
-      case args do
-        [{:val, v} | more] ->
-          {v2, interp2} =
-            if by_ref? do
-              case v do
-                {:ref, _} -> {v, interp}
-                plain -> make_ref_cell(plain, interp)
-              end
-            else
-              # ref cells arriving through arrays (do_action_ref_array)
-              # deref for by-value params — php copies the current value
-              {deref(v, interp), interp}
-            end
-
-          do_bind_params(rest, more, fenv, env, interp2, [{name, v2} | acc])
-
-        [] ->
-          case default do
-            nil ->
-              # ArgumentCountError is a catchable PHP Error; the caller-side
-              # arg_count_error renders the php-exact message
-              {:missing, interp}
-
-            dexpr ->
-              {{:val, dv}, _e2, it2} = eval(dexpr, fenv, interp)
-              do_bind_params(rest, [], fenv, env, it2, [{name, dv} | acc])
-          end
-      end
-    end
+    do_bind_params(rest, more, fenv, env, interp, [{name, v} | acc])
   end
 
-  defp do_bind_params([], _args, _fenv, _env, interp, acc), do: {:ok, Enum.reverse(acc), interp}
+  defp do_bind_params(
+         [{_, name, _, default, by_ref?, false} | rest],
+         [bv | more],
+         fenv,
+         env,
+         interp,
+         acc
+       ) do
+    case bv do
+      {:bound, v} ->
+        {v2, interp2} =
+          if by_ref? do
+            case v do
+              {:ref, _} -> {v, interp}
+              plain -> make_ref_cell(plain, interp)
+            end
+          else
+            # ref cells arriving through arrays (do_action_ref_array)
+            # deref for by-value params — php copies the current value
+            {deref(v, interp), interp}
+          end
+
+        do_bind_params(rest, more, fenv, env, interp2, [{name, v2} | acc])
+
+      :absent ->
+        # acc holds one entry per already-processed param, so its length IS
+        # this param's index in the declaration
+        case default do
+          nil ->
+            # ArgumentCountError is a catchable PHP Error; the caller-side
+            # arg_count_error renders the php-exact message
+            {:missing, interp, length(acc)}
+
+          dexpr ->
+            {{:val, dv}, _e2, it2} = eval(dexpr, fenv, interp)
+            do_bind_params(rest, more, fenv, env, it2, [{name, dv} | acc])
+        end
+    end
+  end
 
   defp call_builtin(entry, name, args, env, interp) do
     %{fun: fun, refs: ref_positions} = entry
@@ -3162,27 +3514,96 @@ defmodule PhpBeam.Eval do
         if MapSet.member?(ref_set, idx) do
           # ONLY for pure-output refs (headers_sent's &$file): a placeholder
           # avoids warnings php never emits. Sort-style in-out refs evaluate.
-          {[{{:val, :null}, en, it} | acc], en, it}
+          {[{{:val, :null, nil, a}, en, it} | acc], en, it}
         else
-          e =
-            case a do
-              {:arg, x, _, _} -> x
-              {:arg_spread, x, _} -> x
-            end
+          case a do
+            {:arg_spread, e, _} ->
+              case eval(e, en, it) do
+                {{:val, {:array, arr}}, en2, it2} ->
+                  triples =
+                    Enum.map(PArray.to_pairs(arr), fn
+                      {k, v} when is_binary(k) -> {:val, v, k, a}
+                      {_, v} -> {:val, v, nil, a}
+                    end)
 
-          case eval(e, en, it) do
-            {{:val, v}, en2, it2} -> {[{{:val, v}, en2, it2} | acc], en2, it2}
-            {{:unwind, _} = unw, en2, it2} -> {[{unw, en2, it2} | acc], en2, it2}
+                  {Enum.reverse(Enum.map(triples, &{&1, en2, it2})) ++ acc, en2, it2}
+
+                {{:val, _}, en2, it2} ->
+                  {acc, en2, warn(en2, it2, "only arrays can be spread")}
+
+                {{:unwind, _} = unw, en2, it2} ->
+                  {[{unw, en2, it2} | acc], en2, it2}
+              end
+
+            {:arg, e, _, aname} ->
+              case eval(e, en, it) do
+                {{:val, v}, en2, it2} -> {[{{:val, v, aname, a}, en2, it2} | acc], en2, it2}
+                {{:unwind, _} = unw, en2, it2} -> {[{unw, en2, it2} | acc], en2, it2}
+              end
           end
         end
       end)
 
-    case resolve_args(Enum.reverse(results)) do
+    case resolve_named_results(Enum.reverse(results)) do
       {:unwind, u, it} ->
         {{:unwind, u}, env, it || interp}
 
-      {:ok, vals, it} ->
-        call_resolved_builtin(fun, vals, args, ref_positions, env, it || interp, name)
+      {:ok, triples, it} ->
+        case reorder_builtin_args(entry, triples) do
+          {:error, msg} ->
+            named_arg_throw(msg, env, it || interp)
+
+          {:ok, vals} ->
+            call_resolved_builtin(fun, vals, args, ref_positions, env, it || interp, name)
+        end
+    end
+  end
+
+  # like resolve_args but preserves the named-arg triples for reordering
+  defp resolve_named_results(arg_results) do
+    Enum.reduce_while(arg_results, {:ok, [], nil}, fn
+      {{:val, v, name, _src}, _, it}, {:ok, acc, _} ->
+        {:cont, {:ok, acc ++ [{:val, v, name, nil}], it}}
+
+      {{:unwind, u}, _, it}, _ ->
+        {:halt, {:unwind, u, it}}
+    end)
+  end
+
+  # builtin named-argument binding against the registry's `params:` name
+  # metadata (php arginfo names). Positional args fill in order, named by
+  # name (case sensitive), leftovers append positionally — builtin variadics
+  # like sprintf's $values receive them individually. Without metadata we
+  # fall back to positional binding (names stripped) rather than guessing.
+  defp reorder_builtin_args(entry, triples) do
+    named_any = Enum.any?(triples, &match?({:val, _, n, _} when n != nil, &1))
+    meta = Map.get(entry, :params)
+
+    cond do
+      not named_any ->
+        {:ok, Enum.map(triples, fn {:val, v, _, _} -> v end)}
+
+      meta == nil ->
+        {:ok, Enum.map(triples, fn {:val, v, _, _} -> v end)}
+
+      true ->
+        case reorder_named(Enum.map(meta, &{:param, &1, nil, nil, false, false}), triples) do
+          {:error, {:unknown, name}} ->
+            {:error, "Unknown named parameter $#{name}"}
+
+          {:error, {:overwrite, name}} ->
+            {:error, "Named parameter $#{name} overwrites previous argument"}
+
+          {:ok, slots, extra_named, pos_left} ->
+            vals =
+              Enum.map(slots, fn
+                nil -> :null
+                {v, _} -> v
+              end) ++
+                Enum.map(pos_left, &elem(&1, 0)) ++ Enum.map(extra_named, &elem(&1, 1))
+
+            {:ok, vals}
+        end
     end
   end
 
@@ -3494,6 +3915,12 @@ defmodule PhpBeam.Eval do
       case part do
         {:text, s} ->
           {acc <> s, en, it}
+
+        # php attributes interpolation warnings to the interpolated
+        # variable's own line (heredoc bodies span lines)
+        {:line_e, line, ast} ->
+          {{:val, v}, en2, it2} = eval(ast, en, %{it | cur_line: line})
+          {acc <> php_to_string(v), en2, it2}
 
         {:complex, ast} ->
           {{:val, v}, en2, it2} = eval(ast, en, it)
@@ -4903,6 +5330,32 @@ defmodule PhpBeam.Eval do
 
       :error ->
         {:ok, env, interp}
+    end
+  end
+
+  def unset_target({:prop, obj_e, name_e}, env, interp) do
+    {{:val, obj_val}, env2, interp2} = eval(obj_e, env, interp)
+
+    case obj_val do
+      {:object, _} = obj_ref ->
+        obj = get_object(interp2, obj_ref)
+        key = String.downcase(prop_name_string(name_e, env2, interp2))
+
+        if readonly_prop?(interp2, obj, key) do
+          msg =
+            "Cannot unset readonly property #{prop_declarer_display(interp2, obj, key)}::$#{key}"
+
+          {oref, i3} = materialize_native({:native_error, "Error", msg}, interp2)
+          {{:unwind, {:php_throw, oref}}, env2, i3}
+        else
+          case PArray.delete(obj.props, {:string, key}) do
+            {:ok, props2} -> {:ok, env2, put_object(interp2, obj_ref, %{obj | props: props2})}
+            :error -> {:ok, env2, interp2}
+          end
+        end
+
+      _ ->
+        {:ok, env2, interp2}
     end
   end
 

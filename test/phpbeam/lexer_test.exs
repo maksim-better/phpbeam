@@ -75,7 +75,7 @@ defmodule PhpBeam.LexerTest do
 
   test "double quoted escapes" do
     parts = only_interp(~S(<?php "a\nb\tc\\d$e\"f">))
-    assert [[{:text, "a\nb\tc\\d"}, {:simple, "e", []}, {:text, "\"f"}]] = parts
+    assert [[{:text, "a\nb\tc\\d"}, {:simple, "e", [], _}, {:text, "\"f"}]] = parts
   end
 
   test "hex, octal and unicode escapes" do
@@ -84,18 +84,18 @@ defmodule PhpBeam.LexerTest do
   end
 
   test "simple interpolation: var, index, prop" do
-    assert [[{:simple, "a", []}, {:text, " "}]] = only_interp(~S(<?php "$a ">))
-    assert [[{:simple, "a", [{:index, {:str, "k"}}]}]] = only_interp(~S(<?php "$a[k]">))
-    assert [[{:simple, "a", [{:index, {:int, 0}}]}]] = only_interp(~S(<?php "$a[0]">))
-    assert [[{:simple, "a", [{:index, {:var, "i"}}]}]] = only_interp(~S(<?php "$a[$i]">))
-    assert [[{:simple, "a", [{:prop, "b"}]}]] = only_interp(~S(<?php "$a->b">))
+    assert [[{:simple, "a", [], _}, {:text, " "}]] = only_interp(~S(<?php "$a ">))
+    assert [[{:simple, "a", [{:index, {:str, "k"}}], _}]] = only_interp(~S(<?php "$a[k]">))
+    assert [[{:simple, "a", [{:index, {:int, 0}}], _}]] = only_interp(~S(<?php "$a[0]">))
+    assert [[{:simple, "a", [{:index, {:var, "i"}}], _}]] = only_interp(~S(<?php "$a[$i]">))
+    assert [[{:simple, "a", [{:prop, "b"}], _}]] = only_interp(~S(<?php "$a->b">))
     # invalid index → the bracket stays literal text
-    assert [[{:simple, "a", []}, {:text, "[x+y]"}]] = only_interp(~S(<?php "$a[x+y]">))
+    assert [[{:simple, "a", [], _}, {:text, "[x+y]"}]] = only_interp(~S(<?php "$a[x+y]">))
   end
 
   test "complex interpolation" do
     parts = only_interp(~S|<?php "{$a->m(1, 2)}"|)
-    assert [[{:complex, toks2}]] = parts
+    assert [[{:complex, toks2, _}]] = parts
     assert {:variable, _, "a"} = Enum.find(toks2, &match?({:variable, _, _}, &1))
   end
 
@@ -110,7 +110,7 @@ defmodule PhpBeam.LexerTest do
 
   test "heredoc with interpolation and flexible indentation" do
     src = "<?php\n  <<<EOT\n    hello $name\n    EOT;\n"
-    assert [[{:text, "hello "}, {:simple, "name", []}]] = only_interp(src)
+    assert [[{:text, "hello "}, {:simple, "name", [], _}]] = only_interp(src)
   end
 
   test "nowdoc is raw" do

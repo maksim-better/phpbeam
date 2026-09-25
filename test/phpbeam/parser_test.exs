@@ -94,15 +94,14 @@ defmodule PhpBeam.ParserTest do
   end
 
   test "string interpolation parts become AST" do
-    assert expr(~S|"hi $a[0] {$b->c} end"|) ==
-             {:interp,
-              [
-                {:text, "hi "},
-                {:index, {:var, "a"}, {:int, 0}},
-                {:text, " "},
-                {:complex, {:prop, {:var, "b"}, {:lit_name, "c"}}},
-                {:text, " end"}
-              ]}
+    assert {:interp,
+            [
+              {:text, "hi "},
+              {:line_e, _, {:index, {:var, "a"}, {:int, 0}}},
+              {:text, " "},
+              {:line_e, _, {:prop, {:var, "b"}, {:lit_name, "c"}}},
+              {:text, " end"}
+            ]} = expr(~S|"hi $a[0] {$b->c} end"|)
   end
 
   test "calls: named, builtin, variable, static" do

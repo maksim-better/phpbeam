@@ -147,6 +147,10 @@ defmodule PhpBeam.Interp do
           {parse_error_out(interp2, "syntax error, " <> msg, file, line), 255, interp2}
       end
     else
+      {:error, {:fatal_check, msg}, line} ->
+        fname = file || "Command line code"
+        {"\nFatal error: #{msg} in #{fname} on line #{line}\n", 255, interp2_stub()}
+
       {:error, msg, line} ->
         {"PHP Parse error:  syntax error, #{msg}" <> maybe_line(line) <> "\n", 255,
          interp2_stub()}
@@ -365,9 +369,15 @@ defmodule PhpBeam.Interp do
 
   # frame with rendered arguments: php 8.4 traces show `g(10, 'x', Array)`
   def push_frame(interp, name, arg_vals) do
-    rendered = Enum.map_join(arg_vals, ", ", &arg_display(&1, interp))
-    push_frame(interp, "#{name}(#{rendered})")
+    push_frame(interp, "#{name}(#{render_frame_args(arg_vals, interp)})")
   end
+
+  @doc "php 8.4 trace-argument rendering (also used by named-arg error frames)"
+  def render_frame_args(arg_vals, interp) do
+    Enum.map_join(arg_vals, ", ", &arg_display(&1, interp))
+  end
+
+  def render_arg(v, interp), do: arg_display(v, interp)
 
   defp arg_display({:int, n}, _), do: Integer.to_string(n)
   defp arg_display({:float, f}, _), do: PhpBeam.Value.float_to_string(f)
@@ -383,7 +393,6 @@ defmodule PhpBeam.Interp do
   end
 
   defp arg_display({:resource, id}, _), do: "Resource id ##{id}"
-  defp arg_display(v, _), do: inspect(v)
 
   defp arg_display({:object, id}, interp) do
     case Map.get(interp.objects, id) do
@@ -395,6 +404,8 @@ defmodule PhpBeam.Interp do
         "Object"
     end
   end
+
+  defp arg_display(v, _), do: inspect(v)
 
   def pop_frame(%{call_stack: [_ | rest]} = interp), do: %{interp | call_stack: rest}
 
@@ -1065,15 +1076,16 @@ defmodule PhpBeam.Interp do
   end
 
   def exec_stmt({:unset, targets}, env, interp) do
-    {env2, interp2} =
-      Enum.reduce(targets, {env, interp}, fn t, {e, i} ->
-        case Eval.unset_target(t, e, i) do
-          {:ok, e2, i2} -> {e2, i2}
-          _ -> {e, i}
-        end
-      end)
-
-    {:ok, env2, interp2}
+    case Enum.reduce_while(targets, {:ok, env, interp}, fn t, {:ok, e, i} ->
+           case Eval.unset_target(t, e, i) do
+             {:ok, e2, i2} -> {:cont, {:ok, e2, i2}}
+             {{:unwind, _} = uw, e2, i2} -> {:halt, {uw, e2, i2}}
+             _ -> {:cont, {:ok, e, i}}
+           end
+         end) do
+      {:ok, env2, interp2} -> {:ok, env2, interp2}
+      {{:unwind, _} = uw, env2, interp2} -> {uw, env2, interp2}
+    end
   end
 
   def exec_stmt({:try_stmt, body, catches, finally}, env, interp) do

@@ -24,7 +24,14 @@ defmodule PhpBeam.Parser do
     {:ok, stmts, _rest} = program(tokens)
     {:ok, stmts}
   rescue
-    e in ParseError -> {:error, e.message, e.line}
+    # "@fatal ..." marks compile-time CHECK fatals (argument-order rules) —
+    # php renders them without the "Parse error:" prefix
+    e in ParseError ->
+      if String.starts_with?(e.message, "@fatal ") do
+        {:error, {:fatal_check, String.trim_leading(e.message, "@fatal ")}, e.line}
+      else
+        {:error, e.message, e.line}
+      end
   end
 
   @doc "Parse a bare expression from a token list (interpolation bodies)."
@@ -591,18 +598,18 @@ defmodule PhpBeam.Parser do
         const_member(rest)
 
       match?([{:variable, _, _} | _], rest) ->
-        prop_member(rest, vis, static?)
+        prop_member(rest, vis, static?, :readonly in mods)
 
       # typed property: `public int $x` / `public ?WP_Error $e` (param_type
       # consumes the hint, including nullable `?` and unions)
       match?([{:name, _, _} | _], rest) ->
-        prop_member(rest, vis, static?)
+        prop_member(rest, vis, static?, :readonly in mods)
 
       match?([{:op, _, "?"} | _], rest) ->
-        prop_member(rest, vis, static?)
+        prop_member(rest, vis, static?, :readonly in mods)
 
       match?([{:op, _, "\\"} | _], rest) ->
-        prop_member(rest, vis, static?)
+        prop_member(rest, vis, static?, :readonly in mods)
 
       true ->
         raise(ParseError,
@@ -647,12 +654,12 @@ defmodule PhpBeam.Parser do
     end
   end
 
-  defp prop_member(ts, vis, static?) do
-    {props, rest} = prop_entries(ts, vis, static?, [])
+  defp prop_member(ts, vis, static?, readonly?) do
+    {props, rest} = prop_entries(ts, vis, static?, readonly?, [])
     {{:props, props}, expect_semi(rest)}
   end
 
-  defp prop_entries(ts, vis, static?, acc) do
+  defp prop_entries(ts, vis, static?, readonly?, acc) do
     {_t, rest0} = param_type(ts)
 
     case rest0 do
@@ -666,9 +673,11 @@ defmodule PhpBeam.Parser do
         {yes, rest4} = take_op(rest3, ",")
 
         if yes do
-          prop_entries(rest4, vis, static?, [{vis, static?, name, default} | acc])
+          prop_entries(rest4, vis, static?, readonly?, [
+            {vis, static?, readonly?, name, default} | acc
+          ])
         else
-          {Enum.reverse([{vis, static?, name, default} | acc]), rest3}
+          {Enum.reverse([{vis, static?, readonly?, name, default} | acc]), rest3}
         end
 
       _ ->
@@ -1322,7 +1331,7 @@ defmodule PhpBeam.Parser do
   end
 
   defp one_param(ts) do
-    {vis, rest0} = take_promoted_vis(ts)
+    {vis, ro?, rest0} = take_promoted_vis(ts)
     {_t, rest} = param_type(rest0)
 
     {by_ref?, rest2} =
@@ -1347,7 +1356,7 @@ defmodule PhpBeam.Parser do
 
         param =
           if vis,
-            do: {:param_promoted, vis, v, _t, default, by_ref?, variadic?},
+            do: {:param_promoted, vis, ro?, v, _t, default, by_ref?, variadic?},
             else: {:param, v, _t, default, by_ref?, variadic?}
 
         {param, rest5}
@@ -1357,27 +1366,28 @@ defmodule PhpBeam.Parser do
     end
   end
 
-  # constructor promotion: `public|protected|private [readonly] int $x = 1`
+  # constructor promotion: `public|protected|private [readonly] int $x = 1` —
+  # returns {visibility, readonly?, rest}
   defp take_promoted_vis(ts) do
     case peek(ts) do
       {:name, _, n} when n in ~w(public protected private) ->
         rest = tl(ts)
-        # skip a trailing `readonly` — semantics land with L1 readonly work
-        rest =
+
+        {ro?, rest} =
           case peek(rest) do
-            {:name, _, "readonly"} -> tl(rest)
-            _ -> rest
+            {:name, _, "readonly"} -> {true, tl(rest)}
+            _ -> {false, rest}
           end
 
-        {String.to_atom(n), rest}
+        {String.to_atom(n), ro?, rest}
 
       {:name, _, "readonly"} ->
         # php 8.1: bare `readonly` promotion is invalid but laravel never
         # writes it; treat as public to keep parsing
-        {nil, ts}
+        {nil, true, ts}
 
       _ ->
-        {nil, ts}
+        {nil, false, ts}
     end
   end
 
@@ -1984,6 +1994,35 @@ defmodule PhpBeam.Parser do
     {arg, rest} = one_arg(ts)
     {yes, rest2} = take_op(rest, ",")
 
+    # php compile-time checks: a LITERAL positional argument may not follow
+    # an unpack or a named argument (spreads/named after those are fine);
+    # rendered as bare "Fatal error:" not "Parse error:"
+    seen_spread = Enum.any?(acc, &match?({:arg_spread, _, _}, &1))
+    seen_named = Enum.any?(acc, fn a -> elem(a, 0) == :arg and elem(a, 3) != nil end)
+
+    case arg do
+      {:arg, _, _, nil} ->
+        cond do
+          seen_spread ->
+            raise(ParseError,
+              message: "@fatal Cannot use positional argument after argument unpacking",
+              line: arg_line(ts)
+            )
+
+          seen_named ->
+            raise(ParseError,
+              message: "@fatal Cannot use positional argument after named argument",
+              line: arg_line(ts)
+            )
+
+          true ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end
+
     if yes do
       # php 7.3+: trailing comma in function calls
       if at_op?(rest2, ")") do
@@ -1995,6 +2034,9 @@ defmodule PhpBeam.Parser do
       {Enum.reverse([arg | acc]), rest}
     end
   end
+
+  defp arg_line([{_, l, _} | _]), do: l
+  defp arg_line(_), do: 0
 
   defp one_arg(ts) do
     {name, rest} = named_arg_name(ts)
@@ -2398,8 +2440,26 @@ defmodule PhpBeam.Parser do
 
   defp interp_part_ast({:text, s}), do: {:text, s}
 
+  # expression parts carry their source line: php attributes interpolation
+  # warnings to the line the variable sits on, not the heredoc/quote end
+  defp interp_part_ast({:simple, name, accessors, line}) do
+    {:line_e, line, interp_accessors(accessors, {:var, name})}
+  end
+
+  defp interp_part_ast({:complex, tokens, line}) do
+    {:line_e, line, parse_expression(tokens)}
+  end
+
   defp interp_part_ast({:simple, name, accessors}) do
-    Enum.reduce(accessors, {:var, name}, fn
+    interp_accessors(accessors, {:var, name})
+  end
+
+  defp interp_part_ast({:complex, tokens}) do
+    {:complex, parse_expression(tokens)}
+  end
+
+  defp interp_accessors(accessors, base) do
+    Enum.reduce(accessors, base, fn
       {:index, idx}, acc ->
         idx_ast =
           case idx do
@@ -2413,9 +2473,5 @@ defmodule PhpBeam.Parser do
       {:prop, p}, acc ->
         {:prop, acc, {:lit_name, p}}
     end)
-  end
-
-  defp interp_part_ast({:complex, tokens}) do
-    {:complex, parse_expression(tokens)}
   end
 end

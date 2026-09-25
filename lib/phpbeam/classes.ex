@@ -113,60 +113,18 @@ defmodule PhpBeam.Classes do
         end
       end)
 
-    props_list =
-      Enum.map(props, fn {vis, static?, pname, default} ->
-        %{
-          name: String.downcase(pname),
-          display: pname,
-          visibility: vis,
-          static?: static?,
-          default:
-            case Eval.const_fold(default || :null, interp, key) do
-              {:ok, v} -> v
-              :defer -> :null
-            end
-        }
-      end)
-
     # constructor property promotion: `__construct(private int $x = 1)`
-    # desugars to a declared prop + a leading `$this->x = $x;` assignment
-    methods =
-      Enum.map(methods, fn
-        {vis, st?, ab?, fi?, br?, "__construct", params, body, line} = m ->
-          {promoted, plain} =
-            Enum.split_with(params, &match?({:param_promoted, _, _, _, _, _, _}, &1))
-
-          if promoted == [] do
-            m
-          else
-            body_line = line || 1
-
-            assigns =
-              Enum.map(promoted, fn {:param_promoted, pvis, name, _t, _d, _br, _var} ->
-                {:stmt_line, body_line,
-                 {:expr_stmt, {:assign, {:prop, {:var, "this"}, {:lit_name, name}}, {:var, name}}}}
-              end)
-
-            plain_params =
-              Enum.map(promoted, fn {:param_promoted, _pvis, name, t, d, br, var} ->
-                {:param, name, t, d, br, var}
-              end)
-
-            {vis, st?, ab?, fi?, br?, "__construct", plain_params ++ plain, assigns ++ body, line}
-          end
-
-        m ->
-          m
-      end)
-
+    # desugars to a declared prop + a leading `$this->x = $x;` assignment;
+    # promoted props are collected from the RAW method list first — the
+    # desugar strips the {:param_promoted, ...} markers
     props =
       props ++
         Enum.flat_map(methods, fn
           {_, _, _, _, _, "__construct", params, _, _} ->
             Enum.map(params, fn
-              {:param_promoted, pvis, name, t, d, _br, _var} ->
+              {:param_promoted, pvis, ro?, name, _t, d, _br, _var} ->
                 vis = if pvis in [:public, :protected, :private], do: pvis, else: :public
-                {vis, false, name, d || :null}
+                {vis, false, ro?, name, d || :null, true}
 
               _ ->
                 nil
@@ -176,6 +134,68 @@ defmodule PhpBeam.Classes do
           _ ->
             []
         end)
+
+    props_list =
+      Enum.map(props, fn
+        {vis, static?, ro?, pname, default, promoted?} ->
+          %{
+            name: String.downcase(pname),
+            display: pname,
+            visibility: vis,
+            static?: static?,
+            readonly?: ro?,
+            promoted?: promoted?,
+            default:
+              case Eval.const_fold(default || :null, interp, key) do
+                {:ok, v} -> v
+                :defer -> :null
+              end
+          }
+
+        {vis, static?, ro?, pname, default} ->
+          %{
+            name: String.downcase(pname),
+            display: pname,
+            visibility: vis,
+            static?: static?,
+            readonly?: ro?,
+            promoted?: false,
+            default:
+              case Eval.const_fold(default || :null, interp, key) do
+                {:ok, v} -> v
+                :defer -> :null
+              end
+          }
+      end)
+
+    methods =
+      Enum.map(methods, fn
+        {vis, st?, ab?, fi?, br?, "__construct", params, body, line} = m ->
+          {promoted, plain} =
+            Enum.split_with(params, &match?({:param_promoted, _, _, _, _, _, _, _}, &1))
+
+          if promoted == [] do
+            m
+          else
+            body_line = line || 1
+
+            assigns =
+              Enum.map(promoted, fn {:param_promoted, _pvis, _ro, name, _t, _d, _br, _var} ->
+                {:stmt_line, body_line,
+                 {:expr_stmt, {:assign, {:prop, {:var, "this"}, {:lit_name, name}}, {:var, name}}}}
+              end)
+
+            plain_params =
+              Enum.map(promoted, fn {:param_promoted, _pvis, _ro, name, t, d, br, var} ->
+                {:param, name, t, d, br, var}
+              end)
+
+            {vis, st?, ab?, fi?, br?, "__construct", plain_params ++ plain, assigns ++ body, line}
+          end
+
+        m ->
+          m
+      end)
 
     methods_map =
       Map.new(methods, fn {vis, static?, abstract?, final?, _by_ref?, mname, params, body, line} ->
@@ -441,6 +461,39 @@ defmodule PhpBeam.Classes do
 
   def get_class(interp, key), do: Map.get(interp.classes, key)
 
+  @doc "Declaring class KEY of a property (walks the parent chain), or nil."
+  def prop_declarer(interp, key, name) do
+    walk_declarer(interp, key, String.downcase(name), MapSet.new())
+  end
+
+  @doc "The class key plus all ancestors, nearest first."
+  def self_and_ancestors(interp, key) do
+    case Map.get(interp.classes, key) do
+      %{parent: p} -> [key | self_and_ancestors(interp, p)]
+      _ -> [key]
+    end
+  end
+
+  defp walk_declarer(_interp, nil, _lname, _seen), do: nil
+
+  defp walk_declarer(interp, key, lname, seen) do
+    if MapSet.member?(seen, key) do
+      nil
+    else
+      case Map.get(interp.classes, key) do
+        %{props: props, parent: p} ->
+          if Enum.any?(props, &(&1.name == lname)) do
+            key
+          else
+            walk_declarer(interp, p, lname, MapSet.put(seen, key))
+          end
+
+        _ ->
+          nil
+      end
+    end
+  end
+
   # returns the method map or nil
   # ─────────────── inheritance strictness (link-time fatals) ───────────────
 
@@ -449,8 +502,31 @@ defmodule PhpBeam.Classes do
 
     with :ok <- check_prop_overrides(class, chain, interp),
          :ok <- check_method_overrides(class, chain, interp),
-         :ok <- check_abstract_methods(class, key, chain, interp) do
+         :ok <- check_abstract_methods(class, key, chain, interp),
+         :ok <- check_readonly_props(class) do
       :ok
+    end
+  end
+
+  # php compile-time readonly-prop constraints (both render as bare Fatal
+  # errors — the engine_fatal channel matches)
+  defp check_readonly_props(class) do
+    Enum.find(class.props, fn p -> p.readonly? end)
+    |> case do
+      nil ->
+        :ok
+
+      p ->
+        cond do
+          p.static? ->
+            {:error, "Static property #{class.name}::$#{p.display} cannot be readonly"}
+
+          p.default != :null and p[:promoted?] != true ->
+            {:error, "Readonly property #{class.name}::$#{p.display} cannot have default value"}
+
+          true ->
+            :ok
+        end
     end
   end
 
@@ -847,9 +923,16 @@ defmodule PhpBeam.Classes do
         []
 
       class ->
+        ro_class? = "readonly" in (Map.get(class, :modifiers) || [])
+
         own =
           class.props
-          |> Enum.reject(& &1.static?)
+          # readonly props start UNINITIALIZED (defaults only reach them via
+          # promoted ctor params) so presence in obj.props genuinely means
+          # "initialized" — a readonly class makes every own prop readonly
+          |> Enum.reject(fn p ->
+            p.static? or match?(%{readonly?: true}, p) or ro_class?
+          end)
           |> Enum.map(&{{:string, &1.display}, &1.default})
 
         own ++ instance_defaults(interp, class.parent)
@@ -862,6 +945,7 @@ defmodule PhpBeam.Classes do
   def native_classes do
     base = %{
       "stdclass" => native_stdclass(),
+      "closure" => native_closure_class(),
       "datetime" => native_datetime_class(),
       "datetimezone" => native_datetimezone_class(),
       "throwable" => native_class("Throwable", nil, []),
@@ -905,7 +989,7 @@ defmodule PhpBeam.Classes do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass datetime datetimezone) do
+      if key in ~w(throwable stdclass closure datetime datetimezone) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
@@ -1213,10 +1297,12 @@ defmodule PhpBeam.Classes do
 
     if st.started do
       # php throws Exception "Cannot rewind a generator that was already run"
-      {{:unwind,
-        {:php_throw,
-         {:native_error, "Exception", "Cannot rewind a generator that was already run"}}}, nil,
-       interp}
+      native_gen_throw(
+        interp,
+        "Exception",
+        "Cannot rewind a generator that was already run",
+        "rewind"
+      )
     else
       case Eval.gen_resume({:object, obj.__ref__}, :start, interp) do
         {:yielded, _k, _v, i2} ->
@@ -1239,11 +1325,21 @@ defmodule PhpBeam.Classes do
     if st.done do
       {:ok, {st.ret, obj}, interp}
     else
-      {{:unwind,
-        {:php_throw,
-         {:native_error, "Error", "Cannot get return value of a generator that hasn't returned"}}},
-       nil, interp}
+      native_gen_throw(
+        interp,
+        "Error",
+        "Cannot get return value of a generator that hasn't returned",
+        "getReturn"
+      )
     end
+  end
+
+  # materialize + php-style Generator frame: catch bindings and get_class()
+  # expect a real object in the registry
+  defp native_gen_throw(interp, class, msg, meth) do
+    i2 = PhpBeam.Interp.push_frame(interp, "Generator->#{meth}()")
+    {obj_ref, i3} = Eval.materialize_native({:native_error, class, msg}, i2)
+    {{:unwind, {:php_throw, obj_ref}}, nil, i3}
   end
 
   defp native_iface(name) do
@@ -1255,6 +1351,44 @@ defmodule PhpBeam.Classes do
       consts: %{},
       props: [],
       methods: %{}
+    }
+  end
+
+  # minimal native Closure: composer's ClassLoader uses Closure::bind()
+  # (scope stripping only — our closures already carry their capture context)
+  defp native_closure_class do
+    %__MODULE__{
+      name: "Closure",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods: %{
+        "bind" => %{
+          native_fn("bind", fn _obj, args, i ->
+            case args do
+              [cl | _] -> {:ok, {cl, nil}, i}
+              _ -> {:ok, {:null, nil}, i}
+            end
+          end)
+          | static?: true
+        },
+        "fromcallable" => %{
+          native_fn("fromCallable", fn _obj, args, i ->
+            [cb | _] = args
+            {:ok, {cb, nil}, i}
+          end)
+          | static?: true
+        },
+        "call" => %{
+          native_fn("call", fn _obj, _args, i ->
+            {:ok, {:null, nil}, i}
+          end)
+          | static?: true
+        }
+      },
+      file: ""
     }
   end
 
@@ -1291,6 +1425,7 @@ defmodule PhpBeam.Classes do
         display: "message",
         visibility: :protected,
         static?: false,
+        readonly?: false,
         default: {:string, ""}
       },
       %{
@@ -1298,6 +1433,7 @@ defmodule PhpBeam.Classes do
         display: "code",
         visibility: :protected,
         static?: false,
+        readonly?: false,
         default: {:int, 0}
       },
       %{
@@ -1305,6 +1441,7 @@ defmodule PhpBeam.Classes do
         display: "file",
         visibility: :protected,
         static?: false,
+        readonly?: false,
         default: {:string, "php"}
       },
       %{
@@ -1312,6 +1449,7 @@ defmodule PhpBeam.Classes do
         display: "line",
         visibility: :protected,
         static?: false,
+        readonly?: false,
         default: {:int, 0}
       },
       %{
@@ -1319,6 +1457,7 @@ defmodule PhpBeam.Classes do
         display: "previous",
         visibility: :protected,
         static?: false,
+        readonly?: false,
         default: :null
       }
     ]

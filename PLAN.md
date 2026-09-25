@@ -8,14 +8,14 @@
 
 ## 已实测缺口（2026-09-25 探针，phpx 逐项验证）
 
-语法（parser 级，1–2 会话冲刺）：
-- [ ] 构造器属性提升 `__construct(private int $x = 1)` —— parse error
-- [ ] 命名参数 `f(b: 3, a: 4)`（含 attribute 实参内）—— parse error
-- [ ] heredoc/nowdoc —— parse error（config/视图遍地）
-- [ ] 数组字面量展开 `[0, ...$a, 3]` —— parse error
-- [ ] 枚举 enum/backed/cases —— 显式未实现
-- [ ] readonly 类/属性；一等可调用 `strlen(...)`
-- [ ] attributes 解析已过（`#[Attr(1)]` 可载入），带参形式依赖命名参数
+语法（parser 级，1–2 会话冲刺）——**L1+L1.5 全部完成**：
+- [x] 构造器属性提升 `__construct(private int $x = 1)`
+- [x] 命名参数 `f(b: 3, a: 4)`（含 attribute 实参内）
+- [x] heredoc/nowdoc
+- [x] 数组字面量展开 `[0, ...$a, 3]`
+- [x] 枚举 enum/backed/cases
+- [x] readonly 类/属性；一等可调用 `strlen(...)`
+- [x] attributes 解析已过（`#[Attr(1)]` 可载入），带参形式依赖命名参数
 
 运行时（大块）：
 - [ ] **Reflection API**（Class/Method/Function/Parameter/Property/NamedType + getAttributes）——Laravel 容器/DI 的心脏，没有它容器不工作
@@ -42,8 +42,18 @@
 - [x] 数组字面量展开 `[...$a, 'k' => v]`（字符串键保留、int 键顺序重编）；`PArray.from_pairs` 接受裸键
 - [x] 一等可调用 `strlen(...)`/`$obj->m(...)`/`Cls::m(...)`（裸名 FCC 产字符串可调用不做常量求值；`usort($a, strcmp(...))` 可用）
 - [x] **重大修复**：`strict_eq` 对对象句柄（整数 id）——**自 M1 起 `===` 对对象恒 false**（object_identity 只匹配全 map 形态）
-- [x] 命名参数与 heredoc 经探针验证此前已可用
-- [ ] 差分 25_laravel_syntax.php 固化（下轮随手）
+- [x] 差分 25_laravel_syntax.php 固化
+
+## L1.5：语法缺口收口（**已完成**，2026-09-25 校验后冲刺）
+
+L1 声称"命名参数已可用"经差分证伪（实为按位置绑定）；随 enum from()/readonly 一起收口：
+
+- [x] **命名参数按名绑定**（用户函数/方法/构造器/闭包/静态）：`f(b: 3, a: 4)` 交换序、`str_replace(search:…, subject:…)` 内置重排（builtin.ex 挂 ReflectionFunction 核实的 arginfo 参数名表）、解包字符串键 `f(...["a"=>1])` 产命名实参；错误族 php 精确措辞（Unknown named parameter $z / Named parameter $a overwrites previous argument / `f(): Argument #2 ($b) not passed` 变体 + 帧渲染 `f(1, NULL, 9)`）；`func_get_args` 快照语义（位置+声明形参，变参收集的命名实参不计入）；编译期检查 `Cannot use positional argument after [argument unpacking|named argument]`（fatal 通道）
+- [x] **enum from() 非法值**：物化 ValueError + `S::from('zz')` 帧 + 背衬类型弱强制（`from("1")` 命中 int case）；消息 `"zz" is not a valid backing value for enum S`
+- [x] **readonly 属性（非 readonly class）写保护**：初始化一次（声明类或子类作用域内）；外部初始化 `Cannot modify protected(set) readonly property Q::$y from [global scope|scope W]`（php 8.4 措辞）；二次写 `Cannot modify readonly property`；unset 拒绝；读未初始化 `Typed property Q::$y must not be accessed before initialization`；链接期检查（readonly 带默认值/static readonly，提升 readonly 带默认值合法）
+- [x] **提升属性真声明修复**：原实现的属性收集在糖解构之后运行（死代码）——提升属性从未真正声明，全靠动态属性；readonly/默认值/instance_defaults 语义随之修正
+- [x] 顺手修复：三元/短三元条件 unwind 穿透（原裸 `=` 匹配崩）；FCC 链式调用 `strlen(...)("x")`/`$o->m(...)(7)`；非静态方法 FCC 创建即抛；var_export 尾换行；heredoc 插值警告行号（part 级行标记 + 关闭行后 lexer 行号 +1 漂移）；生成器 yield 后主进程 file_stack 丢失（用生成器后所有警告/异常文件名退化为 Command line code）；原生方法抛错通道 env=nil 崩 catch 机器（generator rewind/getReturn 物化 + 帧）
+- phpt 净变化：+3 过（func/008、func/009、classes/property_override…），无回归
 
 ## L2：Composer vendor 实战（1 会话）
 

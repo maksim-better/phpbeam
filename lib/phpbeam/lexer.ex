@@ -434,13 +434,13 @@ defmodule PhpBeam.Lexer do
         {name, rest3} = take_name(c, rest2)
         {accessors, rest4} = simple_accessor(rest3, line)
         parts = flush_text(text, parts)
-        dq_string(rest4, line, [], [{:simple, name, accessors} | parts], acc, ctx, style)
+        dq_string(rest4, line, [], [{:simple, name, accessors, line} | parts], acc, ctx, style)
 
       "{$" <> rest2 ->
         case tokenize_fragment("$" <> rest2, line) do
           {:ok, toks, "}" <> rest3} ->
             parts = flush_text(text, parts)
-            dq_string(rest3, line, [], [{:complex, toks} | parts], acc, ctx, style)
+            dq_string(rest3, line, [], [{:complex, toks, line} | parts], acc, ctx, style)
 
           {:ok, _, _} ->
             {:error, "unterminated interpolation", line}
@@ -665,10 +665,16 @@ defmodule PhpBeam.Lexer do
         {:ok, after_marker} ->
           body = finalize_heredoc_body(Enum.reverse(lines), closing_indent(line_bytes))
 
-          case heredoc_token(body, interp?, line) do
+          # interpolation parts stamp the line they sit on: the scan starts
+          # at the FIRST body line (closing line minus body length)
+          start = line - length(lines)
+
+          case heredoc_token(body, interp?, start) do
             {:ok, tok} ->
+              # the re-inserted newline is counted by php_mode itself —
+              # bumping line here too drifts every later line by one
               rest_code = after_marker <> if(had_nl?, do: "\n" <> rest, else: rest)
-              php_mode(rest_code, line + if(had_nl?, do: 1, else: 0), [tok | acc], ctx)
+              php_mode(rest_code, line, [tok | acc], ctx)
 
             {:error, m, l} ->
               {:error, m, l}
@@ -762,13 +768,16 @@ defmodule PhpBeam.Lexer do
   defp scan_interp_parts(<<?$, c, rest::binary>>, line, text, parts) when name_start?(c) do
     {name, rest2} = take_name(c, rest)
     {accessors, rest3} = simple_accessor(rest2, line)
-    scan_interp_parts(rest3, line, [], [{:simple, name, accessors} | flush_text(text, parts)])
+
+    scan_interp_parts(rest3, line, [], [
+      {:simple, name, accessors, line} | flush_text(text, parts)
+    ])
   end
 
   defp scan_interp_parts("{$" <> rest, line, text, parts) do
     case tokenize_fragment("$" <> rest, line) do
       {:ok, toks, "}" <> rest2} ->
-        scan_interp_parts(rest2, line, [], [{:complex, toks} | flush_text(text, parts)])
+        scan_interp_parts(rest2, line, [], [{:complex, toks, line} | flush_text(text, parts)])
 
       {:ok, _, _} ->
         {:error, "unterminated interpolation", line}

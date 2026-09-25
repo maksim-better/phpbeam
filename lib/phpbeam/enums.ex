@@ -6,7 +6,7 @@ defmodule PhpBeam.Enums do
   methods run like class methods against the singleton instances.
   """
 
-  alias PhpBeam.{Classes, Eval, PArray}
+  alias PhpBeam.{Classes, Eval, PArray, Value}
 
   def register(decl, interp) do
     key = Classes.full_key_of(decl.name, interp)
@@ -110,13 +110,19 @@ defmodule PhpBeam.Enums do
           {:ok, {{:array, arr}, nil}, i}
 
         _lookup ->
-          want = Enum.at(vals, 0)
-          display = key |> String.split("\\") |> Enum.map(&String.capitalize/1) |> Enum.join("\\")
+          want0 = Enum.at(vals, 0)
+          class = Map.get(i.classes, key) || %{}
+
+          display = Map.get(class, :name) || key
+
+          cases = Map.get(class, :enum_cases, [])
+          # php coerces the argument to the backing type before lookup
+          # (from("1") on int-backed matches case 1; from(5) on string-backed
+          # looks up "5" and misses) — the backing type shows up in case values
+          want = coerce_backing(want0, cases, i)
 
           hit =
-            Map.get(i.classes, key)
-            |> Kernel.||(%{})
-            |> Map.get(:enum_cases, [])
+            cases
             |> Enum.find(fn {_n, ref} ->
               obj = Eval.get_object(i, ref)
 
@@ -134,13 +140,15 @@ defmodule PhpBeam.Enums do
               {:ok, {:null, nil}, i}
 
             nil ->
-              {:ok,
-               {:unwind,
-                {:php_throw,
-                 {:native_error, "ValueError",
-                  "#{display}::from(): '" <>
-                    PhpBeam.Value.render(want) <>
-                    "' is not a valid backing value for enum \"#{display}\""}}}, i}
+              # php 8.4: `"zz" is not a valid backing value for enum S` (ints
+              # unquoted, strings double-quoted) + an S::from(...) frame; the
+              # ValueError's file/line is the CALL site (no throw_pos override)
+              msg =
+                "#{backing_render(want)} is not a valid backing value for enum #{display}"
+
+              i2 = PhpBeam.Interp.push_frame(i, "#{display}::#{name}", [want])
+              {obj_ref, i3} = Eval.materialize_native({:native_error, "ValueError", msg}, i2)
+              {{:unwind, {:php_throw, obj_ref}}, nil, i3}
           end
       end
     end
@@ -159,4 +167,41 @@ defmodule PhpBeam.Enums do
       native: {:native, fn _obj, vals, i -> run.(vals, i) end}
     }
   end
+
+  # coerce the from()/tryFrom() argument toward the backing type so lookups
+  # behave like php's weak-mode RECV: "1" matches int case 1, 5 matches "5"
+  defp coerce_backing(want, cases, interp) do
+    sample =
+      cases
+      |> Enum.find_value(fn {_n, ref} ->
+        obj = Eval.get_object(interp, ref)
+
+        case PArray.fetch(obj.props, {:string, "value"}) do
+          {:ok, v} -> v
+          :error -> nil
+        end
+      end)
+
+    case sample do
+      {:string, _} ->
+        case want do
+          {:string, _} -> want
+          _ -> {:string, Eval.php_to_string(want)}
+        end
+
+      {:int, _} ->
+        case Value.to_int(want) do
+          {:ok, {:int, _} = iv} -> iv
+          _ -> want
+        end
+
+      _ ->
+        want
+    end
+  end
+
+  # the ValueError message renders strings double-quoted, ints bare
+  defp backing_render({:string, s}), do: ~s("#{s}")
+  defp backing_render({:int, n}), do: Integer.to_string(n)
+  defp backing_render(v), do: Eval.php_to_string(v)
 end
