@@ -92,7 +92,13 @@
 
 - [ ] 请求级 profile：Laravel boot 的热点函数榜
 - [ ] interp 预热池；跨请求 static/类表复用的可行性论证
-- [ ] 远期：PHP → Elixir AST 编译后端（Laravel 是比 WP 更有价值的编译目标）
+- [ ] 为编译后端铺路：L0 的 SAPI 边界（请求种子/响应收集）保持与求值器无耦合，编译后端可整体替换解释器内核
+
+## 远期（架构级，README 路线图三步终点）
+
+- [ ] **PHP → Elixir AST 编译后端**：树遍历慢 1~2 个数量级，Laravel 全量 boot 的根治方案；Laravel 的大型真实代码库是比 WP 更有价值的编译目标与正确性试金石（编译产物以现有差分/phpt/浏览器三层护栏回归）
+- [ ] **Web 运行时深化**：在 L0 的 Plug 每请求一 BEAM 进程模型上进化——进程池/预热、热重载（文件 mtime 触发重新 boot）、与 Elixir 生态的部署形态（release 内嵌 PHP 项目）
+- [ ] **Elixir 互操作层**：PHP 代码调用 Elixir 模块/函数（Enum/JSON/Ecto 等），双向边界（PHP 侧 `Elixir\Mod.fun()` 语法糖、Elixir 侧求值 PHP 片段），共享同一 interp/进程模型——phpbeam 的差异化终极形态：PHP 应用长在 BEAM 上
 
 ## WordPress 线处置
 
