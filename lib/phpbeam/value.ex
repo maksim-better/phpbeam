@@ -415,6 +415,8 @@ defmodule PhpBeam.Value do
   defp strict_pairs_eq([], []), do: true
   defp strict_pairs_eq(_, _), do: false
 
+  # object handles carry the registry id directly (int) or the full map
+  defp object_identity(r1, r2) when is_integer(r1) and is_integer(r2), do: r1 == r2
   defp object_identity(%{__ref__: r1}, %{__ref__: r2}), do: r1 == r2
   defp object_identity(_, _), do: false
 

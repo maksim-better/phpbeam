@@ -89,6 +89,30 @@ defmodule PhpBeam.Eval do
       nil, {:ok, acc, e, i} ->
         {:cont, {:ok, acc, e, i}}
 
+      {:kv, nil, {:spread_elem, se}, false}, {:ok, ps, e, i} ->
+        case eval(se, e, i) do
+          {{:val, {:array, arr}}, e2, i2} ->
+            # php keeps string keys from a spread, re-keys integers
+            # sequentially; acc is reversed, so prepend reversed pairs
+            spread =
+              arr
+              |> PArray.to_pairs()
+              |> Enum.map(fn
+                {k, v} when is_binary(k) -> {{:string, k}, v}
+                {_k, v} -> {nil, v}
+              end)
+              |> Enum.reverse()
+
+            {:cont, {:ok, spread ++ ps, e2, i2}}
+
+          {{:val, _}, e2, i2} ->
+            i3 = warn(e2, i2, "Only arrays and Traversables can be spread")
+            {:cont, {:ok, ps, e2, i3}}
+
+          {{:unwind, _} = u, e2, i2} ->
+            {:halt, {:unwind, elem(u, 1), e2, i2}}
+        end
+
       {:kv, k, v, by_ref?}, {:ok, ps, e, i} ->
         case array_key(k, e, i) do
           {:unwind, u, e2, i2} ->
@@ -250,49 +274,60 @@ defmodule PhpBeam.Eval do
           PhpBeam.Classes.find_prop(interp2, obj.class, key) != nil or
             PArray.has_key?(obj.props, {:string, key})
 
-        if declared do
-          case PArray.put(obj.props, {:string, key}, v) do
-            {:ok, props2} ->
-              {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
+        readonly? = readonly_prop?(interp2, obj, key)
 
-            {:error, _} ->
-              {env2, interp2}
-          end
-        else
-          case PhpBeam.Classes.find_method(interp2, obj.class, "__set") do
-            nil ->
-              case PArray.put(obj.props, {:string, key}, v) do
-                {:ok, props2} -> {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
-                _ -> {env2, interp2}
-              end
+        cond do
+          declared and readonly? and PArray.has_key?(obj.props, {:string, key}) ->
+            msg =
+              "Cannot modify readonly property #{display_class(interp2, obj.class)}::$#{key}"
 
-            m ->
-              gkey = {elem(obj_ref, 1), key}
+            {obj_ref, i3} = materialize_native({:native_error, "Error", msg}, interp2)
+            throw({:readonly_throw, obj_ref, env2, i3})
 
-              if MapSet.member?(interp2.set_guards, gkey) do
-                # php: writing the same property inside its own __set does
-                # not re-dispatch — the dynamic property is created directly
+          declared ->
+            case PArray.put(obj.props, {:string, key}, v) do
+              {:ok, props2} ->
+                {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
+
+              {:error, _} ->
+                {env2, interp2}
+            end
+
+          true ->
+            case PhpBeam.Classes.find_method(interp2, obj.class, "__set") do
+              nil ->
                 case PArray.put(obj.props, {:string, key}, v) do
                   {:ok, props2} -> {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
                   _ -> {env2, interp2}
                 end
-              else
-                margs = [
-                  {:arg, {:lit_val, {:string, key}}, false, nil},
-                  {:arg, {:lit_val, v}, false, nil}
-                ]
 
-                it3 = %{interp2 | set_guards: MapSet.put(interp2.set_guards, gkey)}
+              m ->
+                gkey = {elem(obj_ref, 1), key}
 
-                case call_php_method(obj_ref, m, margs, env2, it3) do
-                  {{:val, _}, _, i4} ->
-                    {env2, %{i4 | set_guards: MapSet.delete(i4.set_guards, gkey)}}
+                if MapSet.member?(interp2.set_guards, gkey) do
+                  # php: writing the same property inside its own __set does
+                  # not re-dispatch — the dynamic property is created directly
+                  case PArray.put(obj.props, {:string, key}, v) do
+                    {:ok, props2} -> {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
+                    _ -> {env2, interp2}
+                  end
+                else
+                  margs = [
+                    {:arg, {:lit_val, {:string, key}}, false, nil},
+                    {:arg, {:lit_val, v}, false, nil}
+                  ]
 
-                  _ ->
-                    {env2, interp2}
+                  it3 = %{interp2 | set_guards: MapSet.put(interp2.set_guards, gkey)}
+
+                  case call_php_method(obj_ref, m, margs, env2, it3) do
+                    {{:val, _}, _, i4} ->
+                      {env2, %{i4 | set_guards: MapSet.delete(i4.set_guards, gkey)}}
+
+                    _ ->
+                      {env2, interp2}
+                  end
                 end
-              end
-          end
+            end
         end
 
       _ ->
@@ -322,6 +357,17 @@ defmodule PhpBeam.Eval do
 
       {:error, _} ->
         {env, interp}
+    end
+  end
+
+  defp readonly_prop?(interp, obj, key) do
+    case PhpBeam.Classes.get_class(interp, obj.class) do
+      %{kind: :class} = c ->
+        mods = Map.get(c, :modifiers) || []
+        "readonly" in mods
+
+      _ ->
+        false
     end
   end
 
@@ -553,8 +599,13 @@ defmodule PhpBeam.Eval do
   def eval({:assign, target, rhs}, env, interp) do
     case eval(rhs, env, interp) do
       {{:val, v}, env2, interp2} ->
-        {env3, interp3} = assign(target, v, env2, interp2)
-        {{:val, v}, env3, interp3}
+        try do
+          {env3, interp3} = assign(target, v, env2, interp2)
+          {{:val, v}, env3, interp3}
+        catch
+          {:readonly_throw, obj_ref, e3, i3} ->
+            {{:unwind, {:php_throw, obj_ref}}, e3, i3}
+        end
 
       unw ->
         unw
@@ -1367,6 +1418,41 @@ defmodule PhpBeam.Eval do
           _ ->
             {{:unwind, {:halt, 0}}, env2, interp2}
         end
+    end
+  end
+
+  # ── first-class callables ──
+  def eval({:value_fcc, {:const, parts, _fq}}, env, interp) do
+    # `strlen(...)` — the bare name becomes a string callable, NOT a const eval
+    {{:val, {:fcc, {:string, Enum.join(parts, "\\")}}}, env, interp}
+  end
+
+  def eval({:value_fcc, e}, env, interp) do
+    case eval(e, env, interp) do
+      {{:val, v}, e2, i2} -> {{:val, {:fcc, v}}, e2, i2}
+      {{:unwind, _} = u, e2, i2} -> {u, e2, i2}
+    end
+  end
+
+  def eval({:method_fcc, obj_e, name_e}, env, interp) do
+    case eval(obj_e, env, interp) do
+      {{:val, {:object, _} = obj_ref}, e2, i2} ->
+        {{:val, {:method_fcc, obj_ref, prop_name_string(name_e, e2, i2)}}, e2, i2}
+
+      {{:val, _}, e2, i2} ->
+        interp3 = warn(e2, i2, "Attempt to read property on value of type null")
+        {{:val, :null}, e2, interp3}
+
+      {{:unwind, _} = u, e2, i2} ->
+        {u, e2, i2}
+    end
+  end
+
+  def eval({:static_fcc, cname_e, name_e}, env, interp) do
+    with {:ok, key} <- class_key_of(cname_e, env, interp) do
+      {{:val, {:static_fcc, key, prop_name_string(name_e, env, interp)}}, env, interp}
+    else
+      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
     end
   end
 
@@ -2680,6 +2766,25 @@ defmodule PhpBeam.Eval do
     call_named([fname], String.downcase(fname), false, wrap_args(call_args), env, interp)
   end
 
+  def call_cb({:fcc, inner}, call_args, env, interp),
+    do: call_cb(inner, call_args, env, interp)
+
+  def call_cb({:method_fcc, obj_ref, mname}, call_args, env, interp) do
+    eval(
+      {:method_call, {:lit_val, obj_ref}, {:lit_name, mname}, wrap_args(call_args), false},
+      env,
+      interp
+    )
+  end
+
+  def call_cb({:static_fcc, key, mname}, call_args, env, interp) do
+    eval(
+      {:static_call, {:cname, false, [key]}, {:lit_name, mname}, wrap_args(call_args)},
+      env,
+      interp
+    )
+  end
+
   def call_cb({:array, arr}, call_args, env, interp) do
     case PArray.values(arr) do
       [{:object, _} = obj_ref, {:string, m}] ->
@@ -2775,6 +2880,20 @@ defmodule PhpBeam.Eval do
       end
     end)
     |> then(&{{:val, &1}, env, interp})
+  end
+
+  defp call_value({:fcc, inner}, args, env, interp),
+    do: invoke_fcc(inner, args, env, interp)
+
+  defp call_value({:method_fcc, _, _} = f, args, env, interp),
+    do: invoke_fcc(f, args, env, interp)
+
+  defp call_value({:static_fcc, _, _} = f, args, env, interp),
+    do: invoke_fcc(f, args, env, interp)
+
+  defp invoke_fcc(cb, args, env, interp) do
+    {vals, interp2} = arg_values(args, env, interp)
+    call_cb(cb, vals, env, interp2)
   end
 
   defp call_value(

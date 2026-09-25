@@ -36,6 +36,22 @@ defmodule PhpBeam.PArray do
       {nil, v}, acc ->
         push(acc, v)
 
+      # raw (untagged) keys arrive from to_pairs round-trips (spread)
+      {k, v}, acc when is_integer(k) ->
+        {:ok, arr} = do_put(acc, k, v)
+        arr
+
+      {k, v}, acc when is_binary(k) ->
+        case canonical_int_key(k) do
+          {:ok, ik} ->
+            {:ok, arr} = do_put(acc, ik, v)
+            arr
+
+          :no ->
+            {:ok, arr} = do_put(acc, k, v)
+            arr
+        end
+
       {k, v}, acc ->
         case normalize_key(k) do
           {:ok, key} ->

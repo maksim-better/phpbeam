@@ -1205,6 +1205,13 @@ defmodule PhpBeam.Interp do
 
   def exec_stmt({:halt, _}, env, interp), do: {:ok, env, interp}
 
+  def exec_stmt({:enum_def, decl}, env, interp) do
+    case PhpBeam.Enums.register(decl, interp) do
+      {:ok, interp2} -> {:ok, env, interp2}
+      {:error, msg} -> {{:unwind, {:engine_fatal, msg}}, env, interp}
+    end
+  end
+
   def exec_stmt({:class_def, decl}, env, interp) do
     case PhpBeam.Classes.register(decl, interp) do
       {:ok, interp2} -> {:ok, env, interp2}

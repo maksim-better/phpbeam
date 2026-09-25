@@ -254,8 +254,16 @@ defmodule PhpBeam.Parser do
       "final" ->
         modifier_then_class(ts, "final")
 
+      "readonly" ->
+        # `readonly class X` — consume readonly, pass empty mods through the
+        # generic modifier walker so `final readonly class` also lands here
+        case peek(tl(ts)) do
+          {:name, _, "class"} -> class_stmt(["readonly"], [{:name, 0, "class"} | tl(tl(ts))])
+          _ -> modifier_then_class(tl(ts), "readonly")
+        end
+
       "enum" ->
-        raise(ParseError, message: "enums are not supported yet", line: peek_line(ts))
+        enum_stmt([], ts)
 
       # forward goto (labels resolved at execution time)
       "goto" ->
@@ -274,6 +282,8 @@ defmodule PhpBeam.Parser do
       case peek(rest0) do
         {:name, _, "final"} when mod == "abstract" -> {[mod, "final"], tl(rest0)}
         {:name, _, "abstract"} when mod == "final" -> {[mod, "abstract"], tl(rest0)}
+        {:name, _, "final"} when mod == "readonly" -> {[mod, "final"], tl(rest0)}
+        {:name, _, "readonly"} when mod == "final" -> {[mod, "readonly"], tl(rest0)}
         _ -> {[mod], rest0}
       end
 
@@ -281,11 +291,17 @@ defmodule PhpBeam.Parser do
       {:name, _, "class"} ->
         class_stmt(mods, rest)
 
+      {:name, _, "readonly"} ->
+        class_stmt(mods ++ ["readonly"], tl(rest))
+
       {:name, _, "interface"} ->
         class_stmt(mods, rest)
 
       {:name, _, "trait"} ->
         class_stmt(mods, rest)
+
+      {:name, _, "enum"} ->
+        enum_stmt(mods, rest)
 
       _ ->
         raise(ParseError, message: "expected class after #{mod}", line: peek_line(rest))
@@ -316,6 +332,42 @@ defmodule PhpBeam.Parser do
     }
 
     {{:class_def, decl}, rest7}
+  end
+
+  # `enum Name [: string] { use Trait; case A; case B = "b"; const/methods }`
+  defp enum_stmt(mods, [{_, _, "enum"} | rest]) do
+    {name, rest2} = take_ident(rest)
+
+    {backing, rest3} =
+      case take_op(rest2, ":") do
+        {true, r} ->
+          {t, r2} = param_type(r)
+          {t, r2}
+
+        {false, _} ->
+          {nil, rest2}
+      end
+
+    {implements, rest4} = optional_implements("enum", rest3)
+    rest5 = expect_op(rest4, "{")
+    {members, rest6} = class_members(rest5, [], name)
+    rest7 = expect_op(rest6, "}")
+
+    decl = %{
+      name: name,
+      kind: :enum,
+      modifiers: mods,
+      backing: backing,
+      extends: [],
+      implements: implements,
+      consts: List.flatten(Keyword.get_values(members, :consts)),
+      props: [],
+      methods: List.flatten(Keyword.get_values(members, :methods)),
+      cases: List.flatten(Keyword.get_values(members, :cases)),
+      uses: Keyword.get_values(members, :uses)
+    }
+
+    {{:enum_def, decl}, rest7}
   end
 
   # interfaces may extend several parents; classes/traits at most one
@@ -384,6 +436,9 @@ defmodule PhpBeam.Parser do
       at_name?(ts, "use") ->
         trait_use(ts)
 
+      at_name?(ts, "case") ->
+        case_member(ts)
+
       at_name?(ts, "public") or at_name?(ts, "protected") or at_name?(ts, "private") or
         at_name?(ts, "static") or at_name?(ts, "abstract") or at_name?(ts, "final") or
         at_name?(ts, "var") or at_name?(ts, "function") ->
@@ -415,6 +470,22 @@ defmodule PhpBeam.Parser do
     else
       {Enum.reverse([{name, value} | acc]), rest2}
     end
+  end
+
+  defp case_member([{_, _, "case"} | rest]) do
+    {cname, rest2} = take_ident(rest)
+
+    {value, rest3} =
+      case take_op(rest2, "=") do
+        {true, r} ->
+          {v, r2} = expr(r)
+          {v, r2}
+
+        {false, _} ->
+          {nil, rest2}
+      end
+
+    {{:cases, [{cname, value}]}, expect_semi(rest3)}
   end
 
   defp trait_use([{_, _, "use"} | rest]) do
@@ -543,7 +614,7 @@ defmodule PhpBeam.Parser do
 
   defp take_member_modifiers(ts, acc) do
     case peek(ts) do
-      {:name, _, n} when n in ~w(public protected private var static abstract final) ->
+      {:name, _, n} when n in ~w(public protected private var static abstract final readonly) ->
         mod = if n == "var", do: :public, else: String.to_atom(n)
         take_member_modifiers(tl(ts), [mod | acc])
 
@@ -878,6 +949,18 @@ defmodule PhpBeam.Parser do
   end
 
   defp array_entry(ts) do
+    # `...$arr` spread: php re-keys ints sequentially, keeps string keys
+    case take_op(ts, "...") do
+      {true, r1} ->
+        {e, rest} = expr(r1)
+        {{:kv, nil, {:spread_elem, e}, false}, rest}
+
+      {false, _} ->
+        array_entry_plain(ts)
+    end
+  end
+
+  defp array_entry_plain(ts) do
     {by_ref?, ts1} =
       case take_op(ts, "&") do
         {true, r} -> {true, r}
@@ -1239,7 +1322,8 @@ defmodule PhpBeam.Parser do
   end
 
   defp one_param(ts) do
-    {_t, rest} = param_type(ts)
+    {vis, rest0} = take_promoted_vis(ts)
+    {_t, rest} = param_type(rest0)
 
     {by_ref?, rest2} =
       case take_op(rest, "&") do
@@ -1261,10 +1345,39 @@ defmodule PhpBeam.Parser do
             {false, _} -> {nil, rest4}
           end
 
-        {{:param, v, _t, default, by_ref?, variadic?}, rest5}
+        param =
+          if vis,
+            do: {:param_promoted, vis, v, _t, default, by_ref?, variadic?},
+            else: {:param, v, _t, default, by_ref?, variadic?}
+
+        {param, rest5}
 
       [{_, l, v} | _] ->
         raise(ParseError, message: "expected parameter variable, got #{tok_desc(v)}", line: l)
+    end
+  end
+
+  # constructor promotion: `public|protected|private [readonly] int $x = 1`
+  defp take_promoted_vis(ts) do
+    case peek(ts) do
+      {:name, _, n} when n in ~w(public protected private) ->
+        rest = tl(ts)
+        # skip a trailing `readonly` — semantics land with L1 readonly work
+        rest =
+          case peek(rest) do
+            {:name, _, "readonly"} -> tl(rest)
+            _ -> rest
+          end
+
+        {String.to_atom(n), rest}
+
+      {:name, _, "readonly"} ->
+        # php 8.1: bare `readonly` promotion is invalid but laravel never
+        # writes it; treat as public to keep parsing
+        {nil, ts}
+
+      _ ->
+        {nil, ts}
     end
   end
 
@@ -1733,8 +1846,10 @@ defmodule PhpBeam.Parser do
         {name, rest} = prop_name(tl(ts))
 
         if at_op?(rest, "(") do
-          {args, rest2} = call_args(tl(rest))
-          postfix_loop({:method_call, e, name, args, false}, rest2)
+          case call_args(tl(rest)) do
+            {:fcc, rest2} -> postfix_loop({:method_fcc, e, name}, rest2)
+            {args, rest2} -> postfix_loop({:method_call, e, name, args, false}, rest2)
+          end
         else
           postfix_loop({:prop, e, name}, rest)
         end
@@ -1753,8 +1868,10 @@ defmodule PhpBeam.Parser do
         static_tail(to_cname(e), tl(ts))
 
       {:op, _, "("} ->
-        {args, rest} = call_args(tl(ts))
-        postfix_loop({:call, e, args}, rest)
+        case call_args(tl(ts)) do
+          {:fcc, rest} -> postfix_loop({:value_fcc, e}, rest)
+          {args, rest} -> postfix_loop({:call, e, args}, rest)
+        end
 
       {:op, _, "++"} ->
         {{:post_inc, e}, tl(ts)}
@@ -1821,8 +1938,10 @@ defmodule PhpBeam.Parser do
 
   defp static_tail_name(class_ref, [{:name, _, n} | rest]) do
     if at_op?(rest, "(") do
-      {args, rest2} = call_args(tl(rest))
-      postfix_loop({:static_call, class_ref, {:lit_name, n}, args}, rest2)
+      case call_args(tl(rest)) do
+        {:fcc, rest2} -> postfix_loop({:static_fcc, class_ref, {:lit_name, n}}, rest2)
+        {args, rest2} -> postfix_loop({:static_call, class_ref, {:lit_name, n}, args}, rest2)
+      end
     else
       postfix_loop({:class_const, class_ref, n}, rest)
     end
@@ -1830,8 +1949,10 @@ defmodule PhpBeam.Parser do
 
   defp static_prop_or_call(class_ref, name_e, ts) do
     if at_op?(ts, "(") do
-      {args, rest} = call_args(tl(ts))
-      postfix_loop({:static_call, class_ref, name_e, args}, rest)
+      case call_args(tl(ts)) do
+        {:fcc, rest} -> postfix_loop({:static_fcc, class_ref, name_e}, rest)
+        {args, rest} -> postfix_loop({:static_call, class_ref, name_e, args}, rest)
+      end
     else
       postfix_loop({:static_prop, class_ref, name_e}, ts)
     end
@@ -1845,11 +1966,17 @@ defmodule PhpBeam.Parser do
   defp to_cname(e), do: e
 
   defp call_args(ts) do
-    if at_op?(ts, ")") do
-      {[], tl(ts)}
-    else
-      {args, rest} = call_args_list(ts, [])
-      {args, expect_op(rest, ")")}
+    cond do
+      at_op?(ts, ")") ->
+        {[], tl(ts)}
+
+      # first-class callable: `strlen(...)` — the argument list is exactly `...`
+      match?([{:op, _, "..."}, {:op, _, ")"} | _], ts) ->
+        {:fcc, tl(tl(ts))}
+
+      true ->
+        {args, rest} = call_args_list(ts, [])
+        {args, expect_op(rest, ")")}
     end
   end
 

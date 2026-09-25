@@ -18,6 +18,7 @@ defmodule PhpBeam.Builtin.MathFns do
       "mt_rand" => &rand_v/2,
       "rand" => &rand_v/2,
       "random_int" => &rand_v/2,
+      "random_bytes" => &random_bytes_v/2,
       "number_format" => nil,
       "is_finite" => &is_finite/2,
       "is_infinite" => &is_infinite/2,
@@ -292,4 +293,20 @@ defmodule PhpBeam.Builtin.MathFns do
   end
 
   defp base_convert(_, i), do: {:ok, {:string, "0"}, i}
+
+  # php: cryptographically secure random bytes as a raw binary string;
+  # length 0 throws ValueError (php 8)
+  defp random_bytes_v([{:int, n} | _], i) when n > 0 do
+    {:ok, {:string, :crypto.strong_rand_bytes(n)}, i}
+  end
+
+  defp random_bytes_v([{:int, _n} | _], i) do
+    {:ok,
+     {:unwind,
+      {:php_throw,
+       {:native_error, "ValueError",
+        "random_bytes(): Argument #1 ($length) must be greater than 0"}}}, i}
+  end
+
+  defp random_bytes_v(_, i), do: {:ok, {:string, ""}, i}
 end

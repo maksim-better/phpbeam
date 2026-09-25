@@ -45,6 +45,25 @@ defmodule PhpBeam.Render do
   def var_dump_lines({:object, _} = obj_ref, interp, ind) do
     obj = Eval.get_object(interp, obj_ref)
     pad = pad2(ind)
+
+    # enum cases dump as `enum(Cls::Case)` — no props shown
+    case PhpBeam.Classes.get_class(interp, obj.class) do
+      %{kind: :enum} ->
+        [pad <> "enum(#{class_display(interp, obj)}::#{obj.class |> enum_case_name(obj)})\n"]
+
+      _ ->
+        var_dump_object(obj, interp, ind, pad)
+    end
+  end
+
+  defp enum_case_name(_key, obj) do
+    case PArray.fetch(obj.props, {:string, "name"}) do
+      {:ok, {:string, n}} -> n
+      _ -> "?"
+    end
+  end
+
+  defp var_dump_object(obj, interp, ind, pad) do
     inner = pad2(ind + 1)
 
     [

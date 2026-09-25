@@ -23,7 +23,12 @@ defmodule PhpBeam.Classes do
             # declaring-file scope: method bodies resolve unqualified names and
             # use-aliases against these (php binds them at compile time)
             ns: [],
-            uses: %{}
+            uses: %{},
+            # enum: declaration-ordered [{case_name, object_ref}]
+            enum_cases: [],
+            backed?: false,
+            # source modifiers (["readonly", ...]) for readonly-class checks
+            modifiers: []
 
   @type t :: %__MODULE__{}
   @type obj :: %{__ref__: pos_integer(), class: binary(), props: PArray.t()}
@@ -123,6 +128,55 @@ defmodule PhpBeam.Classes do
         }
       end)
 
+    # constructor property promotion: `__construct(private int $x = 1)`
+    # desugars to a declared prop + a leading `$this->x = $x;` assignment
+    methods =
+      Enum.map(methods, fn
+        {vis, st?, ab?, fi?, br?, "__construct", params, body, line} = m ->
+          {promoted, plain} =
+            Enum.split_with(params, &match?({:param_promoted, _, _, _, _, _, _}, &1))
+
+          if promoted == [] do
+            m
+          else
+            body_line = line || 1
+
+            assigns =
+              Enum.map(promoted, fn {:param_promoted, pvis, name, _t, _d, _br, _var} ->
+                {:stmt_line, body_line,
+                 {:expr_stmt, {:assign, {:prop, {:var, "this"}, {:lit_name, name}}, {:var, name}}}}
+              end)
+
+            plain_params =
+              Enum.map(promoted, fn {:param_promoted, _pvis, name, t, d, br, var} ->
+                {:param, name, t, d, br, var}
+              end)
+
+            {vis, st?, ab?, fi?, br?, "__construct", plain_params ++ plain, assigns ++ body, line}
+          end
+
+        m ->
+          m
+      end)
+
+    props =
+      props ++
+        Enum.flat_map(methods, fn
+          {_, _, _, _, _, "__construct", params, _, _} ->
+            Enum.map(params, fn
+              {:param_promoted, pvis, name, t, d, _br, _var} ->
+                vis = if pvis in [:public, :protected, :private], do: pvis, else: :public
+                {vis, false, name, d || :null}
+
+              _ ->
+                nil
+            end)
+            |> Enum.reject(&is_nil/1)
+
+          _ ->
+            []
+        end)
+
     methods_map =
       Map.new(methods, fn {vis, static?, abstract?, final?, _by_ref?, mname, params, body, line} ->
         {String.downcase(mname),
@@ -156,7 +210,8 @@ defmodule PhpBeam.Classes do
       # file containing the class declaration
       file: decl_file(interp),
       ns: interp.ns,
-      uses: interp.uses
+      uses: interp.uses,
+      modifiers: mods
     }
   end
 
@@ -664,8 +719,29 @@ defmodule PhpBeam.Classes do
   end
 
   def find_const(interp, key, name) do
-    find_up(interp, key, name, &Map.fetch(&1.consts, name), interfaces: true)
+    find_up(
+      interp,
+      key,
+      name,
+      fn class ->
+        case Map.fetch(class.consts, name) do
+          {:ok, _} = ok -> ok
+          :error -> enum_const(class, name)
+        end
+      end,
+      interfaces: true
+    )
   end
+
+  # enum case access reads like a class const (Suit::Hearts)
+  defp enum_const(%{kind: :enum, enum_cases: pairs}, name) do
+    case List.keyfind(pairs, name, 0) do
+      {^name, ref} -> {:ok, ref}
+      nil -> :error
+    end
+  end
+
+  defp enum_const(_, _), do: :error
 
   @doc """
   Class-const lookup with lazy folding: `{:const_ast, expr, declaring_key}`
@@ -674,7 +750,15 @@ defmodule PhpBeam.Classes do
   `:error` | nil.
   """
   def find_const_lazy(interp, key, name) do
-    case find_up(interp, key, name, &Map.fetch(&1.consts, name), interfaces: true) do
+    fetch =
+      fn class ->
+        case Map.fetch(class.consts, name) do
+          {:ok, _} = ok -> ok
+          :error -> enum_const(class, name)
+        end
+      end
+
+    case find_up(interp, key, name, fetch, interfaces: true) do
       {:ok, {:const_ast, ast, decl}} ->
         {v, i2} = Eval.const_eval(ast, interp, decl)
 
