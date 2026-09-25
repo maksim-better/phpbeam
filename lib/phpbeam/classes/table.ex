@@ -911,6 +911,9 @@ defmodule PhpBeam.Classes.Table do
     base = %{
       "stdclass" => native_stdclass(),
       "closure" => native_closure_class(),
+      "reflectionclass" => native_reflection_class(),
+      "reflectionmethod" => native_reflection_method_class(),
+      "reflectionexception" => native_class("ReflectionException", "runtimeexception", []),
       "datetime" => native_datetime_class(),
       "datetimezone" => native_datetimezone_class(),
       "throwable" => native_class("Throwable", nil, []),
@@ -954,7 +957,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimezone) do
+      if key in ~w(throwable stdclass closure datetime datetimezone reflectionclass reflectionmethod) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
@@ -1038,6 +1041,266 @@ defmodule PhpBeam.Classes.Table do
             {:ok, {native_state(obj) |> Map.get("ts", {:int, 0}), obj}, i}
           end)
       },
+      file: ""
+    }
+  end
+
+  # ───────────────────────── metadata read API (L3 Reflection foundation) ─────────────────────────
+  # Pure rendering of stored shapes — no semantics, hot paths untouched.
+  # Storage (method maps, {:param,...} 6-tuples, prop maps) stays as-is;
+  # these views are built on demand for consumers like Reflection.
+
+  @doc "Method storage map → named view (declaring_class + file resolved via interp)"
+  def method_meta(interp, m) do
+    %{
+      name: m.name,
+      declaring_class: m.class,
+      visibility: m.visibility,
+      static?: m.static?,
+      abstract?: m.abstract?,
+      final?: m.final?,
+      native?: m.native != nil,
+      params: Enum.map(m.params || [], &param_meta/1),
+      line: m.line,
+      file:
+        case get_class(interp, m.class) do
+          %{file: f} -> f
+          _ -> nil
+        end
+    }
+  end
+
+  @doc "Param tuple {:param, name, type, default, by_ref?, variadic?} → named view"
+  def param_meta({:param, name, type, default, by_ref?, variadic?}) do
+    %{
+      name: name,
+      type: type,
+      default: default,
+      by_ref?: by_ref?,
+      variadic?: variadic?,
+      optional?: default != nil
+    }
+  end
+
+  @doc "Prop storage map → named view"
+  def prop_meta(p) do
+    %{
+      name: p.display,
+      visibility: p.visibility,
+      static?: p.static?,
+      readonly?: p.readonly? == true,
+      type: Map.get(p, :type),
+      default: p.default
+    }
+  end
+
+  @doc """
+  Class → named view with inheritance-aware member tables (child shadows
+  ancestors; entries keyed by downcased name). nil when class unknown.
+  """
+  def class_meta(interp, key) do
+    case get_class(interp, key) do
+      nil ->
+        nil
+
+      class ->
+        %{
+          name: class.name,
+          kind: class.kind,
+          parent: class.parent,
+          interfaces: class.interfaces,
+          traits: class.traits,
+          abstract?: class.abstract?,
+          final?: "final" in (class.modifiers || []),
+          readonly?: "readonly" in (class.modifiers || []),
+          enum?: class.kind == :enum,
+          backed?: class.backed? == true,
+          file: class.file,
+          ns: class.ns,
+          methods: chain_methods_meta(interp, key),
+          props: chain_props_meta(interp, key),
+          consts: class.consts
+        }
+    end
+  end
+
+  defp chain_methods_meta(interp, key) do
+    interp
+    |> self_and_ancestors(key)
+    |> Enum.reverse()
+    |> Enum.reduce(%{}, fn k, acc ->
+      case get_class(interp, k) do
+        nil -> acc
+        c -> Map.merge(acc, Map.new(c.methods, fn {mk, m} -> {mk, method_meta(interp, m)} end))
+      end
+    end)
+  end
+
+  defp chain_props_meta(interp, key) do
+    interp
+    |> self_and_ancestors(key)
+    |> Enum.reverse()
+    |> Enum.reduce(%{}, fn k, acc ->
+      case get_class(interp, k) do
+        nil ->
+          acc
+
+        c ->
+          Map.merge(acc, Map.new(c.props, fn p -> {String.downcase(p.display), prop_meta(p)} end))
+      end
+    end)
+  end
+
+  # ───────────────────────── Reflection thin slice (L3 pre-work) ─────────────────────────
+  # Purpose: validate the meta API with a real consumer. Full Reflection
+  # (getMethods()/getParameters() object graphs) lands with L3; this slice
+  # exposes only parity-safe members (probe-verified 2026-09-26).
+
+  defp rc_state(obj), do: Map.get(obj, :dt_state) || %{}
+  defp rc_put(obj, k, v), do: dt_put(obj, k, v)
+
+  # php class-name resolution for the ctor argument (string or object)
+  defp rc_resolve_key(_obj, [{:string, name} | _], i), do: {:ok, full_key(name, i)}
+
+  defp rc_resolve_key(_obj, [{:object, _} = oref | _], i),
+    do: {:ok, Eval.get_object(i, oref).class}
+
+  defp rc_resolve_key(obj, args, i),
+    do:
+      {{:unwind,
+        {:php_throw,
+         {:native_error, "ReflectionException",
+          "Class \"" <> dt_s(Enum.at(args, 0, :null)) <> "\" does not exist"}}}, obj, i}
+
+  defp rc_throw(obj, i, msg) do
+    {obj_ref, i2} = Eval.materialize_native({:native_error, "ReflectionException", msg}, i)
+    {{:unwind, {:php_throw, obj_ref}}, obj, i2}
+  end
+
+  defp native_reflection_class do
+    %__MODULE__{
+      name: "ReflectionClass",
+      kind: :class,
+      methods:
+        Map.new(
+          [
+            native_fn("__construct", fn obj, args, i ->
+              case rc_resolve_key(obj, args, i) do
+                {:ok, key} ->
+                  case get_class(i, key) do
+                    nil ->
+                      rc_throw(
+                        obj,
+                        i,
+                        "Class \"" <> dt_s(Enum.at(args, 0, :null)) <> "\" does not exist"
+                      )
+
+                    _ ->
+                      {:ok, {:null, rc_put(obj, "key", key)}, i}
+                  end
+
+                thrown ->
+                  thrown
+              end
+            end),
+            native_fn("getName", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              {:ok, {{:string, Map.get(get_class(i, key) || %{name: ""}, :name)}, obj}, i}
+            end),
+            native_fn("isAbstract", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              c = get_class(i, key)
+              {:ok, {{:bool, c != nil and c.abstract?}, obj}, i}
+            end),
+            native_fn("isFinal", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              c = get_class(i, key)
+              {:ok, {{:bool, c != nil and "final" in (c.modifiers || [])}, obj}, i}
+            end),
+            native_fn("isInterface", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              c = get_class(i, key)
+              {:ok, {{:bool, c != nil and c.kind == :interface}, obj}, i}
+            end),
+            native_fn("isEnum", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              c = get_class(i, key)
+              {:ok, {{:bool, c != nil and c.kind == :enum}, obj}, i}
+            end),
+            native_fn("hasMethod", fn obj, args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              name = args |> Enum.at(0, {:string, ""}) |> dt_s()
+              {:ok, {{:bool, find_method(i, key, name) != nil}, obj}, i}
+            end),
+            native_fn("getMethod", fn obj, args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              name = args |> Enum.at(0, {:string, ""}) |> dt_s()
+              m = find_method(i, key, name)
+
+              if m do
+                {{:object, mid}, i2} = Eval.make_instance(i, "reflectionmethod")
+                mob = Eval.get_object(i2, {:object, mid})
+
+                i3 =
+                  Eval.put_object(
+                    i2,
+                    {:object, mid},
+                    mob |> rc_put("ckey", key) |> rc_put("mname", String.downcase(name))
+                  )
+
+                {:ok, {{:object, mid}, obj}, i3}
+              else
+                display = (get_class(i, key) || %{name: ""}).name
+
+                rc_throw(
+                  obj,
+                  i,
+                  "Method " <>
+                    display <> "::" <> dt_s(Enum.at(args, 0, :null)) <> "() does not exist"
+                )
+              end
+            end)
+          ],
+          fn m -> {String.downcase(m.name), m} end
+        ),
+      file: ""
+    }
+  end
+
+  defp native_reflection_method_class do
+    %__MODULE__{
+      name: "ReflectionMethod",
+      kind: :class,
+      methods:
+        Map.new(
+          [
+            native_fn("getName", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              name = rc_state(obj) |> Map.get("mname")
+              m = find_method(i, key, name)
+              {:ok, {{:string, if(m, do: m.name, else: "")}, obj}, i}
+            end),
+            native_fn("getNumberOfParameters", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              name = rc_state(obj) |> Map.get("mname")
+              m = find_method(i, key, name)
+              {:ok, {{:int, if(m, do: length(m.params || []), else: 0)}, obj}, i}
+            end),
+            native_fn("isPublic", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              name = rc_state(obj) |> Map.get("mname")
+              m = find_method(i, key, name)
+              {:ok, {{:bool, m != nil and m.visibility == :public}, obj}, i}
+            end),
+            native_fn("isStatic", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              name = rc_state(obj) |> Map.get("mname")
+              m = find_method(i, key, name)
+              {:ok, {{:bool, m != nil and m.static?}, obj}, i}
+            end)
+          ],
+          fn m -> {String.downcase(m.name), m} end
+        ),
       file: ""
     }
   end
