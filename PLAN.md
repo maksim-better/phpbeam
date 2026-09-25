@@ -12,15 +12,15 @@
 - M24-p2（5c01ef1）：**生成器全量**（进程+interp 穿梭）；**autoload 体系**（spl 触发/ns 隔离/父类接口 trait 链接期/FQ 显示名）；**类编译期作用域**；类常量惰性折叠；__FUNCTION__ 族；stdClass；mb_*/strip_tags/addslashes。
 - M24-p3（0af9883）：元素引用赋值；path_get/path_put 按段求值；`[&$x]` ref 线程化；按值参数 deref 数组 ref；realpath；method_call unwind 穿透。
 
-## 阶段一：M24 收尾——install 页面出来（当前，预估 1.5–2 会话）
+## 阶段一：M24 收尾——install 页面出来（**p4 已达成主目标**，`bd85da5`）
 
-- [ ] **P0 异常排查（下一会话第一件事）**：`$_wp_post_type_features` 某赋值把 PArray 放进 interp 位（badkey :globals）。已排除 RHS 哨兵/主进程 assign 入参不一致两条路；疑生成器穿梭或 const_fold rescue 吞哨兵。手段：gen_resume/start_generator 消息加结构校验；Env.lookup 入口一次性断言打印 pid；复现即 `phpx wp-admin/install.php`。
-- [ ] install.php step 0 页面 byte 级对齐（当前差分基线 13.4KB 表单页）。已知子项：
-  - [ ] translations API 是网络数据——离线 fixture（固定 translations 数组注入）或比对时过滤该块
-  - [ ] 预计暴露：`wp_get_available_translations`/HTTP 层（wp_remote_get 最小实现或 stub）
+- [x] **P0 异常**：`update_path_env` 自动装配臂返回 1 元组丢弃 interp（p3 两个哨兵都对——污染在 target 求值与 path_put 之间）。
+- [x] **install.php 完整渲染 exit 0**（4983 字节完整 HTML，welcome/setup 表单页）。此轮根因链：fetch_class 返回 ns/uses 剥离后的 interp（调用方作用域现恢复）；普通函数携带定义文件 ns/uses（7 元组）并在体内切换；trait `m as x;` 裸形式解析 + 适配块后无分号 + **as 别名保留原方法**；链接期签名兼容按**解析后类型**比较；substr 越界；assign_op 宽容臂；`{:int, 非整数}` 泄漏加固。新内置：hash_*、addcslashes 族、strtok（游标）、array_values、debug_backtrace、JSON_* 常量族；原生 DateTime/DateTimeZone。
+- [ ] install 页 byte 级对齐剩余三类差距：① CSS `<link>` 与部分 `<script src>` 未输出（wp_styles/wp_scripts do_items 的 src 型条目）② `wp_guess_url` 形态（php `http:///abs/path` vs 我们 `http:/relative`）③ 语言选择器需真实 translations API（网络数据，比对用 fixture/过滤）
 - [ ] 向导 step 1/2 模拟（$_POST 注入）走 `wp_install()` 全链路：wpdb `query()/insert()` 建 12 张表——M24 的原始验收目标
 - [ ] 安装完成后 `is_blog_installed()` → "Already Installed" 页差分
-- [ ] 差分用例固化：23_install_page.php（表单页）+ 24_install_wizard.php（建表后 SHOW TABLES 对比）
+- [ ] 差分用例固化：23_install_page.php（对 step=1 包装基线，过滤 data-pw 随机密码）+ 24_install_wizard.php（建表后 SHOW TABLES 对比）
+- phpt 280→**285/697**；单测+差分 784/0。
 
 ## 阶段二：M25——WP 安装后稳定性（预估 2–4 会话，深度未知）
 
