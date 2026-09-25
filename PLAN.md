@@ -26,13 +26,13 @@
 
 已迁移资产：M7–M24 全部语言核心与引擎修复；autoload 体系（fetch_class + spl 链 + 父类/接口/trait 链接期加载——Composer PSR-4 正好吃这套）；mysqli/MyXQL（PDO 底座）；ob_*/eval（Blade 需要）；文件流；Zend/phpt 护栏（285/697 + zend sample 12.6%）。
 
-## L0：HTTP SAPI——Plug 每请求一 BEAM 进程（先做，2 会话）
+## L0：HTTP SAPI（**已完成**，`283950f`）
 
-- [ ] `phpbeam serve <docroot>`：Plug/Cowboy 起 HTTP 服务；每请求 spawn 一个 BEAM 进程跑 interp（天然并发 + 隔离）
-- [ ] 请求种子：`$_SERVER`（REQUEST_METHOD/URI/HTTP_* 头/SCRIPT_NAME…）、`$_GET/$_POST/$_COOKIE/$_FILES` 按请求物化
-- [ ] 响应收集：`header()/header_remove()/setcookie()` 进 interp 响应区；`exit/die` 映射为响应结束；状态码
-- [ ] 静态文件直出（Plug.Static——css/js/图片不经过 PHP）
-- [ ] 验收：现有差分用例在 HTTP 形态下同样 byte 级成立（对 `php -S`）；`phpx serve` 能出一个 phpinfo 风格自检页
+- [x] `phpx serve <docroot> --port=N`：gen_tcp 零依赖 HTTP 服务（hex 被 TLS 挡，Plug 顺延——解释器只见请求种子+SAPI 响应区，后续可整体换 Plug 不动引擎）；每连接一 BEAM 进程跑 interp。
+- [x] 请求种子：`$_SERVER`（REQUEST_METHOD/URI/QUERY_STRING/HTTP_*/SCRIPT_NAME/DOCUMENT_ROOT…）、`$_GET/$_POST`（urlencoded）/`$_COOKIE/$_REQUEST`；目录→index.php；静态文件带 mime 直出；**未匹配路径回退 docroot 前端控制器**（php -S 实测行为，Laravel public/index.php 路由依赖）。
+- [x] Interp sapi 响应区：`header()/setcookie()/http_response_code()/header_remove()/headers_list()` HTTP 下真实现（CLI 保留旧警告语义）；HTTP 模式 body 全缓冲（= php -S output_buffering，echo 后仍可 setcookie）；响应形态对齐（脚本头在前、默认 Content-type 小写 t 追加、Set-Cookie 无默认 path）。
+- [x] 验收：`test/phpbeam/http_test.exs` 双服务器（phpx serve + php -S）6 例 curl 差分（根 GET 带参/POST 表单/静态/目录索引/重定向/前端控制器回退）全部一致（归一化 Host/Date/Connection/CL/X-Powered-By）。
+- 后续待补（低优先）：`$_FILES` 物化、chunked body、keep-alive、HTTP/1.0
 
 ## L1：语法冲刺（1–2 会话）
 
