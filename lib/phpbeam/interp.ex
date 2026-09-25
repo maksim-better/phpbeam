@@ -308,6 +308,7 @@ defmodule PhpBeam.Interp do
   end
 
   defp arg_display({:resource, id}, _), do: "Resource id ##{id}"
+  defp arg_display(v, _), do: inspect(v)
 
   defp arg_display({:object, id}, interp) do
     case Map.get(interp.objects, id) do
