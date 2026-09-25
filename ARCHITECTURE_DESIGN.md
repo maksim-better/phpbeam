@@ -250,3 +250,33 @@ def fork_request(%__MODULE__{} = boot) :: %__MODULE__{}
 ## 7. 与 PLAN.md 的挂接
 
 Phase 0 随手下个会话带走；Phase 1 排在 L3 之前（同一会话内先地基后本体）；Phase 2 塞在 L3→L4 间隙；Phase 3 由 L6 实测触发。本文件落地后，在 PLAN.md 各 L 条目下加一行"前置：见 ARCHITECTURE_DESIGN.md Phase N"即可。
+
+
+---
+
+## 8. 一次性执行记录（2026-09-26，P0→P3-lite 全部完成）
+
+11 个 commit（b19cb23…54b7eb5），每 commit 过门禁（非 phpt 全绿 + phpt 失败集 == 基线 410，
+含已知抖动 func/010）。**零个逻辑变更 commit 落地**——计划中的 3 个逻辑变更里，class_ref
+与 json 死子句经探针证实全是死代码（构造上不可能改变行为），array_any/all 保持 raw 档不变。
+
+实际结果 vs 预算：eval.ex 5,390→2,270（超 ≤2,000 目标 13%，剩余为表达式分派/字符串转换/
+include/autoload/门面）；Eval.Call 1,173 / Assign 832 / ConstEval 586 / Generator 190 /
+Objects 88 / Classes 门面 26 全部达标或更小。新增护栏：Objects/Closure/TableMeta/Fork 接缝
+单测 20 个 + 差分 26_reflection.php。
+
+执行中对设计的补充修正（全部有 commit 记录）：
+1. native_classes 的 Throwable 方法灌入 reduce 会抹平非豁免 base 类的方法表——
+   ReflectionClass 首次注册即被覆盖（差分用例抓住）；豁免名单补两个反射类。
+2. 类声明是 `PhpBeam.Classes` 的 struct（defstruct 随 Table 走，enums 的 struct! 改指 Table）。
+3. eval.ex 尾部多次被行级手术切坏（模块 end 丢失/门面块污染）——最终门面由子模块导出表
+   程序化再生；工具链坑：mix format 会把 `except: [name/arity]` 重排成 `name / arity`
+   （除号语义）导致 import 方案废弃、defdelegate 形参必须实名（_p0 触发数百警告）。
+4. 警告清理按"只机械修"执行：机械类清零后剩余为风格类（子句未分组，拆分后增多属预期）
+   与 18 个 cannot-match 潜在死分支（疑真 bug，逐条记入顺延，未动）。
+
+顺延清单（发现于本次执行，均经 43cde4f worktree 验证非本次回归）：
+- func_get_args() 对变参函数返回逆序实参（非变参正确）
+- `$o::CONST`（对象作动态类名）不支持；json_encode 用户对象返回 null（php: {...}）
+- misc/const_eval/http 的 18 个 cannot-match 死分支待语义审查
+- json_term/2、put_gen_state/2 死函数（多行体，行手术风险大于收益）

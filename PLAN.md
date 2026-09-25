@@ -63,6 +63,8 @@ L1 声称"命名参数已可用"经差分证伪（实为按位置绑定）；随
 
 ## L3：Reflection API（2–3 会话，最大单项）
 
+- [x] 前置已落（2026-09-26 重构 Phase 1，见 ARCHITECTURE_DESIGN.md）：Classes.Table meta 只读 API + ReflectionClass/ReflectionMethod 薄切片（26_reflection.php 差分逐字节过）；L3 本体直接在 `builtin/reflection.ex` 扩
+
 - [ ] ReflectionClass（newInstance/getMethod/getProperties/isInstantiable/getConstructor/getAttributes）
 - [ ] ReflectionMethod/ReflectionFunction（invoke/invokeArgs/isPublic/getNumberOfParameters）
 - [ ] ReflectionParameter（getType/getName/isOptional/isDefaultValueAvailable/getDefaultValue）
@@ -100,7 +102,7 @@ L1 声称"命名参数已可用"经差分证伪（实为按位置绑定）；随
 ## L8：性能与架构（持续）
 
 - [ ] 请求级 profile：Laravel boot 的热点函数榜
-- [ ] interp 预热池；跨请求 static/类表复用的可行性论证
+- [x] 池化接缝已落（2026-09-26）：`Interp.fork_request/1` + `warm/1`（fork 单测：boot 表共享、statics 重置）；预热池本体待 L6 实测收益后接 Http
 - [ ] 为编译后端铺路：L0 的 SAPI 边界（请求种子/响应收集）保持与求值器无耦合，编译后端可整体替换解释器内核
 
 ## 远期（架构级，README 路线图三步终点）
