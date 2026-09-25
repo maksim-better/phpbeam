@@ -127,9 +127,11 @@ defmodule PhpBeam.Builtin.FileFns do
   defp filesize_v(_, i), do: {:ok, {:bool, false}, i}
 
   defp realpath_v([{:string, path} | _], i) do
-    if File.exists?(path),
-      do: {:ok, {:string, Path.absname(path)}},
-      else: {:ok, {:bool, false}, i}
+    if File.exists?(path) do
+      {:ok, {:string, PhpBeam.Interp.real_path(Path.absname(path))}, i}
+    else
+      {:ok, {:bool, false}, i}
+    end
   end
 
   defp realpath_v(_, i), do: {:ok, {:bool, false}, i}

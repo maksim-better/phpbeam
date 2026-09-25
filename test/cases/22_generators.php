@@ -55,3 +55,23 @@ var_dump(strip_tags("<p>Hi <b>there</b>!</p>", "<b>"));
 var_dump(mb_strlen("héllo"), mb_substr("héllo", 1, 2), mb_strtolower("HÉ"));
 var_dump(addslashes("a'b"), stripslashes("a\\'b"));
 echo "end\n";
+
+// ref-assign onto elements (M24 part 3)
+class RA { public static $c = ["a" => ["n" => 1]]; public $p = ["x" => 2]; }
+$ra = &RA::$c["a"];
+$ra["n"] = 42;
+var_dump(RA::$c["a"]["n"]);
+$ro = new RA;
+$rw = &$ro->p["x"];
+$rw = 9;
+var_dump($ro->p["x"]);
+$rarr = ["k" => "orig"];
+$rz = &$rarr["k"];
+$rz = "changed";
+var_dump($rarr["k"]);
+$rd = ["deep" => ["n" => 1]];
+$rd["deep"]["n"] = 99;
+$rk = "key";
+$rd[$rk]["x"] = 5;
+var_dump($rd["deep"]["n"], $rd["key"]["x"]);
+echo "refend\n";

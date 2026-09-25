@@ -118,17 +118,20 @@ defmodule PhpBeam.Eval do
         {:halt, {:unwind, elem(u, 1), e3, i3}}
 
       {{:val, vv}, e3, i3} ->
-        vv2 =
-          if by_ref? do
-            case vv do
-              {:ref, _} -> vv
-              plain -> make_ref_cell(plain, i3) |> elem(0)
-            end
-          else
-            vv
-          end
+        if by_ref? do
+          case vv do
+            {:ref, _} ->
+              {:cont, {:ok, [{kv, vv} | ps], e3, i3}}
 
-        {:cont, {:ok, [{kv, vv2} | ps], e3, i3}}
+            plain ->
+              # the cell must be registered in the INTERP that keeps flowing
+              # (elem(0) alone dropped it — the ref later read as NULL)
+              {cell, i4} = make_ref_cell(plain, i3)
+              {:cont, {:ok, [{kv, cell} | ps], e3, i4}}
+          end
+        else
+          {:cont, {:ok, [{kv, vv} | ps], e3, i3}}
+        end
     end
   end
 
@@ -587,10 +590,44 @@ defmodule PhpBeam.Eval do
         {env3, interp4} = assign(target, {:ref, id}, env2, interp3)
         {{:val, deref({:ref, id}, interp4)}, env3, interp4}
 
-      {:index, _, _} ->
-        # taking a reference of an array element: bind the element to a cell
-        {{:val, _cur}, _, _} = eval(rhs, env, interp)
-        {{:unwind, {:fatal, "cannot take reference of this expression yet"}}, env, interp}
+      {:index, _, _} = path_expr ->
+        # taking a reference of an array element (incl. static-prop and
+        # object-prop paths): the element becomes a ref cell, the target
+        # binds the same cell (WP: `$collection = &self::$collections[$path]`)
+        case eval(path_expr, env, interp) do
+          {{:val, cur}, _, _} ->
+            {id, interp2} = new_ref(cur, interp)
+            {env2, interp3} = assign(path_expr, {:ref, id}, env, interp2)
+            {env3, interp4} = assign(target, {:ref, id}, env2, interp3)
+            {{:val, deref({:ref, id}, interp4)}, env3, interp4}
+
+          {{:unwind, _} = u, env2, interp2} ->
+            {u, env2, interp2}
+        end
+
+      {:static_prop, _, _} = spath ->
+        case eval(spath, env, interp) do
+          {{:val, cur}, _, _} ->
+            {id, interp2} = new_ref(cur, interp)
+            {env2, interp3} = assign(spath, {:ref, id}, env, interp2)
+            {env3, interp4} = assign(target, {:ref, id}, env2, interp3)
+            {{:val, deref({:ref, id}, interp4)}, env3, interp4}
+
+          {{:unwind, _} = u, env2, interp2} ->
+            {u, env2, interp2}
+        end
+
+      {:prop, _, _} = ppath ->
+        case eval(ppath, env, interp) do
+          {{:val, cur}, _, _} ->
+            {id, interp2} = new_ref(cur, interp)
+            {env2, interp3} = assign(ppath, {:ref, id}, env, interp2)
+            {env3, interp4} = assign(target, {:ref, id}, env2, interp3)
+            {{:val, deref({:ref, id}, interp4)}, env3, interp4}
+
+          {{:unwind, _} = u, env2, interp2} ->
+            {u, env2, interp2}
+        end
 
       {:new, _, _} ->
         {{:unwind, {:fatal, "cannot take reference of new expression"}}, env, interp}
@@ -1512,8 +1549,16 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:method_call, obj_e, name_e, args, nullsafe?}, env, interp) do
-    {{:val, obj_ref}, env2, interp2} = eval(obj_e, env, interp)
+    case eval(obj_e, env, interp) do
+      {{:val, obj_ref}, env2, interp2} ->
+        method_call_on(obj_ref, name_e, args, nullsafe?, env2, interp2, env)
 
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
+    end
+  end
+
+  defp method_call_on(obj_ref, name_e, args, nullsafe?, env2, interp2, _env) do
     case obj_ref do
       :null when nullsafe? ->
         {{:val, :null}, env2, interp2}
@@ -2930,7 +2975,9 @@ defmodule PhpBeam.Eval do
                 plain -> make_ref_cell(plain, interp)
               end
             else
-              {v, interp}
+              # ref cells arriving through arrays (do_action_ref_array)
+              # deref for by-value params — php copies the current value
+              {deref(v, interp), interp}
             end
 
           do_bind_params(rest, more, fenv, env, interp2, [{name, v2} | acc])
@@ -4300,26 +4347,40 @@ defmodule PhpBeam.Eval do
   defp path_set(path, key, v, env, interp) do
     {container, env2, interp2} = path_get(path, env, interp)
 
-    new_container =
+    {new_container, interp2b} =
       case container do
         {:array, arr} ->
-          case PArray.put(arr, key, v) do
-            {:ok, arr2} -> {:array, arr2}
+          case put_ref_aware(arr, key, v, interp2) do
+            {:ok, arr2, interp2c} -> {{:array, arr2}, interp2c}
             {:error, msg} -> throw_set_error(msg, env2, interp2)
           end
 
         :null ->
-          {:array, PArray.from_pairs([{key, v}])}
+          {{:array, PArray.from_pairs([{key, v}])}, interp2}
 
         {:string, s} ->
-          string_offset_write(s, key, v, env2, interp2)
+          {string_offset_write(s, key, v, env2, interp2), interp2}
 
         _ ->
-          warn(env2, interp2, "Cannot use a scalar value as an array")
-          container
+          i_w = warn(env2, interp2, "Cannot use a scalar value as an array")
+          {container, i_w}
       end
 
-    path_put(path, new_container, env2, interp2)
+    path_put(path, new_container, env2, interp2b)
+  end
+
+  # php: writing to an array element that IS a reference writes the cell
+  defp put_ref_aware(arr, k, v, interp) do
+    case PArray.fetch(arr, k) do
+      {:ok, {:ref, id}} ->
+        {:ok, arr, %{interp | refs: Map.put(interp.refs, id, v)}}
+
+      _ ->
+        case PArray.put(arr, k, v) do
+          {:ok, arr2} -> {:ok, arr2, interp}
+          e -> e
+        end
+    end
   end
 
   defp throw_set_error(msg, _env, _interp), do: throw({:set_error, msg})
@@ -4355,16 +4416,28 @@ defmodule PhpBeam.Eval do
   defp offset_index({:string, s}), do: {false, {:string, s}}
   defp offset_index(v), do: {true, v}
 
-  # read the container at a path head (variable) — paths are var-rooted
-  defp path_get([{:var, name} | _], env, interp) do
-    case Env.lookup(env, interp, name) do
-      {:ok, v} -> {deref_container(v, interp), env, interp}
-      {:static, key, sname} -> {Map.get(interp.statics[key], sname, :null), env, interp}
-      :undefined -> {:null, env, interp}
-    end
+  # read the value AT the full path (walking index segments; dynamic keys
+  # evaluate with the live env — `$d[$k]["n"]` writes used to no-op on
+  # non-literal keys)
+  defp path_get([{:var, name} | rest], env, interp) do
+    base =
+      case Env.lookup(env, interp, name) do
+        {:ok, v} -> deref_container(v, interp)
+        {:static, key, sname} -> Map.get(interp.statics[key] || %{}, sname, :null)
+        :undefined -> :null
+      end
+
+    walk_path_get(base, rest, env, interp)
   end
 
   defp path_get([], _env, interp), do: {:null, nil, interp}
+
+  defp walk_path_get(base, [], env, interp), do: {base, env, interp}
+
+  defp walk_path_get(base, [{:index_expr, e} | rest], env, interp) do
+    {{:val, k}, env2, interp2} = eval(e, env, interp)
+    walk_path_get(read_index_raw(base, deref(k, interp2)), rest, env2, interp2)
+  end
 
   defp deref_container({:ref, id}, interp), do: Map.get(interp.refs, id, :null)
   defp deref_container(v, _), do: v
@@ -4375,57 +4448,44 @@ defmodule PhpBeam.Eval do
   defp path_put([{:var, name}], v, env, interp), do: assign({:var, name}, v, env, interp)
 
   defp path_put([{:var, name} | rest], v, env, interp) do
-    {base, _, _} = path_get([{:var, name}], env, interp)
-    updated = update_path(base, rest, v)
-    assign({:var, name}, updated, env, interp)
+    base =
+      case Env.lookup(env, interp, name) do
+        {:ok, bv} -> deref_container(bv, interp)
+        {:static, key, sname} -> Map.get(interp.statics[key] || %{}, sname, :null)
+        :undefined -> :null
+      end
+
+    {updated, env2, interp2} = update_path_env(base, rest, v, env, interp)
+    assign({:var, name}, updated, env2, interp2)
   end
 
-  defp update_path(base, [{:index_expr, idx_expr} | rest], v) do
-    # constant-expression index within a nested write: evaluate statically when literal
-    idx = literal_idx(idx_expr)
-    update_at(base, idx, rest, v)
-  end
+  defp update_path_env(base, [], v, _env, _interp), do: {v, nil, nil}
 
-  defp literal_idx({:int, n}), do: {:int, n}
-  defp literal_idx({:string, s}), do: {:string, s}
-  defp literal_idx({:var, _}), do: nil
-  defp literal_idx(_), do: nil
+  defp update_path_env(base, [{:index_expr, e} | rest], v, env, interp) do
+    {{:val, k}, env2, interp2} = eval(e, env, interp)
+    k2 = deref(k, interp2 || interp)
+    inner = read_index_raw(base, k2)
+    {inner2, env3, interp3} = update_path_env(inner, rest, v, env2, interp2)
+    e3 = env3 || env2
+    i3 = interp3 || interp2
 
-  defp update_at(base, nil, _rest, _v), do: base
+    {new_base, i3b} =
+      case base do
+        {:array, arr} ->
+          case put_ref_aware(arr, k2, inner2, i3) do
+            {:ok, arr2, i3c} -> {{:array, arr2}, i3c}
+            _ -> {base, i3}
+          end
 
-  defp update_at(base, idx, [{:index_expr, next_idx}], v) do
-    inner = read_index_raw(base, idx)
-    updated = update_at(inner, literal_idx(next_idx), [], v)
+        _ ->
+          # php autovivifies: $x[k][k2] on null/scalar becomes an array
+          case PArray.put(PArray.new(), k2, inner2) do
+            {:ok, arr2} -> {:array, arr2}
+            _ -> base
+          end
+      end
 
-    case {base, idx} do
-      {{:array, arr}, k} ->
-        case PArray.put(arr, k, updated) do
-          {:ok, arr2} -> {:array, arr2}
-          _ -> base
-        end
-
-      _ ->
-        base
-    end
-  end
-
-  defp update_at(base, idx, [], v) do
-    case {base, idx} do
-      {{:array, arr}, k} ->
-        case PArray.put(arr, k, v) do
-          {:ok, arr2} -> {:array, arr2}
-          _ -> base
-        end
-
-      {_, nil} ->
-        case base do
-          {:array, arr} -> {:array, PArray.push(arr, v)}
-          _ -> {:array, PArray.push(PArray.new(), v)}
-        end
-
-      _ ->
-        base
-    end
+    {new_base, e3, i3b}
   end
 
   # write into a specific key of the path root (foreach by-ref);
