@@ -7,6 +7,8 @@ defmodule PhpBeam.Enums do
   """
 
   alias PhpBeam.{Classes, Eval, PArray, Value}
+  # class decl struct lives in the table module (Classes is only a facade)
+  alias PhpBeam.Classes.Table
 
   def register(decl, interp) do
     key = Classes.full_key_of(decl.name, interp)
@@ -86,7 +88,7 @@ defmodule PhpBeam.Enums do
         end
       end)
 
-    struct!(Classes, %{
+    struct!(Table, %{
       name: decl.name,
       kind: :enum,
       consts: consts,
