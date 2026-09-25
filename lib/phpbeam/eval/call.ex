@@ -39,7 +39,7 @@ defmodule PhpBeam.Eval.Call do
       {:const, parts, fq} ->
         name = Enum.join(parts, "\\") |> String.downcase()
 
-        case higher_order(name, args, env, interp) do
+        case engine_ho(name, args, env, interp) do
           :not_mine ->
             call_named(parts, name, fq, args, env, interp)
 
@@ -1048,10 +1048,126 @@ defmodule PhpBeam.Eval.Call do
   defp make_ref_cell(v, i), do: Eval.make_ref_cell(v, i)
   defp start_generator(a, b, c, d), do: Eval.start_generator(a, b, c, d)
   defp warn(a, b, c), do: Eval.warn(a, b, c)
-  defp higher_order(n, a, e, i), do: Eval.higher_order(n, a, e, i)
   defp assign(t, v, e, i), do: Eval.assign(t, v, e, i)
   defp decl_site_of(a, b), do: Eval.decl_site_of(a, b)
   defp method_violation(a, b, c, d), do: Eval.method_violation(a, b, c, d)
   defp pop_class_scope(a, b, c), do: Eval.pop_class_scope(a, b, c)
   defp push_class_scope(a, b), do: Eval.push_class_scope(a, b)
+
+  # ── engine introspection ho functions (live HERE, not the registry) ──
+  # eval() is lexer+parser+exec; func_get_args family reads the call frame's
+  # argument snapshot. Both need engine internals no builtin domain should own.
+
+  defp engine_ho(name, args, env, interp) do
+    if name in ~w(eval func_get_args func_get_arg func_num_args) do
+      case resolve_args(eval_args(args, env, interp, false)) do
+        {:ok, vals, it} -> engine_fn(name, vals, env, it || interp)
+        {:unwind, u, it} -> {{:unwind, u}, env, it || interp}
+      end
+    else
+      :not_mine
+    end
+  end
+
+  defp engine_fn("eval", vals, env, interp) do
+    case vals do
+      [{:string, code} | _] -> eval_code(code, env, interp)
+      _ -> {{:val, :null}, env, interp}
+    end
+  end
+
+  defp eval_code(code, env, interp) do
+    pseudo = Eval.eval_file(interp) <> "(#{interp.cur_line}) : eval()'d code"
+
+    with {:ok, toks} <- PhpBeam.Lexer.tokenize("<?php " <> code),
+         {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
+      i2 = %{interp | file_stack: [pseudo | interp.file_stack]}
+
+      case Interp.exec_stmts(stmts, env, i2) do
+        {:ok, e2, i3} ->
+          {{:val, :null}, e2, Eval.pop_file(i3)}
+
+        {{:unwind, {:return, v}}, _, i3} ->
+          {{:val, v}, env, Eval.pop_file(i3)}
+
+        {{:unwind, _} = u, e2, i3} ->
+          {u, e2, i3}
+      end
+    else
+      {:error, msg, line} ->
+        {{:unwind, {:parse_error, msg, pseudo, line}}, env, interp}
+    end
+  end
+
+  defp engine_fn("func_num_args", _vals, env, interp) do
+    case fn_context("func_num_args", env, interp) do
+      nil -> {{:val, {:int, length(env.args)}}, env, interp}
+      err -> err
+    end
+  end
+
+  defp engine_fn("func_get_args", _vals, env, interp) do
+    case fn_context("func_get_args", env, interp) do
+      nil ->
+        arr = PArray.from_pairs(Enum.map(env.args, &{nil, &1}))
+        {{:val, {:array, arr}}, env, interp}
+
+      err ->
+        err
+    end
+  end
+
+  defp engine_fn("func_get_arg", [{:int, n} | _], env, interp) do
+    case fn_context("func_get_arg", env, interp) do
+      nil ->
+        cond do
+          n < 0 ->
+            native_throw(
+              "ValueError",
+              "func_get_arg(): Argument #1 ($position) must be greater than or equal to 0",
+              env,
+              interp,
+              "func_get_arg(#{n})"
+            )
+
+          n >= length(env.args) ->
+            native_throw(
+              "ValueError",
+              "func_get_arg(): Argument #1 ($position) must be less than the number of the arguments passed to the currently executed function",
+              env,
+              interp,
+              "func_get_arg(#{n})"
+            )
+
+          true ->
+            {{:val, Enum.at(env.args, n)}, env, interp}
+        end
+
+      err ->
+        err
+    end
+  end
+
+  defp engine_fn("func_get_arg", _, env, interp), do: {{:val, {:bool, false}}, env, interp}
+
+  defp fn_context(name, env, interp) do
+    if env.function == nil do
+      native_throw(
+        "Error",
+        "#{name}() must be called from a function context",
+        env,
+        interp,
+        "#{name}()"
+      )
+    else
+      nil
+    end
+  end
+
+  defp native_throw(class, msg, env, interp, frame_display) do
+    interp2 = Interp.push_frame(interp, frame_display)
+    # materialize eagerly: catch bindings and get_class() expect a real object
+    {obj_ref, interp3} = materialize_native({:native_error, class, msg}, interp2)
+    {{:unwind, {:php_throw, obj_ref}}, env, interp3}
+  end
 end

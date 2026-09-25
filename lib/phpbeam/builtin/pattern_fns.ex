@@ -26,6 +26,22 @@ defmodule PhpBeam.Builtin.PatternFns do
       Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []})
     end)
     |> Map.put("preg_replace", %{fun: fn v, i, _c -> preg_replace(v, i) end, refs: [4]})
+    |> Map.merge(ho_entries())
+  end
+
+  # ── higher-order builtins (registry v2 ho: entries) ──
+  # preg_match/match_all/replace_callback receive RAW argument ASTs: $matches
+  # is written back through the lvalue gateway, PREG_* flag args evaluate here
+
+  defp ho_entries do
+    nofun = fn _v, i, _c -> {:ok, :null, i} end
+    ho = fn fun -> %{fun: nofun, refs: [], ho: %{args: :raw, fun: fun}} end
+
+    %{
+      "preg_match" => ho.(&ho_impl_preg_match/3),
+      "preg_match_all" => ho.(&ho_impl_preg_match_all/3),
+      "preg_replace_callback" => ho.(&ho_impl_preg_replace_callback/3)
+    }
   end
 
   ## ───────────────────────── preg_replace ─────────────────────────
@@ -286,4 +302,186 @@ defmodule PhpBeam.Builtin.PatternFns do
   defp preg_quote(_, i), do: {:ok, {:string, ""}, i}
 
   defp preg_last_error(_, i), do: {:ok, {:int, 0}, i}
+
+  defp ho_impl_preg_match([pat_arg, subj_arg | rest], env, interp) do
+    {{:val, pv}, _, i1} = PhpBeam.Eval.eval(pat_arg, env, interp)
+    {{:val, sv}, _, i2} = PhpBeam.Eval.eval(subj_arg, env, i1)
+    flags = int_arg(rest, 1, env, i2)
+    offset = int_arg(rest, 2, env, i2)
+
+    with {:string, p} <- pv,
+         {:string, s} <- sv,
+         {:ok, %Pattern{} = pat} <- Pattern.parse(p) do
+      case Pattern.run_at(pat, s, max(0, offset)) do
+        {:ok, pairs, _next} ->
+          row = Pattern.row(pairs, pat, s, flags)
+          {env2, i3} = assign_matches(rest, 0, {:array, row}, env, i2)
+          {{:val, {:int, 1}}, env2, i3}
+
+        _ ->
+          {env2, i3} = assign_matches(rest, 0, {:array, PArray.new()}, env, i2)
+          {{:val, {:int, 0}}, env2, i3}
+      end
+    else
+      {:error, msg} ->
+        i3 = PhpBeam.Eval.warn(env, i2, "preg_match(): #{msg}")
+        {{:val, {:bool, false}}, env, i3}
+
+      _ ->
+        {{:val, {:bool, false}}, env, i2}
+    end
+  end
+
+  defp ho_impl_preg_match_all([pat_arg, subj_arg | rest], env, interp) do
+    {{:val, pv}, _, i1} = PhpBeam.Eval.eval(pat_arg, env, interp)
+    {{:val, sv}, _, i2} = PhpBeam.Eval.eval(subj_arg, env, i1)
+    flags = int_arg(rest, 1, env, i2)
+    set_order? = Bitwise.band(flags, 2) != 0
+
+    with {:string, p} <- pv,
+         {:string, s} <- sv,
+         {:ok, %Pattern{} = pat} <- Pattern.parse(p) do
+      case Pattern.scan_all(pat, s, 0) do
+        {:ok, all} ->
+          row_count = length(all)
+
+          arr =
+            if set_order? do
+              rows = Enum.map(all, &{:array, Pattern.row(&1, pat, s, flags)})
+              PArray.from_pairs(Enum.map(rows, &{nil, &1}))
+            else
+              # PATTERN_ORDER: matches[0] = fulls, [i] = group i-1 per match
+              fulls =
+                Enum.map(all, fn pairs -> {nil, {:string, Pattern.capture_bin(s, pairs, 0)}} end)
+
+              groups =
+                for gi <- 1..pat.ngroups do
+                  vals =
+                    Enum.map(all, fn pairs ->
+                      {cs, cl} = Pattern.span(pairs, gi)
+
+                      if cs >= 0,
+                        do: {nil, {:string, binary_part(s, cs, cl)}},
+                        else: {nil, {:string, ""}}
+                    end)
+
+                  {{:int, gi}, {:array, PArray.from_pairs(vals)}}
+                end
+
+              named =
+                for {gi, name} <- pat.names do
+                  vals =
+                    Enum.map(all, fn pairs ->
+                      {cs, cl} = Pattern.span(pairs, gi)
+
+                      if cs >= 0,
+                        do: {nil, {:string, binary_part(s, cs, cl)}},
+                        else: {nil, {:string, ""}}
+                    end)
+
+                  {{:string, name}, {:array, PArray.from_pairs(vals)}}
+                end
+
+              PArray.from_pairs(
+                [{{:int, 0}, {:array, PArray.from_pairs(fulls)}}] ++ groups ++ named
+              )
+            end
+
+          {env2, i3} = assign_matches(rest, 0, {:array, arr}, env, i2)
+          {{:val, {:int, row_count}}, env2, i3}
+
+        _ ->
+          {env2, i3} = assign_matches(rest, 0, {:array, PArray.new()}, env, i2)
+          {{:val, {:int, 0}}, env2, i3}
+      end
+    else
+      {:error, msg} ->
+        i3 = PhpBeam.Eval.warn(env, i2, "preg_match_all(): #{msg}")
+        {{:val, {:bool, false}}, env, i3}
+
+      _ ->
+        {{:val, {:bool, false}}, env, i2}
+    end
+  end
+
+  defp ho_impl_preg_replace_callback([pat_arg, cb_arg, subj_arg | rest], env, interp) do
+    {{:val, pv}, _, i1} = PhpBeam.Eval.eval(pat_arg, env, interp)
+    {{:val, sv}, _, i2} = PhpBeam.Eval.eval(subj_arg, env, i1)
+    limit = int_arg(rest, 0, env, i2, -1)
+
+    with {:string, p} <- pv,
+         {:string, s} <- sv,
+         {:ok, %Pattern{} = pat} <- Pattern.parse(p) do
+      {out, _n} =
+        cb_replace_loop(s, pat, cb_arg, limit, 0, 0, [], env, i2)
+
+      {{:val, {:string, IO.iodata_to_binary(out)}}, env, i2}
+    else
+      {:error, msg} ->
+        i3 = PhpBeam.Eval.warn(env, i2, "preg_replace_callback(): #{msg}")
+        {{:val, {:bool, false}}, env, i3}
+
+      _ ->
+        {{:val, :null}, env, i2}
+    end
+  end
+
+  defp cb_replace_loop(subject, pat, cb_arg, limit, pos, count, acc, env, interp) do
+    if limit >= 0 and count >= limit do
+      {Enum.reverse([binary_part(subject, pos, byte_size(subject) - pos) | acc]), count}
+    else
+      case Pattern.run_at(pat, subject, pos) do
+        {:ok, pairs, next} ->
+          {s, l} = hd(pairs)
+          pre = binary_part(subject, pos, s - pos)
+          row = {:array, Pattern.row(pairs, pat, subject, 0)}
+
+          piece =
+            case PhpBeam.Eval.call_cb_raw(cb_arg, [row], env, interp) do
+              {{:val, v}, _, _} -> PhpBeam.Value.cast_string_unsafe(v)
+              _ -> ""
+            end
+
+          cb_replace_loop(
+            subject,
+            pat,
+            cb_arg,
+            limit,
+            max(next, pos + 1),
+            count + 1,
+            [piece, pre | acc],
+            env,
+            interp
+          )
+
+        _ ->
+          {Enum.reverse([binary_part(subject, pos, byte_size(subject) - pos) | acc]), count}
+      end
+    end
+  end
+
+  # bare-AST arguments (the raw dispatch branch unwraps {:arg, ...}):
+  # evaluate non-ref args like PREG_* constants; write $matches via lvalue
+
+  defp int_arg(args, n, env, interp, default \\ 0)
+
+  defp int_arg(args, n, env, interp, default) do
+    case Enum.at(args, n) do
+      nil ->
+        default
+
+      e ->
+        case PhpBeam.Eval.eval(e, env, interp) do
+          {{:val, {:int, v}}, _, _} -> v
+          _ -> default
+        end
+    end
+  end
+
+  defp assign_matches(args, n, value, env, interp) do
+    case Enum.at(args, n) do
+      nil -> {env, interp}
+      lval -> PhpBeam.Eval.assign(lval, value, env, interp)
+    end
+  end
 end

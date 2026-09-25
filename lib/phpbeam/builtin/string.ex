@@ -69,6 +69,7 @@ defmodule PhpBeam.Builtin.StringFns do
     )
     # str_replace's 4th arg is &$count — the ref_call result writes it back
     |> Map.update!("str_replace", &%{&1 | refs: [3]})
+    |> Map.merge(ho_entries())
   end
 
   defp s({:string, s}), do: s
@@ -652,5 +653,104 @@ defmodule PhpBeam.Builtin.StringFns do
       [tok, rest] -> {tok, rest}
       [tok] -> {tok, ""}
     end
+  end
+
+  # ── higher-order builtins (registry v2 ho: entries) ──
+  # parse_str(qs) writes to the CALLING scope, parse_str(qs, $arr) to the
+  # lvalue — both need raw argument ASTs
+
+  defp ho_entries do
+    nofun = fn _v, i, _c -> {:ok, :null, i} end
+
+    %{
+      "parse_str" => %{
+        fun: nofun,
+        refs: [],
+        ho: %{args: :raw, fun: &ho_impl_parse_str/3}
+      }
+    }
+  end
+
+  defp ho_impl_parse_str([q_arg | rest], env, interp) do
+    {{:val, qv}, _, i1} = PhpBeam.Eval.eval(q_arg, env, interp)
+    parsed = parse_query(Value.cast_string_unsafe(qv))
+
+    case rest do
+      [] ->
+        # global scope writes land in interp.globals — thread BOTH returns
+        {env2, interp2} =
+          Enum.reduce(parsed, {env, i1}, fn {k, v}, {e, it} ->
+            {:ok, e2, it2} = Env.bind_var(e, it, k, v)
+            {e2, it2}
+          end)
+
+        {{:val, :null}, env2, interp2}
+
+      [arr_lval | _] ->
+        arr = PArray.from_pairs(Enum.map(parsed, fn {k, v} -> {{:string, k}, v} end))
+        {env2, i2} = PhpBeam.Eval.assign(arr_lval, {:array, arr}, env, i1)
+        {{:val, :null}, env2, i2}
+    end
+  end
+
+  # php nests bracket keys: b[0]=x&c[y]=z
+
+  defp parse_query(q) do
+    # duplicate base keys (arr[0]=..&arr[q]=..) merge into ONE tree
+    URI.decode_query(q)
+    |> Enum.reduce(PArray.new(), fn {k, v}, acc ->
+      case Regex.split(~r/\[|\]/, k, trim: true) do
+        [base] ->
+          {:ok, a2} = PArray.put(acc, {:string, base}, {:string, v})
+          a2
+
+        [base | path] ->
+          inner =
+            case PArray.fetch(acc, {:string, base}) do
+              {:ok, {:array, in2}} -> in2
+              _ -> PArray.new()
+            end
+
+          {:ok, a2} =
+            PArray.put(acc, {:string, base}, {:array, put_path(inner, path, {:string, v})})
+
+          a2
+      end
+    end)
+    |> PArray.to_pairs()
+    |> Enum.map(fn {k, v} -> {k, v} end)
+  end
+
+  defp put_path(arr, [last], v) do
+    if last == "" do
+      {:ok, a2} = PArray.push(arr, v)
+      a2
+    else
+      case PArray.fetch(arr, {:string, last}) do
+        {:ok, {:array, inner}} ->
+          {:ok, a2} = PArray.put(arr, {:string, last}, {:array, put_path(inner, [], v)})
+          a2
+
+        _ ->
+          {:ok, a2} = PArray.put(arr, {:string, last}, v)
+          a2
+      end
+    end
+  end
+
+  defp put_path(arr, [head | rest], v) do
+    inner =
+      case PArray.fetch(arr, {:string, head}) do
+        {:ok, {:array, in2}} -> in2
+        _ -> PArray.new()
+      end
+
+    {:ok, a2} = PArray.put(arr, {:string, head}, {:array, put_path(inner, rest, v)})
+    a2
+  end
+
+  defp put_path(arr, [], v) do
+    {:ok, a2} = PArray.push(arr, v)
+    a2
   end
 end
