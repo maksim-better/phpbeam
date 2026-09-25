@@ -226,19 +226,8 @@ defmodule PhpBeam.Builtin.VarFns do
     end
   end
 
-  defp get_class_methods(vals, i) do
-    case vals do
-      [{:object, %{class: cls}} | _] ->
-        methods =
-          cls
-          |> then(fn _ -> [] end)
-
-        {:ok, {:array, PhpBeam.PArray.new()}, i}
-
-      _ ->
-        {:ok, {:array, PhpBeam.PArray.new()}, i}
-    end
-  end
+  # stub: always empty until method listing lands (php returns names)
+  defp get_class_methods(_vals, i), do: {:ok, {:array, PhpBeam.PArray.new()}, i}
 
   defp spl_object_id(vals, i) do
     case vals do

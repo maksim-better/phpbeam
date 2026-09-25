@@ -85,11 +85,4 @@ defmodule PhpBeam.Objects do
   end
 
   defp native_get(obj, name), do: PArray.get(obj.props, {:string, name}, :null)
-
-  # ───────────────────────── type checks (from Classes) ─────────────────────────
-
-  def instance_of?(interp, {:object, %{class: key}}, target_key),
-    do: Classes.is_a?(interp, key, target_key)
-
-  def instance_of?(_interp, _, _target_key), do: false
 end

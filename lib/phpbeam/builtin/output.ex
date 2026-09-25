@@ -353,13 +353,6 @@ defmodule PhpBeam.Builtin.OutputFns do
     end
   end
 
-  def json_encode_ordered({:object, %{props: props}}, interp) do
-    "{" <>
-      Enum.map_join(props, ",", fn {k, v} ->
-        Jason.encode!(k) <> ":" <> json_encode_ordered(v, interp)
-      end) <> "}"
-  end
-
   def json_encode_ordered(_, _), do: "null"
 
   defp json_term({:ref, _} = r, interp), do: json_term(PhpBeam.Eval.deref(r, interp), interp)

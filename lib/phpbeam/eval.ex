@@ -4088,9 +4088,6 @@ defmodule PhpBeam.Eval do
       {{:val, {:string, name}}, _e, i} ->
         {:ok, resolve_class_string(name, i)}
 
-      {{:val, {:object, %{class: key}}}, _e, _i} ->
-        {:ok, key}
-
       _ ->
         {:error, "class name must be a string"}
     end
