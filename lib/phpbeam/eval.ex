@@ -2246,8 +2246,8 @@ defmodule PhpBeam.Eval do
     |> normalize_spread()
   end
 
-  # an unwind result rides at the head of the vals list
-  defp normalize_spread([{:unwind, _} = u | vals]), do: {[u | vals], nil, nil}
+  # the reduce_while arms already return {vals, env, interp} with the real
+  # state in both shapes — the old [u|vals] head leaked nil env/interp
   defp normalize_spread({vals, env, interp}), do: {vals, env, interp}
 
   defp do_bind_params(
