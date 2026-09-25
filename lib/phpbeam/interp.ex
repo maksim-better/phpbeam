@@ -279,6 +279,52 @@ defmodule PhpBeam.Interp do
   @doc "placeholder interp for contexts without one"
   def new_stub, do: %__MODULE__{}
 
+  # ───────────────────────── pooling (L6/L8 seam) ─────────────────────────
+  # Boot-scope fields survive a fork: class/function/const tables, ini and
+  # the spl_autoload chain — the payoff of pre-warming (run vendor/autoload
+  # once, fork per request). Everything else is request-scoped (php's
+  # shared-nothing): output/ob, refs, objects, resources, statics, call
+  # stack, included-files (require_once), sapi area, generator contexts.
+  @boot_fields [:classes, :functions, :consts, :ini, :autoload_fns]
+
+  @doc """
+  Fork a pre-warmed interp for one request: boot fields are shared
+  (persistent-data structures — copy-on-write), every request-scoped field
+  resets to its fresh value (incl. the std 0/1/2 resources).
+  """
+  def fork_request(%__MODULE__{} = boot) do
+    Enum.reduce(@boot_fields, %__MODULE__{}, fn field, acc ->
+      %{acc | field => Map.get(boot, field)}
+    end)
+  end
+
+  @doc "warm a boot interp by running files (vendor/autoload); output discarded"
+  def warm(files) when is_list(files) do
+    {_, _, interp} =
+      Enum.reduce(files, register_builtins(%__MODULE__{}), fn file, acc ->
+        case File.read(file) do
+          {:ok, src} ->
+            {_, _, it} = run_quiet_with(src, file, acc)
+            it
+
+          _ ->
+            acc
+        end
+      end)
+
+    interp
+  end
+
+  defp run_quiet_with(src, file, interp) do
+    with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
+         {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
+      {_, _, it} = exec_stmts(stmts, Env.global_scope([]), interp)
+      {"", 0, it}
+    else
+      _ -> {"", 0, interp}
+    end
+  end
+
   defp finish(interp, code) do
     {IO.iodata_to_binary(Enum.reverse(interp.out)), code, interp}
   end
