@@ -276,124 +276,7 @@ defmodule PhpBeam.Eval do
   end
 
   # property writes flow through the object registry so every holder sees them
-  def assign({:prop, obj_e, name_e}, v, env, interp) do
-    {{:val, obj_val}, env2, interp2} = eval(obj_e, env, interp)
-
-    case obj_val do
-      {:object, _} = obj_ref ->
-        obj = get_object(interp2, obj_ref)
-        key = String.downcase(prop_name_string(name_e, env2, interp2))
-
-        declared =
-          PhpBeam.Classes.find_prop(interp2, obj.class, key) != nil or
-            PArray.has_key?(obj.props, {:string, key})
-
-        readonly? = readonly_prop?(interp2, obj, key)
-        initialized = PArray.has_key?(obj.props, {:string, key})
-
-        cond do
-          declared and readonly? and initialized ->
-            msg =
-              "Cannot modify readonly property #{prop_declarer_display(interp2, obj, key)}::$#{key}"
-
-            {obj_ref, i3} = materialize_native({:native_error, "Error", msg}, interp2)
-            throw({:readonly_throw, obj_ref, env2, i3})
-
-          declared and readonly? and not readonly_init_scope?(interp2, obj, key, env2) ->
-            # php 8.4 wording for out-of-scope INITIALIZATION attempts
-            scope =
-              case env_scope_class(env2) do
-                nil -> "global scope"
-                sc -> "scope #{display_class(interp2, sc)}"
-              end
-
-            msg =
-              "Cannot modify protected(set) readonly property " <>
-                "#{prop_declarer_display(interp2, obj, key)}::$#{key} from #{scope}"
-
-            {obj_ref, i3} = materialize_native({:native_error, "Error", msg}, interp2)
-            throw({:readonly_throw, obj_ref, env2, i3})
-
-          declared ->
-            case PArray.put(obj.props, {:string, key}, v) do
-              {:ok, props2} ->
-                {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
-
-              {:error, _} ->
-                {env2, interp2}
-            end
-
-          true ->
-            case PhpBeam.Classes.find_method(interp2, obj.class, "__set") do
-              nil ->
-                case PArray.put(obj.props, {:string, key}, v) do
-                  {:ok, props2} -> {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
-                  _ -> {env2, interp2}
-                end
-
-              m ->
-                gkey = {elem(obj_ref, 1), key}
-
-                if MapSet.member?(interp2.set_guards, gkey) do
-                  # php: writing the same property inside its own __set does
-                  # not re-dispatch — the dynamic property is created directly
-                  case PArray.put(obj.props, {:string, key}, v) do
-                    {:ok, props2} -> {env2, put_object(interp2, obj_ref, %{obj | props: props2})}
-                    _ -> {env2, interp2}
-                  end
-                else
-                  margs = [
-                    {:arg, {:lit_val, {:string, key}}, false, nil},
-                    {:arg, {:lit_val, v}, false, nil}
-                  ]
-
-                  it3 = %{interp2 | set_guards: MapSet.put(interp2.set_guards, gkey)}
-
-                  case call_php_method(obj_ref, m, margs, env2, it3) do
-                    {{:val, _}, _, i4} ->
-                      {env2, %{i4 | set_guards: MapSet.delete(i4.set_guards, gkey)}}
-
-                    _ ->
-                      {env2, interp2}
-                  end
-                end
-            end
-        end
-
-      _ ->
-        {env2,
-         warn(
-           env2,
-           interp2,
-           "Attempt to assign property on value of type #{PhpBeam.Value.gettype(obj_val)}"
-         )}
-    end
-  end
-
-  def assign({:static_prop, cname_e, name_e}, v, env, interp) do
-    case class_key_of(cname_e, env, interp) do
-      {:ok, key} ->
-        name = static_prop_name(name_e, env, interp)
-
-        case PhpBeam.Classes.find_prop(interp, key, name) do
-          {:ok, prop} when prop.static? ->
-            skey = static_props_key(key)
-            statics = Map.get(interp.statics, skey, %{})
-            {env, put_in(interp.statics[skey], Map.put(statics, prop.name, v))}
-
-          _ ->
-            {env, warn(env, interp, "Access to undeclared static property")}
-        end
-
-      {:error, _} ->
-        {env, interp}
-    end
-  end
-
-  # a prop is readonly if its declaration says so OR the whole class is
-  # `readonly class` (all instance props become readonly); inherited props
-  # consult their DECLARING class
-  defp readonly_prop?(interp, obj, key) do
+  def readonly_prop?(interp, obj, key) do
     case PhpBeam.Classes.get_class(interp, obj.class) do
       %{kind: :class} = c ->
         mods = Map.get(c, :modifiers) || []
@@ -424,7 +307,7 @@ defmodule PhpBeam.Eval do
 
   # readonly initialization is legal from the declaring class OR any
   # subclass (php: any method of the hierarchy touching the instance)
-  defp readonly_init_scope?(interp, obj, key, env) do
+  def readonly_init_scope?(interp, obj, key, env) do
     case env_scope_class(env) do
       nil ->
         false
@@ -437,7 +320,7 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  defp env_scope_class(env) do
+  def env_scope_class(env) do
     case env do
       %{scope_class: sc} when is_binary(sc) -> sc
       _ -> nil
@@ -1242,147 +1125,7 @@ defmodule PhpBeam.Eval do
   already has params bound; nothing executes until the first resume (php
   generators are lazy).
   """
-  def start_generator(fenv, body, env, interp) do
-    me = self()
-
-    pid =
-      spawn(fn ->
-        receive do
-          {:gen_start, driver, ii} ->
-            ctx = %{
-              driver: driver,
-              key: 0,
-              file: top_file(ii),
-              ns: ii.ns,
-              uses: ii.uses
-            }
-
-            i0 = %{ii | gen_ctx: ctx}
-
-            case Interp.exec_stmts(body, fenv, i0) do
-              {:ok, _, i2} ->
-                send(
-                  i2.gen_ctx.driver,
-                  {:gen_done, :null, strip_gen(strip_def_file(i2, i2.gen_ctx.file))}
-                )
-
-              {{:unwind, {:return, v}}, _, i2} ->
-                send(
-                  i2.gen_ctx.driver,
-                  {:gen_done, v, strip_gen(strip_def_file(i2, i2.gen_ctx.file))}
-                )
-
-              {{:unwind, u}, _, i2} ->
-                send(
-                  i2.gen_ctx.driver,
-                  {:gen_throw, u, strip_gen(strip_def_file(i2, i2.gen_ctx.file))}
-                )
-            end
-        end
-      end)
-
-    {obj_ref, interp2} = make_instance(interp, "generator")
-    obj = get_object(interp2, obj_ref)
-
-    st = %{pid: pid, started: false, done: false, k: :null, v: :null, ret: :null}
-
-    props =
-      case PArray.put(obj.props, {:string, "gen_state"}, {:gen_state, st}) do
-        {:ok, p2} -> p2
-        _ -> obj.props
-      end
-
-    {{:val, obj_ref}, env, put_object(interp2, obj_ref, %{obj | props: props})}
-  end
-
-  @doc """
-  Resumes a Generator object. `:start` boots a fresh generator to its first
-  yield; `:null` is next(); any other value is send(). Returns
-  `{:yielded, k, v, interp}` | `{:done, ret, interp}` | `{:thrown, u, interp}`
-  with the latest interpreter state.
-  """
-  def gen_resume({:object, _} = obj_ref, send_v, interp) do
-    obj = get_object(interp, obj_ref)
-
-    case PArray.get(obj.props, {:string, "gen_state"}) do
-      {:gen_state, st} ->
-        cond do
-          st.done ->
-            {:done, st.ret, interp}
-
-          st.pid == nil ->
-            {:done, :null, interp}
-
-          true ->
-            my_ctx = interp.gen_ctx
-            my_ns = interp.ns
-            my_uses = interp.uses
-            # file_stack is per-context like ns/uses: the generator's copy
-            # carries its (def-file-stripped) view — keep the driver's own,
-            # or every warning/throw after a generator use loses its file
-            my_files = interp.file_stack
-            ref = :erlang.monitor(:process, st.pid)
-
-            msg =
-              case {st.started, send_v} do
-                {false, :start} ->
-                  {:gen_start, self(), strip_gen(interp)}
-
-                {false, v} ->
-                  [
-                    {:gen_start, self(), strip_gen(interp)},
-                    {:gen_resume, self(), v, strip_gen(interp)}
-                  ]
-
-                {true, :start} ->
-                  {:gen_resume, self(), :null, strip_gen(interp)}
-
-                {true, v} ->
-                  {:gen_resume, self(), v, strip_gen(interp)}
-              end
-
-            send_each(st.pid, msg)
-
-            receive do
-              {:gen_yield, k, v, i2} ->
-                :erlang.demonitor(ref, [:flush])
-                i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: false, k: k, v: v})
-
-                {:yielded, k, v,
-                 %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses, file_stack: my_files}}
-
-              {:gen_done, ret, i2} ->
-                :erlang.demonitor(ref, [:flush])
-                i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: true, ret: ret})
-
-                {:done, ret,
-                 %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses, file_stack: my_files}}
-
-              {:gen_throw, u, i2} ->
-                :erlang.demonitor(ref, [:flush])
-                i3 = put_gen_state(i2, obj_ref, %{st | started: true, done: true})
-
-                {:thrown, u,
-                 %{i3 | gen_ctx: my_ctx, ns: my_ns, uses: my_uses, file_stack: my_files}}
-
-              {:DOWN, _, :process, _, reason} ->
-                {:thrown, {:fatal, "generator process died: #{inspect(reason)}"}, interp}
-            end
-        end
-    end
-  end
-
-  def gen_resume(_, _, interp), do: {:done, :null, interp}
-
-  defp send_each(pid, msgs) when is_list(msgs), do: Enum.each(msgs, &send(pid, &1))
-  defp send_each(pid, msg), do: send(pid, msg)
-
-  defp top_file(%{file_stack: [f | _]}) when is_binary(f), do: f
-  defp top_file(_), do: nil
-
-  defp strip_gen(%{gen_ctx: _} = i), do: %{i | gen_ctx: nil}
-
-  defp put_gen_state(interp, {:object, id}, st) do
+  def put_gen_state(interp, {:object, id}, st) do
     obj = get_object(interp, {:object, id})
 
     props =
@@ -1399,37 +1142,10 @@ defmodule PhpBeam.Eval do
   # advanced auto-key counter and the new driver pid). The body's defining
   # file (pushed by the factory call) is stripped for the driver and restored
   # on resume, so __DIR__/warning attribution stays correct on both sides.
-  defp gen_yield(env, interp, k, v, ctx2) do
-    ctx = interp.gen_ctx
-
-    case ctx do
-      nil ->
-        {{:unwind, {:fatal, "Cannot use \"yield\" outside of a generator"}}, env, interp}
-
-      _ ->
-        def_file = Map.get(ctx, :file)
-        stripped = strip_def_file(interp, def_file)
-
-        send(ctx.driver, {:gen_yield, k, v, %{stripped | gen_ctx: ctx2}})
-
-        receive do
-          {:gen_resume, driver2, send_v, i3} ->
-            restored =
-              case {def_file, i3.file_stack} do
-                {f, stack} when is_binary(f) -> %{i3 | file_stack: [f | stack]}
-                _ -> i3
-              end
-
-            body_scope = %{restored | ns: ctx2.ns, uses: ctx2.uses}
-            {{:val, send_v}, env, %{body_scope | gen_ctx: %{ctx2 | driver: driver2}}}
-        end
-    end
-  end
-
-  defp strip_def_file(%{file_stack: [f | rest]} = i, f) when is_binary(f),
+  def strip_def_file(%{file_stack: [f | rest]} = i, f) when is_binary(f),
     do: %{i | file_stack: rest}
 
-  defp strip_def_file(i, _), do: i
+  def strip_def_file(i, _), do: i
 
   # php order: include_path entries (relative to cwd), then the including
   # file's directory, then cwd
@@ -1631,12 +1347,12 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  defp class_key_of({:cname, _, _} = cname, env, interp),
+  def class_key_of({:cname, _, _} = cname, env, interp),
     do: resolve_class_key(cname, env, interp)
 
-  defp class_key_of(cls_expr, env, interp), do: resolve_class_key(cls_expr, env, interp)
+  def class_key_of(cls_expr, env, interp), do: resolve_class_key(cls_expr, env, interp)
 
-  defp display_class(interp, key) do
+  def display_class(interp, key) do
     case PhpBeam.Classes.get_class(interp, key) do
       # messages render anonymous classes short: class@anonymous, without
       # the \0file:line$id suffix get_class() reports
@@ -1647,7 +1363,7 @@ defmodule PhpBeam.Eval do
 
   # readonly/typed-property messages name the DECLARING class (php: an
   # inherited readonly prop reports its declarer, not the instance class)
-  defp prop_declarer_display(interp, obj, key) do
+  def prop_declarer_display(interp, obj, key) do
     case PhpBeam.Classes.prop_declarer(interp, obj.class, key) do
       nil -> display_class(interp, obj.class)
       dk -> display_class(interp, dk)
@@ -2220,7 +1936,7 @@ defmodule PhpBeam.Eval do
 
   defp obj_str_default(_obj), do: "Object"
 
-  defp warn(interp, msg), do: PhpBeam.Interp.warn(interp, msg)
+  def warn(interp, msg), do: PhpBeam.Interp.warn(interp, msg)
 
   defp interp_parts(parts, env, interp) do
     Enum.reduce(parts, {"", env, interp}, fn part, {acc, en, it} ->
@@ -2257,17 +1973,17 @@ defmodule PhpBeam.Eval do
   defp wrap_string(s) when is_binary(s), do: {:string, s}
   defp wrap_string(v), do: v
 
-  defp method_name(%{scope_class: sc, function: f}, interp)
-       when is_binary(sc) and is_binary(f),
-       do: "#{class_display(sc, interp)}::#{f}"
+  def method_name(%{scope_class: sc, function: f}, interp)
+      when is_binary(sc) and is_binary(f),
+      do: "#{class_display(sc, interp)}::#{f}"
 
-  defp method_name(%{function: f}, _interp) when is_binary(f), do: f
-  defp method_name(_, _interp), do: ""
+  def method_name(%{function: f}, _interp) when is_binary(f), do: f
+  def method_name(_, _interp), do: ""
 
-  defp class_name_of(%{scope_class: sc}, interp) when is_binary(sc),
+  def class_name_of(%{scope_class: sc}, interp) when is_binary(sc),
     do: class_display(sc, interp)
 
-  defp class_name_of(_, _interp), do: ""
+  def class_name_of(_, _interp), do: ""
 
   defp class_display(key, interp) do
     case PhpBeam.Classes.get_class(interp, key) do
@@ -2302,19 +2018,6 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  def const_eval_quiet(v, _env, _interp), do: eval_const_expr(v)
-
-  defp eval_const_expr({:int, n}), do: {:int, n}
-  defp eval_const_expr({:string, s}), do: {:string, s}
-  defp eval_const_expr({:bool, b}), do: {:bool, b}
-  defp eval_const_expr(:null), do: :null
-  defp eval_const_expr(_), do: :null
-
-  # resolve a class-name AST to a storage key (downcased, no leading backslash)
-  # class lookup with the registered spl autoloaders run on miss (php
-  # triggers them for new/static calls/class_exists-with-autoload). Returns
-  # {class_or_nil, interp} — the autoloaders' side effects (require files
-  # registering classes) thread back.
   def fetch_class(interp, key, display_name) do
     case PhpBeam.Classes.get_class(interp, key) do
       nil when interp.autoload_fns != [] ->
@@ -2448,43 +2151,6 @@ defmodule PhpBeam.Eval do
   end
 
   # constant folding for class constants / property defaults / enum cases
-  def const_fold(ast, interp), do: const_fold(ast, interp, nil)
-
-  # folds in the declaring class's scope so self::CONST resolves; anything
-  # that can't fold eagerly (forward refs, function calls) defers to the AST
-  def const_fold(ast, interp, scope) do
-    env = if scope, do: %Env{scope_class: scope, called_class: scope}, else: nil
-
-    case eval(ast, env, interp) do
-      {{:val, :null}, _, _} ->
-        case ast do
-          :null -> {:ok, :null}
-          _ -> :defer
-        end
-
-      {{:val, v}, _, _} ->
-        {:ok, v}
-
-      _ ->
-        :defer
-    end
-  rescue
-    _ -> :defer
-  end
-
-  # lazy const-expr evaluation (deferred {:const_ast, ...} markers)
-  def const_eval(ast, interp, decl_key) do
-    env = %Env{scope_class: decl_key, called_class: decl_key}
-    {ns0, uses0, i0} = push_class_scope(interp, decl_key)
-
-    case eval(ast, env, i0) do
-      {{:val, v}, _, i2} -> {v, pop_class_scope(i2, ns0, uses0)}
-      {{:unwind, _}, _, i2} -> {:null, pop_class_scope(i2, ns0, uses0)}
-    end
-  end
-
-  # php compiles each class with its declaring file's namespace + use
-  # aliases; method/const evaluation runs under that scope
   def push_class_scope(interp, key) do
     case PhpBeam.Classes.get_class(interp, key) do
       %{ns: cns, uses: cuses} when is_list(cns) and is_map(cuses) ->
@@ -2497,509 +2163,6 @@ defmodule PhpBeam.Eval do
 
   def pop_class_scope(interp, ns0, uses0), do: %{interp | ns: ns0, uses: uses0}
 
-  defp resolve_const(name, _fq, env, interp) do
-    case magic_const(name, env, interp) do
-      {:ok, _} = ok -> ok
-      :error -> resolve_plain_const(name, interp)
-    end
-  end
-
-  defp resolve_plain_const(name, interp) do
-    case Map.fetch(interp.consts, name) do
-      {:ok, v} -> {:ok, v}
-      :error -> builtin_const(name)
-    end
-  end
-
-  # magic constants are case-insensitive and resolve per file (include)
-  defp magic_const(name, env, interp) do
-    current =
-      case interp.file_stack do
-        [cur | _] -> cur
-        [] -> "Command line code"
-      end
-
-    case String.upcase(name) do
-      "__FILE__" -> {:ok, {:string, current}}
-      "__DIR__" -> {:ok, {:string, Path.dirname(current)}}
-      "__FUNCTION__" -> {:ok, {:string, env.function || ""}}
-      "__METHOD__" -> {:ok, {:string, method_name(env, interp)}}
-      "__CLASS__" -> {:ok, {:string, class_name_of(env, interp)}}
-      "__NAMESPACE__" -> {:ok, {:string, Enum.join(interp.ns, "\\")}}
-      _ -> :error
-    end
-  end
-
-  defp builtin_const(name) do
-    case name do
-      "PHP_EOL" ->
-        {:ok, {:string, "\n"}}
-
-      "PHP_INT_MAX" ->
-        {:ok, {:int, @int_max}}
-
-      "PHP_INT_MIN" ->
-        {:ok, {:int, @int_min}}
-
-      "PHP_INT_SIZE" ->
-        {:ok, {:int, 8}}
-
-      "PHP_FLOAT_EPSILON" ->
-        {:ok, {:float, :math.pow(2, -52)}}
-
-      "PHP_FLOAT_MAX" ->
-        {:ok, {:float, 1.7976931348623157e308}}
-
-      "PHP_FLOAT_MIN" ->
-        {:ok, {:float, 2.2250738585072014e-308}}
-
-      "PHP_VERSION" ->
-        {:ok, {:string, "8.4.2"}}
-
-      "PHP_VERSION_ID" ->
-        {:ok, {:int, 80_402}}
-
-      "PHP_MAJOR_VERSION" ->
-        {:ok, {:int, 8}}
-
-      "PHP_MINOR_VERSION" ->
-        {:ok, {:int, 4}}
-
-      "PHP_RELEASE_VERSION" ->
-        {:ok, {:int, 2}}
-
-      "PHP_EXTRA_VERSION" ->
-        {:ok, {:string, ""}}
-
-      "PHP_ZTS" ->
-        {:ok, {:bool, false}}
-
-      "PHP_OS" ->
-        {:ok, {:string, "Darwin"}}
-
-      "PHP_FLOAT_DIG" ->
-        {:ok, {:int, 15}}
-
-      "PHP_MAXPATHLEN" ->
-        {:ok, {:int, 1024}}
-
-      "PHP_BINARY" ->
-        {:ok, {:string, "/opt/homebrew/bin/php"}}
-
-      "PHP_OS" ->
-        {:ok, {:string, "Darwin"}}
-
-      "PHP_OS_FAMILY" ->
-        {:ok, {:string, "Darwin"}}
-
-      "PHP_SAPI" ->
-        {:ok, {:string, "cli"}}
-
-      "PHP_DEBUG" ->
-        {:ok, {:bool, false}}
-
-      "PHP_WINDOWS_VERSION_MAJOR" ->
-        {:ok, {:bool, false}}
-
-      "M_PI" ->
-        {:ok, {:float, :math.pi()}}
-
-      "M_E" ->
-        {:ok, {:float, :math.exp(1)}}
-
-      "M_SQRT2" ->
-        {:ok, {:float, :math.sqrt(2)}}
-
-      "NAN" ->
-        {:ok, {:float, :erlang.nan()}}
-
-      "INF" ->
-        {:ok,
-         {:float, :erlang.float_to_binary(:erlang.list_to_float('1.0e308')) |> String.to_float()}}
-
-      "E_ALL" ->
-        {:ok, {:int, 32767}}
-
-      "E_WARNING" ->
-        {:ok, {:int, 2}}
-
-      "E_NOTICE" ->
-        {:ok, {:int, 8}}
-
-      "PHP_ZTS" ->
-        {:ok, {:bool, false}}
-        SHOULD_NOT_EXIST
-
-      "STR_PAD_LEFT" ->
-        {:ok, {:int, 0}}
-
-      "STR_PAD_RIGHT" ->
-        {:ok, {:int, 1}}
-
-      "STR_PAD_BOTH" ->
-        {:ok, {:int, 2}}
-
-      "SORT_REGULAR" ->
-        {:ok, {:int, 0}}
-
-      "SORT_NUMERIC" ->
-        {:ok, {:int, 1}}
-
-      "SORT_STRING" ->
-        {:ok, {:int, 2}}
-
-      "COUNT_RECURSIVE" ->
-        {:ok, {:int, 1}}
-
-      "JSON_HEX_TAG" ->
-        {:ok, {:int, 1}}
-
-      "JSON_HEX_AMP" ->
-        {:ok, {:int, 2}}
-
-      "JSON_HEX_APOS" ->
-        {:ok, {:int, 4}}
-
-      "JSON_HEX_QUOT" ->
-        {:ok, {:int, 8}}
-
-      "JSON_FORCE_OBJECT" ->
-        {:ok, {:int, 16}}
-
-      "JSON_UNESCAPED_SLASHES" ->
-        {:ok, {:int, 64}}
-
-      "JSON_PRETTY_PRINT" ->
-        {:ok, {:int, 128}}
-
-      "JSON_UNESCAPED_UNICODE" ->
-        {:ok, {:int, 256}}
-
-      "JSON_PARTIAL_OUTPUT_ON_ERROR" ->
-        {:ok, {:int, 512}}
-
-      "JSON_INVALID_UTF8_SUBSTITUTE" ->
-        {:ok, {:int, 2_097_152}}
-
-      "JSON_THROW_ON_ERROR" ->
-        {:ok, {:int, 4_194_304}}
-
-      "EXTR_OVERWRITE" ->
-        {:ok, {:int, 0}}
-
-      "PHP_DEBUG" ->
-        {:ok, {:bool, false}}
-
-      "TRUE" ->
-        {:ok, {:bool, true}}
-
-      "FALSE" ->
-        {:ok, {:bool, false}}
-
-      "NULL" ->
-        {:ok, :null}
-
-      # error-reporting bit mask (PHP 8 values)
-      "E_ERROR" ->
-        {:ok, {:int, 1}}
-
-      "E_RECOVERABLE_ERROR" ->
-        {:ok, {:int, 4096}}
-
-      "E_PARSE" ->
-        {:ok, {:int, 4}}
-
-      "E_CORE_ERROR" ->
-        {:ok, {:int, 16}}
-
-      "E_CORE_WARNING" ->
-        {:ok, {:int, 32}}
-
-      "E_COMPILE_ERROR" ->
-        {:ok, {:int, 64}}
-
-      "E_COMPILE_WARNING" ->
-        {:ok, {:int, 128}}
-
-      "E_USER_ERROR" ->
-        {:ok, {:int, 256}}
-
-      "E_USER_WARNING" ->
-        {:ok, {:int, 512}}
-
-      "E_USER_NOTICE" ->
-        {:ok, {:int, 1024}}
-
-      "E_USER_DEPRECATED" ->
-        {:ok, {:int, 16_384}}
-
-      "E_DEPRECATED" ->
-        {:ok, {:int, 8192}}
-
-      "E_STRICT" ->
-        {:ok, {:int, 2048}}
-
-      # setlocale categories (darwin C library values)
-      "LC_CTYPE" ->
-        {:ok, {:int, 0}}
-
-      "LC_NUMERIC" ->
-        {:ok, {:int, 1}}
-
-      "LC_TIME" ->
-        {:ok, {:int, 2}}
-
-      "LC_COLLATE" ->
-        {:ok, {:int, 3}}
-
-      "LC_MONETARY" ->
-        {:ok, {:int, 4}}
-
-      "LC_MESSAGES" ->
-        {:ok, {:int, 5}}
-
-      "LC_ALL" ->
-        {:ok, {:int, 6}}
-
-      "DIRECTORY_SEPARATOR" ->
-        {:ok, {:string, "/"}}
-
-      "PATH_SEPARATOR" ->
-        {:ok, {:string, ":"}}
-
-      "FILE_APPEND" ->
-        {:ok, {:int, 8}}
-
-      "FILE_USE_INCLUDE_PATH" ->
-        {:ok, {:int, 1}}
-
-      "LOCK_EX" ->
-        {:ok, {:int, 2}}
-
-      "PREG_PATTERN_ORDER" ->
-        {:ok, {:int, 1}}
-
-      "PREG_SET_ORDER" ->
-        {:ok, {:int, 2}}
-
-      "PREG_SPLIT_NO_EMPTY" ->
-        {:ok, {:int, 1}}
-
-      "PREG_SPLIT_DELIM_CAPTURE" ->
-        {:ok, {:int, 2}}
-
-      "PREG_SPLIT_OFFSET_CAPTURE" ->
-        {:ok, {:int, 4}}
-
-      "PREG_OFFSET_CAPTURE" ->
-        {:ok, {:int, 256}}
-
-      "PREG_UNMATCHED_AS_NULL" ->
-        {:ok, {:int, 512}}
-
-      "PREG_GREP_INVERT" ->
-        {:ok, {:int, 1}}
-
-      "PREG_NO_ERROR" ->
-        {:ok, {:int, 0}}
-
-      "PHP_URL_SCHEME" ->
-        {:ok, {:int, 0}}
-
-      "PHP_URL_HOST" ->
-        {:ok, {:int, 1}}
-
-      "PHP_URL_PORT" ->
-        {:ok, {:int, 2}}
-
-      "PHP_URL_USER" ->
-        {:ok, {:int, 3}}
-
-      "PHP_URL_PASS" ->
-        {:ok, {:int, 4}}
-
-      "PHP_URL_PATH" ->
-        {:ok, {:int, 5}}
-
-      "PHP_URL_QUERY" ->
-        {:ok, {:int, 6}}
-
-      "PHP_URL_FRAGMENT" ->
-        {:ok, {:int, 7}}
-
-      "PATHINFO_DIRNAME" ->
-        {:ok, {:int, 1}}
-
-      "PATHINFO_BASENAME" ->
-        {:ok, {:int, 2}}
-
-      "PATHINFO_EXTENSION" ->
-        {:ok, {:int, 4}}
-
-      "PATHINFO_FILENAME" ->
-        {:ok, {:int, 3}}
-
-      "FILE_IGNORE_NEW_LINES" ->
-        {:ok, {:int, 2}}
-
-      "FILE_SKIP_EMPTY_LINES" ->
-        {:ok, {:int, 4}}
-
-      "EXTR_OVERWRITE" ->
-        {:ok, {:int, 0}}
-
-      "EXTR_SKIP" ->
-        {:ok, {:int, 1}}
-
-      "EXTR_PREFIX_SAME" ->
-        {:ok, {:int, 2}}
-
-      "EXTR_IF_EXISTS" ->
-        {:ok, {:int, 6}}
-
-      "PHP_QUERY_RFC1738" ->
-        {:ok, {:int, 1738}}
-
-      "PHP_QUERY_RFC3986" ->
-        {:ok, {:int, 3986}}
-
-      "JSON_ERROR_NONE" ->
-        {:ok, {:int, 0}}
-
-      "STDIN" ->
-        {:ok, {:resource, 0}}
-
-      "STDOUT" ->
-        {:ok, {:resource, 1}}
-
-      "STDERR" ->
-        {:ok, {:resource, 2}}
-
-      "SEEK_SET" ->
-        {:ok, {:int, 0}}
-
-      "SEEK_CUR" ->
-        {:ok, {:int, 1}}
-
-      "SEEK_END" ->
-        {:ok, {:int, 2}}
-
-      "LOCK_SH" ->
-        {:ok, {:int, 1}}
-
-      "LOCK_UN" ->
-        {:ok, {:int, 3}}
-
-      "MYSQLI_REPORT_OFF" ->
-        {:ok, {:int, 0}}
-
-      "ENT_COMPAT" ->
-        {:ok, {:int, 2}}
-
-      "ENT_QUOTES" ->
-        {:ok, {:int, 3}}
-
-      "ENT_NOQUOTES" ->
-        {:ok, {:int, 0}}
-
-      "ENT_IGNORE" ->
-        {:ok, {:int, 4}}
-
-      "ENT_SUBSTITUTE" ->
-        {:ok, {:int, 8}}
-
-      "ENT_HTML401" ->
-        {:ok, {:int, 0}}
-
-      "ENT_HTML5" ->
-        {:ok, {:int, 48}}
-
-      "CASE_UPPER" ->
-        {:ok, {:int, 1}}
-
-      "CASE_LOWER" ->
-        {:ok, {:int, 0}}
-
-      "MYSQLI_CLIENT_SSL" ->
-        {:ok, {:int, 2048}}
-
-      "MYSQLI_CLIENT_COMPRESS" ->
-        {:ok, {:int, 32}}
-
-      "MYSQLI_OPT_SSL_VERIFY_SERVER_CERT" ->
-        {:ok, {:int, 2048}}
-
-      "MYSQLI_REPORT_ERROR" ->
-        {:ok, {:int, 1}}
-
-      "MYSQLI_REPORT_STRICT" ->
-        {:ok, {:int, 2}}
-
-      "MYSQLI_REPORT_INDEX" ->
-        {:ok, {:int, 4}}
-
-      "MYSQLI_REPORT_ALL" ->
-        {:ok, {:int, 255}}
-
-      "MYSQLI_ASSOC" ->
-        {:ok, {:int, 1}}
-
-      "MYSQLI_NUM" ->
-        {:ok, {:int, 2}}
-
-      "MYSQLI_BOTH" ->
-        {:ok, {:int, 3}}
-
-      "MYSQLI_CLIENT_COMPRESS" ->
-        {:ok, {:int, 32}}
-
-      "MYSQLI_OPT_INT_AND_FLOAT_NATIVE" ->
-        {:ok, {:int, 205}}
-
-      "DATE_W3C" ->
-        {:ok, {:string, "Y-m-d\\TH:i:sP"}}
-
-      "DATE_ATOM" ->
-        {:ok, {:string, "Y-m-d\\TH:i:sP"}}
-
-      "DATE_ISO8601" ->
-        {:ok, {:string, "Y-m-d\\TH:i:sO"}}
-
-      "DATE_RFC2822" ->
-        {:ok, {:string, "D, d M Y H:i:s O"}}
-
-      "PREG_PATTERN_ORDER" ->
-        {:ok, {:int, 1}}
-
-      "PREG_SET_ORDER" ->
-        {:ok, {:int, 2}}
-
-      "PREG_SPLIT_NO_EMPTY" ->
-        {:ok, {:int, 1}}
-
-      "PREG_SPLIT_DELIM_CAPTURE" ->
-        {:ok, {:int, 2}}
-
-      "PREG_SPLIT_OFFSET_CAPTURE" ->
-        {:ok, {:int, 4}}
-
-      "PREG_OFFSET_CAPTURE" ->
-        {:ok, {:int, 256}}
-
-      "PREG_UNMATCHED_AS_NULL" ->
-        {:ok, {:int, 512}}
-
-      "PREG_GREP_INVERT" ->
-        {:ok, {:int, 1}}
-
-      "PREG_NO_ERROR" ->
-        {:ok, {:int, 0}}
-
-      _ ->
-        :error
-    end
-  end
-
   def warn(env, interp, msg) do
     # warnings are interpreter state now (they write to stdout/ob buffers);
     # env is accepted for call-site uniformity
@@ -3009,272 +2172,7 @@ defmodule PhpBeam.Eval do
 
   # ───────────────────────── lvalues ─────────────────────────
 
-  def read_target(target, env, interp) do
-    case target do
-      {:var, name} ->
-        case Env.lookup(env, interp, name) do
-          {:ok, v} ->
-            {v, env, interp}
-
-          {:static, key, sname} ->
-            {Map.get(interp.statics[key], sname, :null), env, interp}
-
-          :undefined ->
-            interp2 = warn(env, interp, "Undefined variable $#{name}")
-            {:null, env, interp2}
-        end
-
-      {:var_var, e} ->
-        {{:val, {:string, name}}, _e2, _i2} = eval(e, env, interp)
-        read_target({:var, name}, env, interp)
-
-      _ ->
-        {{:val, v}, env2, interp2} = eval(target, env, interp)
-        {v, env2, interp2}
-    end
-  end
-
-  def assign(target, v, env, interp)
-
-  def assign({:var, name}, v, env, interp) do
-    cond do
-      Map.has_key?(env.statics, name) ->
-        key = env.statics[name]
-        {env, update_in(interp.statics[key], &Map.put(&1, name, v))}
-
-      true ->
-        case Env.lookup(env, interp, name) do
-          {:ok, {:ref, id}} ->
-            {env, %{interp | refs: Map.put(interp.refs, id, v)}}
-
-          _ ->
-            {:ok, env2, interp2} = Env.bind_var(env, interp, name, v)
-            {env2, interp2}
-        end
-    end
-  end
-
-  def assign({:var_var, e}, v, env, interp) do
-    {{:val, name}, _e2, _i2} = eval(e, env, interp)
-
-    case name do
-      {:string, n} -> assign({:var, n}, v, env, interp)
-      _ -> {env, interp}
-    end
-  end
-
-  def assign({:list_pat, items}, v, env, interp) do
-    destructure(items, v, env, interp)
-  end
-
-  # nested writes into member containers: $this->arr[$k] = v / self::$a[] = v
-  # $GLOBALS['k'] = v writes the real global slot; nested writes
-  # ($GLOBALS['a']['b'] = v) flow through the generic path, whose write-back
-  # lands here too
-  def assign({:index, {:var, "GLOBALS"}, idx}, v, env, interp) when idx != nil do
-    {{:val, key}, env2, interp2} = eval(idx, env, interp)
-
-    case deref(key, interp2) do
-      {:string, k} ->
-        {env2, %{interp2 | globals: Map.put(interp2.globals, k, v)}}
-
-      {:int, n} ->
-        {env2, %{interp2 | globals: Map.put(interp2.globals, Integer.to_string(n), v)}}
-
-      _ ->
-        {env2, interp2}
-    end
-  end
-
-  def assign({:index, {:prop, _, _} = prop_t, idx}, v, env, interp) do
-    nested_member_write(prop_t, idx, v, env, interp)
-  end
-
-  def assign({:index, {:static_prop, _, _} = prop_t, idx}, v, env, interp) do
-    nested_member_write(prop_t, idx, v, env, interp)
-  end
-
-  # deeper chains rooted at a property ($obj->p[$i][$j] = v): lvalue_path
-  # can't build a var path for these, so mutate level by level and write back
-  def assign({:index, container, idx}, v, env, interp) when elem(container, 0) == :index do
-    if prop_rooted?(container) do
-      nested_member_write(container, idx, v, env, interp)
-    else
-      generic_index_assign(container, idx, v, env, interp)
-    end
-  end
-
-  defp prop_rooted?({:index, inner, _}), do: prop_rooted?(inner)
-  defp prop_rooted?({:prop, _, _}), do: true
-  defp prop_rooted?({:static_prop, _, _}), do: true
-  defp prop_rooted?(_), do: false
-
-  def assign({:index, container, idx}, v, env, interp) do
-    generic_index_assign(container, idx, v, env, interp)
-  end
-
-  defp generic_index_assign(container, idx, v, env, interp) do
-    {path, env2, interp2} = build_path(container, env, interp)
-
-    case idx do
-      nil ->
-        path_append(path, v, env2, interp2)
-
-      idx_expr ->
-        {{:val, key}, env3, interp3} = eval(idx_expr, env2, interp2)
-        path_set(path, deref(key, interp3), v, env3, interp3)
-    end
-  end
-
-  defp nested_member_write({:index, inner, idx}, v, env, interp) do
-    {{:val, container}, e2, i2} = quiet_read(inner, env, interp)
-    container2 = mutate_member(container, idx, v, e2, i2)
-    assign(inner, container2, e2, i2)
-  end
-
-  defp nested_member_write(prop_t, idx, v, env, interp) do
-    {{:val, container}, e2, i2} = quiet_read(prop_t, env, interp)
-    container2 = mutate_member(container, idx, v, e2, i2)
-    assign(prop_t, container2, e2, i2)
-  end
-
-  # write-context reads autovivify silently: php does not warn for missing
-  # array keys / properties along `$a->p[$missing] = v` paths (undefined
-  # VARIABLES along the path still warn, so those keep normal eval)
-  defp quiet_read({:index, cont, idx}, env, interp) do
-    {{:val, c}, e2, i2} = quiet_read(cont, env, interp)
-
-    case idx do
-      nil ->
-        {{:val, :null}, e2, i2}
-
-      _ ->
-        {{:val, k}, e3, i3} = eval(idx, e2, i2)
-
-        case c do
-          {:array, arr} -> {{:val, PArray.get(arr, deref(k, i3), :null)}, e3, i3}
-          _ -> {{:val, :null}, e3, i3}
-        end
-    end
-  end
-
-  defp quiet_read({:prop, obj_e, name_e} = ast, env, interp) do
-    {{:val, ov}, e2, i2} = eval(obj_e, env, interp)
-
-    case ov do
-      {:object, _} = obj_ref ->
-        obj = get_object(i2, obj_ref)
-        key = String.downcase(prop_name_string(name_e, e2, i2))
-
-        case PArray.fetch(obj.props, {:string, key}) do
-          {:ok, v} -> {{:val, deref(v, i2)}, e2, i2}
-          _ -> {{:val, :null}, e2, i2}
-        end
-
-      _ ->
-        eval(ast, env, interp)
-    end
-  end
-
-  defp quiet_read(other, env, interp), do: eval(other, env, interp)
-
-  defp mutate_member(container, idx, v, e2, i2) do
-    case container do
-      {:array, arr} ->
-        case idx do
-          nil ->
-            {:array, PArray.push(arr, v)}
-
-          _ ->
-            {{:val, key}, _, _} = eval(idx, e2, i2)
-
-            case PArray.put(arr, deref(key, i2), v) do
-              {:ok, a2} -> {:array, a2}
-              _ -> container
-            end
-        end
-
-      :null ->
-        case idx do
-          nil ->
-            {:array, PArray.from_pairs([{nil, v}])}
-
-          _ ->
-            {{:val, key}, _, _} = eval(idx, e2, i2)
-            {:array, PArray.from_pairs([{key, v}])}
-        end
-
-      _ ->
-        container
-    end
-  end
-
-  def assign(_, _v, env, interp), do: {env, interp}
-
-  # build a write path: [{:var, name} | segments]
-  defp build_path(target, env, interp) do
-    case lvalue_path(target, env) do
-      {:ok, path} -> {path, env, interp}
-      :error -> {[], env, interp}
-    end
-  end
-
-  def lvalue_path({:var, name}, _env), do: {:ok, [{:var, name}]}
-  def lvalue_path({:var_var, _}, _env), do: :error
-
-  def lvalue_path({:index, container, idx_expr}, env) do
-    case lvalue_path(container, env) do
-      {:ok, path} -> {:ok, path ++ [{:index_expr, idx_expr}]}
-      :error -> :error
-    end
-  end
-
-  def lvalue_path(_, _env), do: :error
-
-  defp path_append(path, v, env, interp) do
-    {container, env2, interp2} = path_get(path, env, interp)
-
-    new_container =
-      case container do
-        {:array, arr} -> {:array, PArray.push(arr, v)}
-        :null -> {:array, PArray.push(PArray.new(), v)}
-        {:string, s} -> {:string, s <> first_byte_str(v)}
-        _ -> container
-      end
-
-    path_put(path, new_container, env2, interp2)
-  end
-
-  defp first_byte_str({:string, <<b::binary-size(1), _::binary>>}), do: b
-  defp first_byte_str(_), do: ""
-
-  defp path_set(path, key, v, env, interp) do
-    {container, env2, interp2} = path_get(path, env, interp)
-
-    {new_container, interp2b} =
-      case container do
-        {:array, arr} ->
-          case put_ref_aware(arr, key, v, interp2) do
-            {:ok, arr2, interp2c} -> {{:array, arr2}, interp2c}
-            {:error, msg} -> throw_set_error(msg, env2, interp2)
-          end
-
-        :null ->
-          {{:array, PArray.from_pairs([{key, v}])}, interp2}
-
-        {:string, s} ->
-          {string_offset_write(s, key, v, env2, interp2), interp2}
-
-        _ ->
-          i_w = warn(env2, interp2, "Cannot use a scalar value as an array")
-          {container, i_w}
-      end
-
-    path_put(path, new_container, env2, interp2b)
-  end
-
-  # php: writing to an array element that IS a reference writes the cell
-  defp put_ref_aware(arr, k, v, interp) do
+  def put_ref_aware(arr, k, v, interp) do
     case PArray.fetch(arr, k) do
       {:ok, {:ref, id}} ->
         {:ok, arr, %{interp | refs: Map.put(interp.refs, id, v)}}
@@ -3287,435 +2185,147 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  defp throw_set_error(msg, _env, _interp), do: throw({:set_error, msg})
-
-  defp string_offset_write(s, key, v, env, interp) do
-    {ok?, idx} = offset_index(key)
-
-    case Value.to_int(idx) do
-      {:ok, {:int, i}} ->
-        i2 = if i < 0, do: byte_size(s) + i, else: i
-
-        cond do
-          i2 < 0 or i2 >= byte_size(s) ->
-            warn(env, interp, "Uninitialized string offset")
-            s
-
-          true ->
-            <<pre::binary-size(i2), _c, post::binary>> = s
-            pre <> first_byte_str(v) <> post
-        end
-
-      _ ->
-        if ok? do
-          s
-        else
-          warn(env, interp, "Illegal string offset")
-          s
-        end
-    end
-  end
-
-  defp offset_index({:int, i}), do: {true, {:int, i}}
-  defp offset_index({:string, s}), do: {false, {:string, s}}
-  defp offset_index(v), do: {true, v}
-
-  # read the value AT the full path (walking index segments; dynamic keys
-  # evaluate with the live env — `$d[$k]["n"]` writes used to no-op on
-  # non-literal keys)
-  defp path_get([{:var, name} | rest], env, interp) do
-    base =
-      case Env.lookup(env, interp, name) do
-        {:ok, v} -> deref_container(v, interp)
-        {:static, key, sname} -> Map.get(interp.statics[key] || %{}, sname, :null)
-        :undefined -> :null
-      end
-
-    walk_path_get(base, rest, env, interp)
-  end
-
-  defp path_get([], _env, interp), do: {:null, nil, interp}
-
-  defp walk_path_get(base, [], env, interp), do: {base, env, interp}
-
-  defp walk_path_get(base, [{:index_expr, e} | rest], env, interp) do
-    {{:val, k}, env2, interp2} = eval(e, env, interp)
-    walk_path_get(read_index_raw(base, deref(k, interp2)), rest, env2, interp2)
-  end
-
-  defp deref_container({:ref, id}, interp), do: Map.get(interp.refs, id, :null)
-  defp deref_container(v, _), do: v
-
-  # empty path (unsupported lvalue root): php would fatal; keep state safe
-  defp path_put([], _v, env, interp), do: {env, interp}
-
-  defp path_put([{:var, name}], v, env, interp), do: assign({:var, name}, v, env, interp)
-
-  defp path_put([{:var, name} | rest], v, env, interp) do
-    base =
-      case Env.lookup(env, interp, name) do
-        {:ok, bv} -> deref_container(bv, interp)
-        {:static, key, sname} -> Map.get(interp.statics[key] || %{}, sname, :null)
-        :undefined -> :null
-      end
-
-    {updated, env2, interp2} = update_path_env(base, rest, v, env, interp)
-    assign({:var, name}, updated, env2, interp2)
-  end
-
-  defp update_path_env(base, [], v, _env, _interp), do: {v, nil, nil}
-
-  defp update_path_env(base, [{:index_expr, e} | rest], v, env, interp) do
-    {{:val, k}, env2, interp2} = eval(e, env, interp)
-    k2 = deref(k, interp2 || interp)
-    inner = read_index_raw(base, k2)
-    {inner2, env3, interp3} = update_path_env(inner, rest, v, env2, interp2)
-    e3 = env3 || env2
-    i3 = interp3 || interp2
-
-    {new_base, i3b} =
-      case base do
-        {:array, arr} ->
-          case put_ref_aware(arr, k2, inner2, i3) do
-            {:ok, arr2, i3c} -> {{:array, arr2}, i3c}
-            _ -> {base, i3}
-          end
-
-        _ ->
-          # php autovivifies: $x[k][k2] on null/scalar becomes an array
-          case PArray.put(PArray.new(), k2, inner2) do
-            {:ok, arr2} -> {{:array, arr2}, i3}
-            _ -> {base, i3}
-          end
-      end
-
-    {new_base, e3, i3b}
-  end
-
-  # write into a specific key of the path root (foreach by-ref);
-  # keys arriving bare (int/binary from to_pairs) get wrapped
-  def path_write(path, key, v, env, interp) when is_binary(key) do
-    path_write(path, {:string, key}, v, env, interp)
-  end
-
-  def path_write(path, key, v, env, interp) when is_integer(key) do
-    path_write(path, {:int, key}, v, env, interp)
-  end
-
-  def path_write(path, key, v, env, interp) do
-    {head, rest} = split_path(path)
-
-    container =
-      case head do
-        {:var, name} ->
-          case Env.lookup(env, interp, name) do
-            {:ok, cv} -> deref_container(cv, interp)
-            _ -> :null
-          end
-      end
-
-    container2 =
-      case {container, rest} do
-        {{:array, arr}, []} ->
-          case PArray.put(arr, key, v) do
-            {:ok, arr2} -> {:array, arr2}
-            _ -> container
-          end
-
-        _ ->
-          container
-      end
-
-    case head do
-      {:var, name} -> assign({:var, name}, container2, env, interp)
-    end
-  end
-
-  defp split_path([h]), do: {h, []}
-  defp split_path(path), do: {hd(path), tl(path)}
-
-  # ───────────────────────── reads ─────────────────────────
-
-  defp index_read(container, key, env, interp) do
-    case container do
-      {:array, arr} ->
-        case PArray.fetch(arr, key) do
-          {:ok, v} ->
-            {{:val, deref(v, interp)}, env, interp}
-
-          :error ->
-            interp2 = warn(env, interp, "Undefined array key \"#{plain_key(key)}\"")
-            {{:val, :null}, env, interp2}
-        end
-
-      {:string, s} ->
-        case Value.to_int(key) do
-          {:ok, {:int, i}} ->
-            i2 = if i < 0, do: byte_size(s) + i, else: i
-
-            if i2 >= 0 and i2 < byte_size(s) do
-              {{:val, {:string, binary_part(s, i2, 1)}}, env, interp}
-            else
-              interp2 = warn(env, interp, "Uninitialized string offset")
-              {{:val, {:string, ""}}, env, interp2}
-            end
-
-          _ ->
-            interp2 = warn(env, interp, "Illegal string offset")
-            {{:val, {:string, ""}}, env, interp2}
-        end
-
-      :null ->
-        interp2 = warn(env, interp, "Trying to access array offset on value of type null")
-        {{:val, :null}, env, interp2}
-
-      _ ->
-        interp2 =
-          warn(
-            env,
-            interp,
-            "Trying to access array offset on value of type #{Value.gettype(container)}"
-          )
-
-        {{:val, :null}, env, interp2}
-    end
-  end
-
-  defp read_index_raw({:array, arr}, idx) do
-    case PArray.fetch(arr, idx) do
-      {:ok, v} -> v
-      :error -> :null
-    end
-  end
-
-  defp read_index_raw(_, _), do: :null
-
-  defp plain_key({:int, i}), do: Integer.to_string(i)
-  defp plain_key({:string, s}), do: s
-  defp plain_key(_), do: ""
-
-  # isset without warnings (env may be nil on unwind paths)
-  def isset?(_target, nil, interp), do: {false, nil, interp}
-
-  def isset?(target, env, interp) do
-    case target do
-      {:var, name} when not is_binary(name) ->
-        {false, env, interp}
-
-      {:var, name} when is_binary(name) ->
-        case Env.lookup(env, interp, name) do
-          {:ok, v} ->
-            {v != :null, env, interp}
-
-          {:static, key, sname} ->
-            {Map.get(interp.statics[key], sname, :null) != :null, env, interp}
-
-          :undefined ->
-            {false, env, interp}
-        end
-
-      {:index, container, idx_expr} ->
-        {ok?, env2, interp2} = isset?(container, env, interp)
-
-        if ok? do
-          {{:val, c}, env3, interp3} = eval(container, env2, interp2)
-
-          case idx_expr do
-            nil ->
-              {false, env3, interp3}
-
-            _ ->
-              {{:val, k}, env4, interp4} = eval(idx_expr, env3, interp3)
-
-              case c do
-                {:array, arr} ->
-                  {PArray.has_key?(arr, k) and PArray.get(arr, k) != :null, env4, interp4}
-
-                {:string, s} ->
-                  string_offset_isset?(s, k, env4, interp4)
-
-                _ ->
-                  {false, env4, interp4}
-              end
-          end
-        else
-          {false, env2, interp2}
-        end
-
-      {:prop, obj_e, name_e} ->
-        {{:val, ov}, env2, interp2} = eval(obj_e, env, interp)
-
-        case ov do
-          {:object, _} = obj_ref ->
-            obj = get_object(interp2, obj_ref)
-            key = String.downcase(prop_name_string(name_e, env2, interp2))
-
-            case PArray.fetch(obj.props, {:string, key}) do
-              {:ok, v} ->
-                {v != :null, env2, interp2}
-
-              :error ->
-                case PhpBeam.Classes.find_method(interp2, obj.class, "__isset") do
-                  nil ->
-                    {false, env2, interp2}
-
-                  m ->
-                    case call_php_method(
-                           obj_ref,
-                           m,
-                           [{:arg, {:lit_val, {:string, key}}, false, nil}],
-                           env2,
-                           interp2
-                         ) do
-                      {{:val, res}, _, i3} -> {PhpBeam.Value.truthy?(res), env2, i3}
-                      _ -> {false, env2, interp2}
-                    end
-                end
-            end
-
-          _ ->
-            {false, env2, interp2}
-        end
-
-      {:nullsafe_prop, _, _} ->
-        {false, env, interp}
-
-      _ ->
-        {{:val, v}, env2, interp2} = eval(target, env, interp)
-        {v != :null, env2, interp2}
-    end
-  end
-
-  defp string_offset_isset?(s, k, env, interp) do
-    case Value.to_int(k) do
-      {:ok, {:int, i}} ->
-        i2 = if i < 0, do: byte_size(s) + i, else: i
-        {i2 >= 0 and i2 < byte_size(s), env, interp}
-
-      _ ->
-        {false, env, interp}
-    end
-  end
-
-  # ───────────────────────── unset ─────────────────────────
-
-  def unset_target({:var, name}, env, interp) do
-    {:ok, e2, i2} = Env.unset_var(env, interp, name)
-    {:ok, e2, i2}
-  end
-
-  def unset_target({:index, container, idx_expr}, env, interp) do
-    case lvalue_path(container, env) do
-      {:ok, path} ->
-        {{:val, c}, env2, interp2} = eval(container, env, interp)
-        {{:val, k}, env3, interp3} = eval(idx_expr, env2, interp2)
-
-        case c do
-          {:array, arr} ->
-            case PArray.delete(arr, k) do
-              {:ok, arr2} ->
-                path_put(path, {:array, arr2}, env3, interp3)
-                |> then(fn {e, i} -> {:ok, e, i} end)
-            end
-
-          _ ->
-            {:ok, env3, interp3}
-        end
-
-      :error ->
-        {:ok, env, interp}
-    end
-  end
-
-  def unset_target({:prop, obj_e, name_e}, env, interp) do
-    {{:val, obj_val}, env2, interp2} = eval(obj_e, env, interp)
-
-    case obj_val do
-      {:object, _} = obj_ref ->
-        obj = get_object(interp2, obj_ref)
-        key = String.downcase(prop_name_string(name_e, env2, interp2))
-
-        if readonly_prop?(interp2, obj, key) do
-          msg =
-            "Cannot unset readonly property #{prop_declarer_display(interp2, obj, key)}::$#{key}"
-
-          {oref, i3} = materialize_native({:native_error, "Error", msg}, interp2)
-          {{:unwind, {:php_throw, oref}}, env2, i3}
-        else
-          case PArray.delete(obj.props, {:string, key}) do
-            {:ok, props2} -> {:ok, env2, put_object(interp2, obj_ref, %{obj | props: props2})}
-            :error -> {:ok, env2, interp2}
-          end
-        end
-
-      _ ->
-        {:ok, env2, interp2}
-    end
-  end
-
-  def unset_target(_, env, interp), do: {:ok, env, interp}
-
-  # ───────────────────────── destructuring ─────────────────────────
-
-  def destructure(items, v, env, interp) do
-    arr =
-      case v do
-        {:array, a} -> a
-        _ -> PArray.new()
-      end
-
-    {_, result} =
-      Enum.reduce(items, {0, {env, interp}}, fn
-        nil, {idx, acc} ->
-          {idx + 1, acc}
-
-        {:kv, nil, target, _}, {idx, {e, i}} ->
-          {e2, i2} = assign(target, PArray.get(arr, {:int, idx}), e, i)
-          {idx + 1, {e2, i2}}
-
-        {:kv, kexpr, target, _}, {idx, {e, i}} ->
-          {{:val, k}, _e2, _i2} = eval(kexpr, e, i)
-          {e3, i3} = assign(target, PArray.get(arr, k, :null), e, i)
-          {idx, {e3, i3}}
-      end)
-
-    result
-  end
-
-  # ── call machinery lives in PhpBeam.Eval.Call (delegates keep the old surface) ──
+  def throw_set_error(msg, _env, _interp), do: throw({:set_error, msg})
+
+  # ── facade: submodules own the machinery, Eval keeps the public surface ──
+
+  defdelegate do_call(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_named(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
+  defdelegate call_generator_fn(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
+  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_count_method(_p0, _p1), to: PhpBeam.Eval.Call
+  defdelegate call_php_method(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
+  defdelegate call_constructor(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate call_function(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
+  defdelegate call_builtin(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
+  defdelegate call_resolved_builtin(_p0, _p1, _p2, _p3, _p4, _p5, _p6), to: PhpBeam.Eval.Call
+  defdelegate bind_params(_p0, _p1, _p2, _p3, _p4, _p5, _p6, _p7), to: PhpBeam.Eval.Call
+  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
+  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
+  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
+  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
+  defdelegate reorder_named(_p0, _p1), to: PhpBeam.Eval.Call
+  defdelegate reorder_named_general(_p0, _p1, _p2), to: PhpBeam.Eval.Call
   defdelegate align_slots(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
+  defdelegate named_arg_throw(_p0, _p1, _p2), to: PhpBeam.Eval.Call
+  defdelegate eval_call_args(_p0, _p1, _p2), to: PhpBeam.Eval.Call
+  defdelegate resolve_named_results(_p0), to: PhpBeam.Eval.Call
+  defdelegate reorder_builtin_args(_p0, _p1), to: PhpBeam.Eval.Call
 
   defdelegate arg_count_error(_p0, _p1, _p2, _p3, _p4, _p5, _p6, _p7, _p8, _p9),
     to: PhpBeam.Eval.Call
 
-  defdelegate arg_values(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate bind_params(_p0, _p1, _p2, _p3, _p4, _p5, _p6, _p7), to: PhpBeam.Eval.Call
-  defdelegate call_builtin(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_constructor(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_count_method(_p0, _p1), to: PhpBeam.Eval.Call
-  defdelegate call_function(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate call_generator_fn(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate call_named(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate call_php_method(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate call_php_method_inner(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate call_resolved_builtin(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate call_resolved_builtin(_p0, _p1, _p2, _p3, _p4, _p5, _p6), to: PhpBeam.Eval.Call
-  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate do_call(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate eval_args(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate eval_call_args(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate invoke_fcc(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate materialize_native(_p0, _p1), to: PhpBeam.Eval.Call
-  defdelegate named_arg_throw(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate reorder_builtin_args(_p0, _p1), to: PhpBeam.Eval.Call
-  defdelegate reorder_named(_p0, _p1), to: PhpBeam.Eval.Call
-  defdelegate reorder_named_general(_p0, _p1, _p2), to: PhpBeam.Eval.Call
   defdelegate resolve_args(_p0), to: PhpBeam.Eval.Call
+  defdelegate eval_args(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
   defdelegate resolve_function(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate resolve_named_results(_p0), to: PhpBeam.Eval.Call
+  defdelegate materialize_native(_p0, _p1), to: PhpBeam.Eval.Call
+  defdelegate materialize_native(_p0, _p1), to: PhpBeam.Eval.Call
   defdelegate wrap_args(_p0), to: PhpBeam.Eval.Call
-  defdelegate write_back_ref_args(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
+  defdelegate arg_values(_p0, _p1, _p2), to: PhpBeam.Eval.Call
+  defdelegate call_php_method_inner(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
+  defdelegate invoke_fcc(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
   defdelegate write_back_refs(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
+  defdelegate write_back_ref_args(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
+  defdelegate write_back_ref_args(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate read_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate prop_rooted?(_p0), to: PhpBeam.Eval.Assign
+  defdelegate prop_rooted?(_p0), to: PhpBeam.Eval.Assign
+  defdelegate prop_rooted?(_p0), to: PhpBeam.Eval.Assign
+  defdelegate prop_rooted?(_p0), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate generic_index_assign(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate nested_member_write(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate nested_member_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate quiet_read(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate quiet_read(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate quiet_read(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate mutate_member(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate build_path(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate lvalue_path(_p0, _p1), to: PhpBeam.Eval.Assign
+  defdelegate lvalue_path(_p0, _p1), to: PhpBeam.Eval.Assign
+  defdelegate lvalue_path(_p0, _p1), to: PhpBeam.Eval.Assign
+  defdelegate lvalue_path(_p0, _p1), to: PhpBeam.Eval.Assign
+  defdelegate update_path_env(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate update_path_env(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate path_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate path_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate path_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate split_path(_p0), to: PhpBeam.Eval.Assign
+  defdelegate split_path(_p0), to: PhpBeam.Eval.Assign
+  defdelegate index_read(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate read_index_raw(_p0, _p1), to: PhpBeam.Eval.Assign
+  defdelegate read_index_raw(_p0, _p1), to: PhpBeam.Eval.Assign
+  defdelegate plain_key(_p0), to: PhpBeam.Eval.Assign
+  defdelegate plain_key(_p0), to: PhpBeam.Eval.Assign
+  defdelegate plain_key(_p0), to: PhpBeam.Eval.Assign
+  defdelegate isset?(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate isset?(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate unset_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate unset_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate unset_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate unset_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate destructure(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate deref_container(_p0, _p1), to: PhpBeam.Eval.Assign
+  defdelegate deref_container(_p0, _p1), to: PhpBeam.Eval.Assign
+  defdelegate path_put(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate path_put(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate path_put(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate string_offset_isset?(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate path_get(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate path_get(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
+  defdelegate walk_path_get(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate walk_path_get(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate path_append(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
+  defdelegate path_set(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate first_byte_str(_p0), to: PhpBeam.Eval.Assign
+  defdelegate first_byte_str(_p0), to: PhpBeam.Eval.Assign
+  defdelegate string_offset_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
+  defdelegate offset_index(_p0), to: PhpBeam.Eval.Assign
+  defdelegate offset_index(_p0), to: PhpBeam.Eval.Assign
+  defdelegate offset_index(_p0), to: PhpBeam.Eval.Assign
+  defdelegate start_generator(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Generator
+  defdelegate gen_resume(_p0, _p1, _p2), to: PhpBeam.Eval.Generator
+  defdelegate gen_resume(_p0, _p1, _p2), to: PhpBeam.Eval.Generator
+  defdelegate send_each(_p0, _p1), to: PhpBeam.Eval.Generator
+  defdelegate send_each(_p0, _p1), to: PhpBeam.Eval.Generator
+  defdelegate top_file(_p0), to: PhpBeam.Eval.Generator
+  defdelegate top_file(_p0), to: PhpBeam.Eval.Generator
+  defdelegate strip_gen(_p0), to: PhpBeam.Eval.Generator
+  defdelegate gen_yield(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Generator
+  defdelegate const_eval_quiet(_p0, _p1, _p2), to: PhpBeam.Eval.ConstEval
+  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
+  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
+  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
+  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
+  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
+  defdelegate const_fold(_p0, _p1), to: PhpBeam.Eval.ConstEval
+  defdelegate const_fold(_p0, _p1, _p2), to: PhpBeam.Eval.ConstEval
+  defdelegate const_eval(_p0, _p1, _p2), to: PhpBeam.Eval.ConstEval
+  defdelegate resolve_const(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.ConstEval
+  defdelegate resolve_plain_const(_p0, _p1), to: PhpBeam.Eval.ConstEval
+  defdelegate magic_const(_p0, _p1, _p2), to: PhpBeam.Eval.ConstEval
+  defdelegate builtin_const(_p0), to: PhpBeam.Eval.ConstEval
 end
