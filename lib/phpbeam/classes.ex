@@ -331,8 +331,8 @@ defmodule PhpBeam.Classes do
 
         case hit do
           {:as, _from, _orig, alias_name, vis} when alias_name != nil ->
-            {String.downcase(alias_name),
-             %{m | name: alias_name, visibility: vis || m.visibility}, tkey}
+            am = %{m | name: alias_name, visibility: vis || m.visibility}
+            {mname, m, String.downcase(alias_name), am}
 
           {:as, _from, _orig, _alias, vis} ->
             {mname, %{m | visibility: vis || m.visibility}, tkey}
@@ -342,11 +342,30 @@ defmodule PhpBeam.Classes do
         end
       end)
 
-    Enum.reduce(renamed, class.methods, fn {mname, m, _tkey}, acc ->
-      if Map.has_key?(class.methods, mname) or Map.has_key?(acc, mname) do
-        acc
-      else
-        Map.put(acc, mname, m)
+    # php: `m as x` ADDS an alias while keeping m accessible (only
+    # insteadof removes); entries carry the originals alongside renames
+    Enum.reduce(renamed, class.methods, fn entry, acc ->
+      case entry do
+        {mname, m, _tkey} ->
+          if Map.has_key?(class.methods, mname) or Map.has_key?(acc, mname) do
+            acc
+          else
+            Map.put(acc, mname, m)
+          end
+
+        {mname, m, alias_name, am} ->
+          acc2 =
+            if Map.has_key?(class.methods, mname) or Map.has_key?(acc, mname) do
+              acc
+            else
+              Map.put(acc, mname, m)
+            end
+
+          if Map.has_key?(class.methods, alias_name) or Map.has_key?(acc2, alias_name) do
+            acc2
+          else
+            Map.put(acc2, alias_name, am)
+          end
       end
     end)
   end
@@ -461,7 +480,8 @@ defmodule PhpBeam.Classes do
                   "Access level to #{class.name}::#{cm.name}() must be #{pm.visibility}" <>
                     " (as in class #{ancestor.name})"
 
-                pm.name != "__construct" and not params_compat?(pm.params, cm.params) ->
+                pm.name != "__construct" and
+                    not params_compat?(pm.params, cm.params, interp, class) ->
                   "Declaration of #{class.name}::#{cm.name}(#{param_sig(cm.params)})" <>
                     " must be compatible with #{ancestor.name}::#{pm.name}(#{param_sig(pm.params)})"
 
@@ -554,7 +574,7 @@ defmodule PhpBeam.Classes do
   defp vis_rank(:public), do: 2
 
   # param tuples: {:param, name, type, default, by_ref?, variadic?}
-  defp params_compat?(pp, cp) do
+  defp params_compat?(pp, cp, interp, class) do
     p_var? = Enum.any?(pp, &match?({:param, _, _, _, _, true}, &1))
     c_var? = Enum.any?(cp, &match?({:param, _, _, _, _, true}, &1))
 
@@ -568,10 +588,40 @@ defmodule PhpBeam.Classes do
       true ->
         Enum.zip(pp, cp)
         |> Enum.all?(fn {{:param, _, pt, _, pr, _}, {:param, _, ct, _, cr, _}} ->
-          pr == cr and (ct == nil or ct == pt)
+          pr == cr and type_eq?(pt, ct, interp, class)
         end)
     end
   end
+
+  # php compares RESOLVED types: an aliased `HttpTransporterInterface` in the
+  # child matches the parent's fully-qualified spelling
+  defp type_eq?(nil, _ct, _interp, _class), do: true
+
+  defp type_eq?(pt, ct, _interp, _class) when pt == ct, do: true
+
+  defp type_eq?(pt, ct, _interp, _class) do
+    builtin_types =
+      ~w(int float string bool array callable iterable object mixed null false true self static mixed)
+
+    pt_l = String.downcase(pt)
+    ct_l = String.downcase(ct)
+
+    cond do
+      pt_l in builtin_types or ct_l in builtin_types ->
+        # builtin spellings (int/integer, bool/boolean) normalize loosely
+        loose_builtin(pt_l) == loose_builtin(ct_l)
+
+      true ->
+        # class types: compare their downcased last segments (alias vs FQ)
+        seg(pt) == seg(ct)
+    end
+  end
+
+  defp loose_builtin("integer"), do: "int"
+  defp loose_builtin("boolean"), do: "bool"
+  defp loose_builtin(b), do: b
+
+  defp seg(t), do: t |> String.split("\\") |> List.last() |> String.downcase()
 
   defp required_count(params),
     do: Enum.count(params, &match?({:param, _, _, nil, _, false}, &1))
@@ -728,6 +778,8 @@ defmodule PhpBeam.Classes do
   def native_classes do
     base = %{
       "stdclass" => native_stdclass(),
+      "datetime" => native_datetime_class(),
+      "datetimezone" => native_datetimezone_class(),
       "throwable" => native_class("Throwable", nil, []),
       "exception" => native_class("Exception", "throwable", []),
       "error" => native_class("Error", "throwable", []),
@@ -767,8 +819,9 @@ defmodule PhpBeam.Classes do
     base
     |> Enum.reduce(base, fn {key, _class}, acc ->
       # only the exception hierarchy gets Throwable's methods — stdClass
-      # would otherwise inherit its constructor (and its message/code props)
-      if key in ~w(throwable stdclass) do
+      # would otherwise inherit its constructor (and its message/code props),
+      # and DateTime carries its own native methods
+      if key in ~w(throwable stdclass datetime datetimezone) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
@@ -776,6 +829,154 @@ defmodule PhpBeam.Classes do
     end)
     |> Map.merge(ifaces)
     |> Map.put("generator", native_generator_class())
+  end
+
+  # minimal native DateTime/DateTimeZone (WP uses format('T') on install)
+  defp native_datetimezone_class do
+    %__MODULE__{
+      name: "DateTimeZone",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods: %{
+        "__construct" =>
+          native_fn("__construct", fn obj, args, i ->
+            name = args |> Enum.at(0, {:string, "UTC"}) |> dt_s()
+            {:ok, {:null, dt_put(obj, "name", {:string, name})}, i}
+          end),
+        "getname" =>
+          native_fn("getName", fn obj, _args, i ->
+            {:ok, {Map.get(native_state(obj), "name", {:string, "UTC"}), obj}, i}
+          end)
+      },
+      file: ""
+    }
+  end
+
+  defp native_datetime_class do
+    %__MODULE__{
+      name: "DateTime",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods: %{
+        "__construct" =>
+          native_fn("__construct", fn obj, args, i ->
+            time = args |> Enum.at(0, {:string, "now"}) |> dt_s()
+
+            ts =
+              case time do
+                "now" ->
+                  System.system_time(:second)
+
+                other ->
+                  case Integer.parse(other) do
+                    {n, _} -> n
+                    :error -> System.system_time(:second)
+                  end
+              end
+
+            tz =
+              case Enum.at(args, 1) do
+                {:object, _} = oref ->
+                  tzobj = Eval.get_object(i, oref)
+                  Map.get(native_state(tzobj), "name", {:string, "UTC"})
+
+                _ ->
+                  {:string, "UTC"}
+              end
+
+            obj2 = obj |> dt_put("ts", {:int, ts}) |> dt_put("tz", tz)
+            {:ok, {:null, obj2}, i}
+          end),
+        "format" =>
+          native_fn("format", fn obj, args, i ->
+            fmt = args |> Enum.at(0, {:string, "U"}) |> dt_s()
+            ts = native_state(obj) |> Map.get("ts", {:int, 0})
+            tz = native_state(obj) |> Map.get("tz", {:string, "UTC"})
+            {:ok, {{:string, dt_format(fmt, ts, tz)}, obj}, i}
+          end),
+        "gettimestamp" =>
+          native_fn("getTimestamp", fn obj, _args, i ->
+            {:ok, {native_state(obj) |> Map.get("ts", {:int, 0}), obj}, i}
+          end)
+      },
+      file: ""
+    }
+  end
+
+  defp native_state(obj), do: Map.get(obj, :dt_state) || %{}
+
+  defp dt_put(obj, k, v) do
+    st = Map.get(obj, :dt_state) || %{}
+    Map.put(obj, :dt_state, Map.put(st, k, v))
+  end
+
+  defp dt_s({:string, s}), do: s
+  defp dt_s(v), do: PhpBeam.Eval.php_to_string(v)
+
+  defp dt_format(fmt, {:int, ts}, {:string, tz}) do
+    offset = if tz in ~w(UTC GMT +00:00), do: 0, else: 0
+
+    {{yr, mo, dy}, {hh, mm, ss}} =
+      :calendar.gregorian_seconds_to_datetime(ts + offset * 3600 + 62_167_219_200)
+
+    fmt
+    |> String.to_charlist()
+    |> Enum.map_join("", fn
+      ?T ->
+        if offset == 0, do: "UTC", else: dt_tz_abbr(offset)
+
+      ?U ->
+        Integer.to_string(ts)
+
+      ?Y ->
+        pad(yr, 4)
+
+      ?m ->
+        pad(mo, 2)
+
+      ?d ->
+        pad(dy, 2)
+
+      ?H ->
+        pad(hh, 2)
+
+      ?i ->
+        pad(mm, 2)
+
+      ?s ->
+        pad(ss, 2)
+
+      ?c ->
+        "#{pad(yr, 4)}-#{pad(mo, 2)}-#{pad(dy, 2)}T#{pad(hh, 2)}:#{pad(mm, 2)}:#{pad(ss, 2)}" <>
+          dt_offset_str(offset)
+
+      ?\\ ->
+        ""
+
+      ch ->
+        <<ch>>
+    end)
+  end
+
+  defp pad(n, w), do: String.pad_leading(Integer.to_string(n), w, "0")
+
+  defp dt_offset_str(0), do: "+00:00"
+
+  defp dt_offset_str(off) do
+    sign = if off >= 0, do: "+", else: "-"
+    a = abs(off)
+    sign <> pad(div(a, 60), 2) <> ":" <> pad(rem(a, 60), 2)
+  end
+
+  defp dt_tz_abbr(off) do
+    sign = if off >= 0, do: "+", else: "-"
+    "#{sign}#{pad((abs(off) / 1) |> trunc, 2)}"
   end
 
   # Generator objects are created by Eval.start_generator; the state

@@ -12,6 +12,7 @@ defmodule PhpBeam.Builtin.ArrayFns do
       "count" => &count_v/2,
       "sizeof" => &count_v/2,
       "array_keys" => &array_keys/2,
+      "array_values" => &array_values/2,
       "in_array" => &in_array/2,
       "array_search" => &array_search/2,
       "array_key_exists" => &array_key_exists/2,
@@ -663,4 +664,9 @@ defmodule PhpBeam.Builtin.ArrayFns do
   # plain fns arrive as &name/2; mutators as {fun, refs}
   defp normalize_entry({fun, refs}) when is_function(fun, 2), do: {fun, refs || []}
   defp normalize_entry(fun) when is_function(fun, 2), do: {fun, []}
+
+  defp array_values([{:array, a} | _], i),
+    do: {:ok, {:array, PArray.from_pairs(Enum.map(PArray.values(a), &{nil, &1}))}, i}
+
+  defp array_values([_ | _], i), do: {:ok, {:array, PArray.new()}, i}
 end

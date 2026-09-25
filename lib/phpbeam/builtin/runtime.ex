@@ -28,6 +28,7 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "getmypid" => &getmypid/2,
       "setlocale" => &setlocale/2,
       "get_defined_functions" => &get_defined_functions/2,
+      "debug_backtrace" => &debug_backtrace/2,
       "set_include_path" => &set_include_path/2,
       "get_include_path" => &get_include_path/2,
       "restore_include_path" => &restore_include_path/2,
@@ -363,5 +364,22 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       {:ok, v} when is_binary(v) -> String.to_integer(v)
       _ -> default
     end
+  end
+
+  defp debug_backtrace(_vals, i) do
+    # frames mirror php's: file, line, function, args (approximated)
+    frames =
+      i.call_stack
+      |> Enum.reverse()
+      |> Enum.map(fn f ->
+        {:array,
+         PArray.from_pairs([
+           {{:string, "file"}, {:string, f.file}},
+           {{:string, "line"}, {:int, f.line}},
+           {{:string, "function"}, {:string, String.replace(f.func, ~r/\(.*\)/, "")}}
+         ])}
+      end)
+
+    {:ok, {:array, PArray.from_pairs([{nil, {:array, PArray.new()}} | frames] |> tl)}, i}
   end
 end

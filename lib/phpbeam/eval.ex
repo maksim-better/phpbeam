@@ -657,6 +657,24 @@ defmodule PhpBeam.Eval do
         {{:unwrap, _}, _, _} = {u, env2, interp3}
         {{:unwind, elem(u, 1)}, env2, interp3}
 
+      # some binop arms return the bare tagged value (or a 3-tuple with the
+      # threaded interp) — accept all three shapes
+      v when is_tuple(v) and tuple_size(v) in [2, 3] and elem(v, 0) != :ok ->
+        val =
+          case v do
+            {_, val} -> val
+            {_, val, _} -> val
+          end
+
+        i_r =
+          case v do
+            {_, _, i4} -> i4
+            _ -> interp3
+          end
+
+        {env3, i5} = assign(target, val, env2, i_r || interp3)
+        {{:val, val}, env3, i5}
+
       {:ok, v} ->
         {env3, interp4} = assign(target, v, env2, interp3)
         {{:val, v}, env3, interp4}
@@ -952,27 +970,29 @@ defmodule PhpBeam.Eval do
               # the included file may declare a namespace — save/restore it so
               # declarations don't leak into the includer (sodium_compat!)
               ns0 = i2.ns
+              uses0 = i2.uses
 
               i3 = %{
                 i2
                 | included: Map.put(i2.included, resolved, true),
                   file_stack: [resolved | i2.file_stack],
-                  ns: []
+                  ns: [],
+                  uses: %{normal: %{}, function: %{}, const: %{}}
               }
 
               with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
                    {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
                 case Interp.exec_stmts(stmts, env2, i3) do
                   {:ok, env3, i4} ->
-                    {{:val, {:int, 1}}, env3, pop_file(restore_ns(i4, ns0))}
+                    {{:val, {:int, 1}}, env3, pop_file(restore_uses(restore_ns(i4, ns0), uses0))}
 
                   # return unwinds carry a nil env by convention — the
                   # include's value goes back to the caller's live env
                   {{:unwind, {:return, v}}, _env3, i4} ->
-                    {{:val, v}, env2, pop_file(restore_ns(i4, ns0))}
+                    {{:val, v}, env2, pop_file(restore_uses(restore_ns(i4, ns0), uses0))}
 
                   {{:unwind, _} = u, env3, i4} ->
-                    {u, env3, restore_ns(i4, ns0)}
+                    {u, env3, restore_uses(restore_ns(i4, ns0), uses0)}
                 end
               else
                 {:error, msg, line} ->
@@ -1082,6 +1102,7 @@ defmodule PhpBeam.Eval do
   defp unwrap_key(other), do: other
 
   defp restore_ns(i, ns), do: %{i | ns: ns}
+  defp restore_uses(i, uses), do: %{i | uses: uses}
   defp pop_file(i), do: i
 
   # ───────────────────────── generators (yield) ─────────────────────────
@@ -1933,10 +1954,10 @@ defmodule PhpBeam.Eval do
 
   defp call_named(parts, name, fq, args, env, interp) do
     case resolve_function(name, fq, interp) do
-      {:user, _params, _body, _def_file, _def_line} = fn_def ->
+      {:user, _params, _body, _def_file, _def_line, _ns, _uses} = fn_def ->
         call_function(fn_def, name, args, env, interp, false)
 
-      {:user_gen, _params, _body, _def_file, _def_line} = fn_def ->
+      {:user_gen, _params, _body, _def_file, _def_line, _ns, _uses} = fn_def ->
         call_generator_fn(fn_def, name, args, env, interp)
 
       %{fun: _} = entry ->
@@ -1951,7 +1972,7 @@ defmodule PhpBeam.Eval do
   # generator factory call: bind params (ArgumentCountError still applies at
   # call time), then hand the prepared env/body to the lazy generator
   defp call_generator_fn(
-         {:user_gen, params, body, def_file, def_line},
+         {:user_gen, params, body, def_file, def_line, dns, duses},
          name,
          args,
          env,
@@ -1966,14 +1987,18 @@ defmodule PhpBeam.Eval do
             %{acc | vars: Map.put(acc.vars, n, v)}
           end)
 
-        # generator bodies evaluate __DIR__ against their defining file
-        {res, env2, interp3} =
-          start_generator(fenv2, body, env, %{
-            interp2
-            | file_stack: [def_file | interp2.file_stack]
-          })
+        # generator bodies evaluate __DIR__ against their defining file and
+        # resolve names under the defining ns/uses
+        i3 = %{
+          interp2
+          | file_stack: [def_file | interp2.file_stack],
+            ns: dns || interp2.ns,
+            uses: duses || interp2.uses
+        }
 
-        {res, env2, pop_file(interp3)}
+        {res, env2, interp4} = start_generator(fenv2, body, env, i3)
+
+        {res, env2, %{pop_file(interp4) | ns: interp2.ns, uses: interp2.uses}}
 
       {{:unwind, _} = u, _, it2} ->
         {u, env, it2}
@@ -2816,7 +2841,7 @@ defmodule PhpBeam.Eval do
   end
 
   def call_function(
-        {:user, params, body, def_file, def_line},
+        {:user, params, body, def_file, def_line, dns, duses},
         name,
         args,
         env,
@@ -2835,9 +2860,14 @@ defmodule PhpBeam.Eval do
             %{acc | vars: Map.put(acc.vars, n, v)}
           end)
 
-        # php attributes errors inside a function to its DEFINING file —
-        # push that file for the duration of the body
-        interp2 = %{interp2 | file_stack: [def_file | interp2.file_stack]}
+        # php attributes errors inside a function to its DEFINING file and
+        # compiles it with that file's ns/use aliases
+        interp2 = %{
+          interp2
+          | file_stack: [def_file | interp2.file_stack],
+            ns: dns || interp2.ns,
+            uses: duses || interp2.uses
+        }
 
         {res, _, interp3} = Interp.exec_stmts(body, fenv2, interp2)
 
@@ -2846,11 +2876,13 @@ defmodule PhpBeam.Eval do
 
         interp5 = Interp.pop_frame(pop_file_once(interp4))
 
+        restore = fn i -> %{i | ns: interp.ns, uses: interp.uses} end
+
         case res do
-          :ok -> {{:val, :null}, env_out, interp5}
-          {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
+          :ok -> {{:val, :null}, env_out, restore.(interp5)}
+          {:unwind, {:return, v}} -> {{:val, v}, env_out, restore.(interp5)}
           # a throw escaping keeps its frame alive for the uncaught trace
-          {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+          {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, restore.(interp4)}
         end
 
       {{:unwind, _} = u, _, it2} ->
@@ -3447,7 +3479,9 @@ defmodule PhpBeam.Eval do
             end
           end)
 
-        {PhpBeam.Classes.get_class(it2, key), it2}
+        # the autoloaders ran under a ns/uses-stripped interp; restore the
+        # CALLER's scope — classes/side effects they registered persist
+        {PhpBeam.Classes.get_class(it2, key), %{it2 | ns: interp.ns, uses: interp.uses}}
 
       other ->
         {other, interp}
@@ -3779,6 +3813,36 @@ defmodule PhpBeam.Eval do
 
       "JSON_HEX_TAG" ->
         {:ok, {:int, 1}}
+
+      "JSON_HEX_AMP" ->
+        {:ok, {:int, 2}}
+
+      "JSON_HEX_APOS" ->
+        {:ok, {:int, 4}}
+
+      "JSON_HEX_QUOT" ->
+        {:ok, {:int, 8}}
+
+      "JSON_FORCE_OBJECT" ->
+        {:ok, {:int, 16}}
+
+      "JSON_UNESCAPED_SLASHES" ->
+        {:ok, {:int, 64}}
+
+      "JSON_PRETTY_PRINT" ->
+        {:ok, {:int, 128}}
+
+      "JSON_UNESCAPED_UNICODE" ->
+        {:ok, {:int, 256}}
+
+      "JSON_PARTIAL_OUTPUT_ON_ERROR" ->
+        {:ok, {:int, 512}}
+
+      "JSON_INVALID_UTF8_SUBSTITUTE" ->
+        {:ok, {:int, 2_097_152}}
+
+      "JSON_THROW_ON_ERROR" ->
+        {:ok, {:int, 4_194_304}}
 
       "EXTR_OVERWRITE" ->
         {:ok, {:int, 0}}
@@ -4480,8 +4544,8 @@ defmodule PhpBeam.Eval do
         _ ->
           # php autovivifies: $x[k][k2] on null/scalar becomes an array
           case PArray.put(PArray.new(), k2, inner2) do
-            {:ok, arr2} -> {:array, arr2}
-            _ -> base
+            {:ok, arr2} -> {{:array, arr2}, i3}
+            _ -> {base, i3}
           end
       end
 

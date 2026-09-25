@@ -277,6 +277,7 @@ defmodule PhpBeam.Value do
   def cast_string(v)
 
   def cast_string({:string, s}), do: {:ok, s}
+  def cast_string({:int, v}) when not is_integer(v), do: {:ok, "0"}
   def cast_string({:int, i}), do: {:ok, Integer.to_string(i)}
   def cast_string({:bool, true}), do: {:ok, "1"}
   def cast_string({:bool, false}), do: {:ok, ""}

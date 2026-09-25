@@ -33,6 +33,10 @@ defmodule PhpBeam.Builtin.StringFns do
       "str_word_count" => &str_word_count/2,
       "strip_tags" => &strip_tags/2,
       "addslashes" => &addslashes_v/2,
+      "addcslashes" => &addcslashes_v/2,
+      "strtok" => &strtok_v/2,
+      "stripcslashes" => &stripcslashes_v/2,
+      "quotemeta" => &quotemeta_v/2,
       "stripslashes" => &stripslashes_v/2,
       "mb_check_encoding" => &mb_check_encoding/2,
       "mb_strlen" => &mb_strlen/2,
@@ -110,7 +114,11 @@ defmodule PhpBeam.Builtin.StringFns do
 
       [{:int, l} | _] ->
         l2 = if l < 0, do: max(len + l - start2, 0), else: l
-        {:ok, {:string, binary_part(str, start2, min(l2, len - start2))}, i}
+        take = min(l2, len - start2)
+
+        if start2 >= len or take <= 0,
+          do: {:ok, {:string, ""}, i},
+          else: {:ok, {:string, binary_part(str, start2, take)}, i}
 
       [_] ->
         {:ok, {:string, ""}, i}
@@ -536,5 +544,113 @@ defmodule PhpBeam.Builtin.StringFns do
       end)
 
     {:ok, {:string, out}, i}
+  end
+
+  # php addcslashes: escapes chars listed in $charlist (ranges a..z, \n..\t forms)
+  defp addcslashes_v([v, {:string, list} | _], i) do
+    out =
+      s(v)
+      |> String.to_charlist()
+      |> Enum.map_join("", fn
+        ?\\ -> "\\\\"
+        c -> if c in charlist_set(list), do: escape_c(c), else: <<c::utf8>>
+      end)
+
+    {:ok, {:string, out}, i}
+  end
+
+  defp addcslashes_v([v | _], i), do: addslashes_v([v], i)
+
+  defp charlist_set(list) do
+    list
+    |> String.to_charlist()
+    |> parse_c_ranges([])
+    |> MapSet.new()
+  end
+
+  defp parse_c_ranges([], acc), do: acc
+
+  defp parse_c_ranges([a, ?., ?., b | rest], acc),
+    do: parse_c_ranges(rest, Enum.to_list(a..b) ++ acc)
+
+  defp parse_c_ranges([c | rest], acc), do: parse_c_ranges(rest, [c | acc])
+
+  defp escape_c(?\n), do: "\\n"
+  defp escape_c(?\t), do: "\\t"
+  defp escape_c(?\r), do: "\\r"
+
+  defp escape_c(c) when c < 32 or c > 126,
+    do: "\\0" <> String.pad_leading(Integer.to_string(c, 8), 3, "0")
+
+  defp escape_c(c), do: "\\" <> <<c>>
+
+  defp stripcslashes_v([v | _], i) do
+    out =
+      Regex.replace(~r/\\([0-7]{3}|.)/, s(v), fn _, g ->
+        case g do
+          <<c::utf8>> -> <<c>>
+          oct -> String.to_integer(oct, 8) |> :binary.encode_unsigned()
+        end
+      end)
+
+    {:ok, {:string, out}, i}
+  end
+
+  defp quotemeta_v([v | _], i) do
+    out =
+      s(v)
+      |> String.replace(".", "\\.")
+      |> String.replace("\\", "\\\\")
+      |> String.replace("+", "\\+")
+      |> String.replace("*", "\\*")
+      |> String.replace("?", "\\?")
+      |> String.replace("[", "\\[")
+      |> String.replace("^", "\\^")
+      |> String.replace("]", "\\]")
+      |> String.replace("(", "\\(")
+      |> String.replace(")", "\\)")
+      |> String.replace("$", "\\$")
+
+    {:ok, {:string, out}, i}
+  end
+
+  # php strtok: repeated calls with nil token continue from the internal
+  # cursor — WP's script-loader walks '.'-separated paths
+  defp strtok_v([v, {:string, tokens} | _], i) do
+    str = String.trim_leading(s(v), tokens)
+    {out, rest} = strtok_cut(str, tokens)
+    Process.put({:strtok, self()}, rest)
+    {:ok, {:string, out}, i}
+  end
+
+  defp strtok_v([{:string, tokens} | _], i) do
+    case Process.get({:strtok, self()}) do
+      nil ->
+        {:ok, {:bool, false}, i}
+
+      "" ->
+        {:ok, {:bool, false}, i}
+
+      rest ->
+        r2 = String.trim_leading(rest, tokens)
+
+        if r2 == "" do
+          Process.put({:strtok, self()}, "")
+          {:ok, {:bool, false}, i}
+        else
+          {out, r3} = strtok_cut(r2, tokens)
+          Process.put({:strtok, self()}, r3)
+          {:ok, {:string, out}, i}
+        end
+    end
+  end
+
+  defp strtok_v([_, _ | _], i), do: {:ok, {:bool, false}, i}
+
+  defp strtok_cut(str, tokens) do
+    case String.split(str, ~r/[#{Regex.escape(tokens)}]/, parts: 2) do
+      [tok, rest] -> {tok, rest}
+      [tok] -> {tok, ""}
+    end
   end
 end

@@ -46,6 +46,9 @@ defmodule PhpBeam.Builtin.MiscFns do
       "crc32b" => &crc32b_v/2,
       "hash" => &hash_v/2,
       "hash_hmac" => &hash_hmac_v/2,
+      "hash_hmac_algos" => &hash_hmac_algos_v/2,
+      "hash_algos" => &hash_hmac_algos_v/2,
+      "hash_equals" => &hash_equals_v/2,
       "hash_equals" => &hash_equals_v/2,
       "hash_algos" => &hash_algos_v/2,
       "is_resource" => &is_resource_v/2,
@@ -1161,4 +1164,29 @@ defmodule PhpBeam.Builtin.MiscFns do
       end
     end
   end
+
+  defp hash_hmac_algos_v(_vals, i) do
+    algos =
+      ~w(md2 md4 md5 sha1 sha224 sha256 sha384 sha512 ripemd128 ripemd160 ripemd256 ripemd320 whirlpool tiger128,3 tiger160,3 tiger192,3 tiger128,4 tiger160,4 tiger192,4 snefru snefru256 gost gost-crypto adler32 crc32 crc32b fnv132 fnv1a32 fnv164 fnv1a64 joaat haval128,3 haval160,3 haval192,3 haval224,3 haval256,3 haval128,4 haval160,4 haval192,4 haval224,4 haval256,4 haval128,5 haval160,5 haval192,5 haval224,5 haval256,5)
+
+    {:ok, {:array, PArray.from_pairs(Enum.map(algos, &{nil, {:string, &1}}))}, i}
+  end
+
+  defp hash_equals_v([{:string, a}, {:string, b} | _], i) do
+    eq =
+      byte_size(a) == byte_size(b) and
+        try_apply_hash_equal(a, b)
+
+    {:ok, {:bool, eq}, i}
+  end
+
+  defp try_apply_hash_equal(a, b) do
+    try do
+      :crypto.hash_equal(a, b)
+    rescue
+      _ -> false
+    end
+  end
+
+  defp hash_equals_v(_, i), do: {:ok, {:bool, false}, i}
 end

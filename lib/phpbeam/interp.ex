@@ -1103,11 +1103,14 @@ defmodule PhpBeam.Interp do
     if Map.has_key?(interp.functions, full) do
       {:ok, env, warn(interp, "Cannot redeclare function #{name}()")}
     else
+      # carry the defining file's namespace + use aliases: php binds them at
+      # compile time, and plain functions execute long after other namespaced
+      # includes have reset interp.uses
       entry =
         if PhpBeam.Ast.has_yield?(body) do
-          {:user_gen, params, body, def_file, interp.cur_line}
+          {:user_gen, params, body, def_file, interp.cur_line, interp.ns, interp.uses}
         else
-          {:user, params, body, def_file, interp.cur_line}
+          {:user, params, body, def_file, interp.cur_line, interp.ns, interp.uses}
         end
 
       {:ok, env, %{interp | functions: Map.put(interp.functions, full, entry)}}

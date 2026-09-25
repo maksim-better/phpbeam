@@ -429,7 +429,12 @@ defmodule PhpBeam.Parser do
         {[], rest2}
       end
 
-    {{:uses, {traits, adaptions}}, expect_semi(rest3)}
+    # php: no semicolon after the adaptation block's closing brace
+    if adaptions == [] do
+      {{:uses, {traits, adaptions}}, expect_semi(rest3)}
+    else
+      {{:uses, {traits, adaptions}}, rest3}
+    end
   end
 
   defp use_trait_names(ts, acc) do
@@ -458,17 +463,25 @@ defmodule PhpBeam.Parser do
     end
   end
 
-  # Insteadof: `B::m insteadof A;`  As: `B::m as x;` / `B::m as protected x;` / `m as x;`
+  # Insteadof: `B::m insteadof A;`  As: `B::m as x;` / `B::m as protected x;` /
+  # `m as x;` (bare method, php allows omitting the trait qualifier)
   defp trait_adaption(ts) do
     {parts, rest, _} = qualified_name(ts)
-    rest2 = expect_op(rest, "::")
-    {method, rest3} = take_ident(rest2)
+
+    {trait_parts, method, rest3} =
+      if at_op?(rest, "::") do
+        {m, r2} = take_ident(tl(rest))
+        {parts, m, r2}
+      else
+        # bare `m as x;` — no trait qualifier
+        {nil, hd(parts), rest}
+      end
 
     {yes2, rest4} = take_name(rest3, "insteadof")
 
     if yes2 do
       {excluded, rest5} = use_trait_names(rest4, [])
-      {{:insteadof, parts, method, excluded}, rest5}
+      {{:insteadof, trait_parts, method, excluded}, rest5}
     else
       {_, rest4b} = take_name(rest3, "as")
 
@@ -483,10 +496,10 @@ defmodule PhpBeam.Parser do
 
       case peek(rest5) do
         {:name, _, alias_name} ->
-          {{:as, parts, method, alias_name, vis}, tl(rest5)}
+          {{:as, trait_parts, method, alias_name, vis}, tl(rest5)}
 
         _ ->
-          {{:as, nil, method, method, vis}, rest5}
+          {{:as, trait_parts, method, method, vis}, rest5}
       end
     end
   end
