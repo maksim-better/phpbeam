@@ -904,41 +904,6 @@ defmodule PhpBeam.Classes do
     end
   end
 
-  def instance_of?(interp, {:object, %{class: key}}, target_key),
-    do: is_a?(interp, key, target_key)
-
-  def instance_of?(_interp, _, _target_key), do: false
-
-  # ───────────────────────── instantiation ─────────────────────────
-
-  # returns the object MAP (the {:object, id} handle wraps it in the registry)
-  def instantiate(interp, key, obj_id) do
-    defaults = instance_defaults(interp, key)
-    %{__ref__: obj_id, class: key, props: PArray.from_pairs(defaults)}
-  end
-
-  defp instance_defaults(interp, key) do
-    case Map.get(interp.classes, key) do
-      nil ->
-        []
-
-      class ->
-        ro_class? = "readonly" in (Map.get(class, :modifiers) || [])
-
-        own =
-          class.props
-          # readonly props start UNINITIALIZED (defaults only reach them via
-          # promoted ctor params) so presence in obj.props genuinely means
-          # "initialized" — a readonly class makes every own prop readonly
-          |> Enum.reject(fn p ->
-            p.static? or match?(%{readonly?: true}, p) or ro_class?
-          end)
-          |> Enum.map(&{{:string, &1.display}, &1.default})
-
-        own ++ instance_defaults(interp, class.parent)
-    end
-  end
-
   # ───────────────────────── native exception hierarchy ─────────────────────────
 
   @doc "Class map for Throwable and friends; methods are native closures."
@@ -1539,22 +1504,9 @@ defmodule PhpBeam.Classes do
     end
   end
 
-  @doc "Class display name + message for a thrown exception object"
-  def exception_info(interp, {:object, id}) do
-    case Map.get(interp.objects, id) do
-      nil ->
-        {"Exception", ""}
-
-      %{class: cls} = obj ->
-        name =
-          case get_class(interp, cls) do
-            %{name: n} -> n
-            _ -> cls
-          end
-
-        {name, Eval.php_to_string(native_get(obj, "message"))}
-    end
-  end
+  # object registry ops (instantiate/exception_info/instance_of?) live in
+  # PhpBeam.Objects; interp.ex still reaches exception_info through here
+  defdelegate exception_info(interp, ref), to: PhpBeam.Objects
 
   defp native_get(obj, name), do: PArray.get(obj.props, {:string, name}, :null)
 end

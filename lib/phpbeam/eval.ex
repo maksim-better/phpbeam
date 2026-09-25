@@ -1667,28 +1667,12 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  # objects live in the interpreter (handle semantics); the value is a ref id
-  def make_instance(interp, key) do
-    id = interp.next_obj
-    obj = PhpBeam.Classes.instantiate(interp, key, id)
-    interp2 = %{interp | objects: Map.put(interp.objects, id, obj), next_obj: id + 1}
-    {{:object, id}, interp2}
-  end
-
-  def get_object(interp, {:object, id}),
-    do: Map.get(interp.objects, id, %{__ref__: id, class: "stdclass", props: PArray.new()})
-
-  def get_object(_interp, other), do: other
-
-  def put_object(interp, {:object, id}, obj_map) do
-    %{interp | objects: Map.put(interp.objects, id, obj_map)}
-  end
-
-  def new_stdclass(interp, props) do
-    id = interp.next_obj
-    obj = %{__ref__: id, class: "stdclass", props: props, stdclass?: true}
-    {{:object, id}, %{interp | objects: Map.put(interp.objects, id, obj), next_obj: id + 1}}
-  end
+  # object registry ops live in PhpBeam.Objects (handles + interp.objects);
+  # kept as delegates — builtins/render/enums call these through Eval
+  defdelegate make_instance(interp, key), to: PhpBeam.Objects
+  defdelegate get_object(interp, ref), to: PhpBeam.Objects
+  defdelegate put_object(interp, ref, obj_map), to: PhpBeam.Objects
+  defdelegate new_stdclass(interp, props), to: PhpBeam.Objects
 
   defp call_constructor({:object, _} = obj_ref, args, env, interp) do
     obj = get_object(interp, obj_ref)
