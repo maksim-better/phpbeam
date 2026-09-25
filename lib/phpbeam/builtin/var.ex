@@ -44,8 +44,6 @@ defmodule PhpBeam.Builtin.VarFns do
 
   defp first_val(vals), do: hd(vals ++ [:null])
 
-  defp false_v(_vals, i), do: {:ok, {:bool, false}, i}
-
   defp gettype(vals, i), do: {:ok, {:string, Value.gettype(first_val(vals))}, i}
 
   defp intval(vals, i) do

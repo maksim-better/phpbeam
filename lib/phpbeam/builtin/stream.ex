@@ -99,13 +99,6 @@ defmodule PhpBeam.Builtin.StreamFns do
     end
   end
 
-  defp rest_args(vals) do
-    vals
-    |> Enum.drop(1)
-    |> Enum.take(1)
-    |> Enum.flat_map(fn v -> [v] end)
-  end
-
   # ops that implement real std-stream behavior; the rest stub out
   # (php: fseek on a pipe → -1, ftell/rewind → false)
   @std_aware ~w(fwrite fread fclose fflush feof)

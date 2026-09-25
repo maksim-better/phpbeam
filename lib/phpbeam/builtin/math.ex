@@ -210,7 +210,7 @@ defmodule PhpBeam.Builtin.MathFns do
   defp is_infinite([v | _], i),
     do: {:ok, {:bool, is_float_val(v) and abs(fval(v)) > 1.7976931348623157e308}, i}
 
-  defp is_nan([v | _], i), do: {:ok, {:bool, false}, i}
+  defp is_nan([_v | _], i), do: {:ok, {:bool, false}, i}
 
   defp is_float_val({:float, _}), do: true
   defp is_float_val(_), do: false

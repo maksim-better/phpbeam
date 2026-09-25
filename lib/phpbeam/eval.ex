@@ -2188,144 +2188,83 @@ defmodule PhpBeam.Eval do
   def throw_set_error(msg, _env, _interp), do: throw({:set_error, msg})
 
   # ── facade: submodules own the machinery, Eval keeps the public surface ──
-
-  defdelegate do_call(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_named(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate call_generator_fn(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_value(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_cb(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_count_method(_p0, _p1), to: PhpBeam.Eval.Call
-  defdelegate call_php_method(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate call_constructor(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate call_function(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate call_builtin(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate call_resolved_builtin(_p0, _p1, _p2, _p3, _p4, _p5, _p6), to: PhpBeam.Eval.Call
-  defdelegate bind_params(_p0, _p1, _p2, _p3, _p4, _p5, _p6, _p7), to: PhpBeam.Eval.Call
-  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate do_bind_params(_p0, _p1, _p2, _p3, _p4, _p5), to: PhpBeam.Eval.Call
-  defdelegate reorder_named(_p0, _p1), to: PhpBeam.Eval.Call
-  defdelegate reorder_named_general(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate align_slots(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate named_arg_throw(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate eval_call_args(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate resolve_named_results(_p0), to: PhpBeam.Eval.Call
-  defdelegate reorder_builtin_args(_p0, _p1), to: PhpBeam.Eval.Call
-
-  defdelegate arg_count_error(_p0, _p1, _p2, _p3, _p4, _p5, _p6, _p7, _p8, _p9),
-    to: PhpBeam.Eval.Call
-
-  defdelegate resolve_args(_p0), to: PhpBeam.Eval.Call
-  defdelegate eval_args(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate resolve_function(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate materialize_native(_p0, _p1), to: PhpBeam.Eval.Call
-  defdelegate materialize_native(_p0, _p1), to: PhpBeam.Eval.Call
-  defdelegate wrap_args(_p0), to: PhpBeam.Eval.Call
-  defdelegate arg_values(_p0, _p1, _p2), to: PhpBeam.Eval.Call
-  defdelegate call_php_method_inner(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate invoke_fcc(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Call
-  defdelegate write_back_refs(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate write_back_ref_args(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate write_back_ref_args(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Call
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate read_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate prop_rooted?(_p0), to: PhpBeam.Eval.Assign
-  defdelegate prop_rooted?(_p0), to: PhpBeam.Eval.Assign
-  defdelegate prop_rooted?(_p0), to: PhpBeam.Eval.Assign
-  defdelegate prop_rooted?(_p0), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate generic_index_assign(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate nested_member_write(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate nested_member_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate quiet_read(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate quiet_read(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate quiet_read(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate mutate_member(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate assign(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate build_path(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate lvalue_path(_p0, _p1), to: PhpBeam.Eval.Assign
-  defdelegate lvalue_path(_p0, _p1), to: PhpBeam.Eval.Assign
-  defdelegate lvalue_path(_p0, _p1), to: PhpBeam.Eval.Assign
-  defdelegate lvalue_path(_p0, _p1), to: PhpBeam.Eval.Assign
-  defdelegate update_path_env(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate update_path_env(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate path_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate path_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate path_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate split_path(_p0), to: PhpBeam.Eval.Assign
-  defdelegate split_path(_p0), to: PhpBeam.Eval.Assign
-  defdelegate index_read(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate read_index_raw(_p0, _p1), to: PhpBeam.Eval.Assign
-  defdelegate read_index_raw(_p0, _p1), to: PhpBeam.Eval.Assign
-  defdelegate plain_key(_p0), to: PhpBeam.Eval.Assign
-  defdelegate plain_key(_p0), to: PhpBeam.Eval.Assign
-  defdelegate plain_key(_p0), to: PhpBeam.Eval.Assign
-  defdelegate isset?(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate isset?(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate unset_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate unset_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate unset_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate unset_target(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate destructure(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate deref_container(_p0, _p1), to: PhpBeam.Eval.Assign
-  defdelegate deref_container(_p0, _p1), to: PhpBeam.Eval.Assign
-  defdelegate path_put(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate path_put(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate path_put(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate string_offset_isset?(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate path_get(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate path_get(_p0, _p1, _p2), to: PhpBeam.Eval.Assign
-  defdelegate walk_path_get(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate walk_path_get(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate path_append(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Assign
-  defdelegate path_set(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate first_byte_str(_p0), to: PhpBeam.Eval.Assign
-  defdelegate first_byte_str(_p0), to: PhpBeam.Eval.Assign
-  defdelegate string_offset_write(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Assign
-  defdelegate offset_index(_p0), to: PhpBeam.Eval.Assign
-  defdelegate offset_index(_p0), to: PhpBeam.Eval.Assign
-  defdelegate offset_index(_p0), to: PhpBeam.Eval.Assign
-  defdelegate start_generator(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.Generator
-  defdelegate gen_resume(_p0, _p1, _p2), to: PhpBeam.Eval.Generator
-  defdelegate gen_resume(_p0, _p1, _p2), to: PhpBeam.Eval.Generator
-  defdelegate send_each(_p0, _p1), to: PhpBeam.Eval.Generator
-  defdelegate send_each(_p0, _p1), to: PhpBeam.Eval.Generator
-  defdelegate top_file(_p0), to: PhpBeam.Eval.Generator
-  defdelegate top_file(_p0), to: PhpBeam.Eval.Generator
-  defdelegate strip_gen(_p0), to: PhpBeam.Eval.Generator
-  defdelegate gen_yield(_p0, _p1, _p2, _p3, _p4), to: PhpBeam.Eval.Generator
-  defdelegate const_eval_quiet(_p0, _p1, _p2), to: PhpBeam.Eval.ConstEval
-  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
-  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
-  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
-  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
-  defdelegate eval_const_expr(_p0), to: PhpBeam.Eval.ConstEval
-  defdelegate const_fold(_p0, _p1), to: PhpBeam.Eval.ConstEval
-  defdelegate const_fold(_p0, _p1, _p2), to: PhpBeam.Eval.ConstEval
-  defdelegate const_eval(_p0, _p1, _p2), to: PhpBeam.Eval.ConstEval
-  defdelegate resolve_const(_p0, _p1, _p2, _p3), to: PhpBeam.Eval.ConstEval
-  defdelegate resolve_plain_const(_p0, _p1), to: PhpBeam.Eval.ConstEval
-  defdelegate magic_const(_p0, _p1, _p2), to: PhpBeam.Eval.ConstEval
-  defdelegate builtin_const(_p0), to: PhpBeam.Eval.ConstEval
+  defdelegate do_call(a, b, c, d), to: PhpBeam.Eval.Call
+  defdelegate call_named(a, b, c, d, e, f), to: PhpBeam.Eval.Call
+  defdelegate call_generator_fn(a, b, c, d, e), to: PhpBeam.Eval.Call
+  defdelegate call_value(a, b, c, d), to: PhpBeam.Eval.Call
+  defdelegate call_cb(a, b, c, d), to: PhpBeam.Eval.Call
+  defdelegate call_count_method(a, b), to: PhpBeam.Eval.Call
+  defdelegate call_php_method(a, b, c, d, e), to: PhpBeam.Eval.Call
+  defdelegate call_constructor(a, b, c, d), to: PhpBeam.Eval.Call
+  defdelegate call_function(a, b, c, d, e, f), to: PhpBeam.Eval.Call
+  defdelegate call_builtin(a, b, c, d, e), to: PhpBeam.Eval.Call
+  defdelegate call_resolved_builtin(a, b, c, d, e, f, g), to: PhpBeam.Eval.Call
+  defdelegate bind_params(a, b, c, d, e, f, g, h), to: PhpBeam.Eval.Call
+  defdelegate do_bind_params(a, b, c, d, e, f), to: PhpBeam.Eval.Call
+  defdelegate reorder_named(a, b), to: PhpBeam.Eval.Call
+  defdelegate reorder_named_general(a, b, c), to: PhpBeam.Eval.Call
+  defdelegate align_slots(a, b, c, d), to: PhpBeam.Eval.Call
+  defdelegate named_arg_throw(a, b, c), to: PhpBeam.Eval.Call
+  defdelegate eval_call_args(a, b, c), to: PhpBeam.Eval.Call
+  defdelegate resolve_named_results(a), to: PhpBeam.Eval.Call
+  defdelegate reorder_builtin_args(a, b), to: PhpBeam.Eval.Call
+  defdelegate arg_count_error(a, b, c, d, e, f, g, h, n0, n1), to: PhpBeam.Eval.Call
+  defdelegate resolve_args(a), to: PhpBeam.Eval.Call
+  defdelegate eval_args(a, b, c, d), to: PhpBeam.Eval.Call
+  defdelegate resolve_function(a, b, c), to: PhpBeam.Eval.Call
+  defdelegate materialize_native(a, b), to: PhpBeam.Eval.Call
+  defdelegate wrap_args(a), to: PhpBeam.Eval.Call
+  defdelegate arg_values(a, b, c), to: PhpBeam.Eval.Call
+  defdelegate call_php_method_inner(a, b, c, d, e), to: PhpBeam.Eval.Call
+  defdelegate invoke_fcc(a, b, c, d), to: PhpBeam.Eval.Call
+  defdelegate write_back_refs(a, b, c, d, e), to: PhpBeam.Eval.Call
+  defdelegate write_back_ref_args(a, b, c, d, e), to: PhpBeam.Eval.Call
+  defdelegate assign(a, b, c, d), to: PhpBeam.Eval.Assign
+  defdelegate read_target(a, b, c), to: PhpBeam.Eval.Assign
+  defdelegate prop_rooted?(a), to: PhpBeam.Eval.Assign
+  defdelegate generic_index_assign(a, b, c, d, e), to: PhpBeam.Eval.Assign
+  defdelegate nested_member_write(a, b, c, d), to: PhpBeam.Eval.Assign
+  defdelegate nested_member_write(a, b, c, d, e), to: PhpBeam.Eval.Assign
+  defdelegate quiet_read(a, b, c), to: PhpBeam.Eval.Assign
+  defdelegate mutate_member(a, b, c, d, e), to: PhpBeam.Eval.Assign
+  defdelegate build_path(a, b, c), to: PhpBeam.Eval.Assign
+  defdelegate lvalue_path(a, b), to: PhpBeam.Eval.Assign
+  defdelegate update_path_env(a, b, c, d, e), to: PhpBeam.Eval.Assign
+  defdelegate path_write(a, b, c, d, e), to: PhpBeam.Eval.Assign
+  defdelegate split_path(a), to: PhpBeam.Eval.Assign
+  defdelegate index_read(a, b, c, d), to: PhpBeam.Eval.Assign
+  defdelegate read_index_raw(a, b), to: PhpBeam.Eval.Assign
+  defdelegate plain_key(a), to: PhpBeam.Eval.Assign
+  defdelegate isset?(a, b, c), to: PhpBeam.Eval.Assign
+  defdelegate unset_target(a, b, c), to: PhpBeam.Eval.Assign
+  defdelegate destructure(a, b, c, d), to: PhpBeam.Eval.Assign
+  defdelegate deref_container(a, b), to: PhpBeam.Eval.Assign
+  defdelegate path_put(a, b, c, d), to: PhpBeam.Eval.Assign
+  defdelegate string_offset_isset?(a, b, c, d), to: PhpBeam.Eval.Assign
+  defdelegate path_get(a, b, c), to: PhpBeam.Eval.Assign
+  defdelegate walk_path_get(a, b, c, d), to: PhpBeam.Eval.Assign
+  defdelegate path_append(a, b, c, d), to: PhpBeam.Eval.Assign
+  defdelegate path_set(a, b, c, d, e), to: PhpBeam.Eval.Assign
+  defdelegate first_byte_str(a), to: PhpBeam.Eval.Assign
+  defdelegate string_offset_write(a, b, c, d, e), to: PhpBeam.Eval.Assign
+  defdelegate offset_index(a), to: PhpBeam.Eval.Assign
+  defdelegate start_generator(a, b, c, d), to: PhpBeam.Eval.Generator
+  defdelegate gen_resume(a, b, c), to: PhpBeam.Eval.Generator
+  defdelegate send_each(a, b), to: PhpBeam.Eval.Generator
+  defdelegate top_file(a), to: PhpBeam.Eval.Generator
+  defdelegate strip_gen(a), to: PhpBeam.Eval.Generator
+  defdelegate gen_yield(a, b, c, d, e), to: PhpBeam.Eval.Generator
+  defdelegate const_eval_quiet(a, b, c), to: PhpBeam.Eval.ConstEval
+  defdelegate eval_const_expr(a), to: PhpBeam.Eval.ConstEval
+  defdelegate const_fold(a, b), to: PhpBeam.Eval.ConstEval
+  defdelegate const_fold(a, b, c), to: PhpBeam.Eval.ConstEval
+  defdelegate const_eval(a, b, c), to: PhpBeam.Eval.ConstEval
+  defdelegate resolve_const(a, b, c, d), to: PhpBeam.Eval.ConstEval
+  defdelegate resolve_plain_const(a, b), to: PhpBeam.Eval.ConstEval
+  defdelegate magic_const(a, b, c), to: PhpBeam.Eval.ConstEval
+  defdelegate builtin_const(a), to: PhpBeam.Eval.ConstEval
+  defdelegate make_instance(interp, key), to: PhpBeam.Objects
+  defdelegate get_object(interp, ref), to: PhpBeam.Objects
+  defdelegate put_object(interp, ref, obj_map), to: PhpBeam.Objects
+  defdelegate new_stdclass(interp, props), to: PhpBeam.Objects
 end

@@ -22,7 +22,7 @@ defmodule PhpBeam.Builtin do
     VarFns
   }
 
-  alias PhpBeam.{PArray, Render, Value}
+  alias PhpBeam.{}
 
   def registry do
     %{}

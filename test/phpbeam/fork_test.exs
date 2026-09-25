@@ -34,7 +34,9 @@ defmodule PhpBeam.ForkTest do
   end
 
   test "forked interp executes boot-defined code" do
-    {out, _} = run_on(PhpBeam.Interp.fork_request(warmed()), "<?php echo boot_fn(), BootCls::hi();")
+    {out, _} =
+      run_on(PhpBeam.Interp.fork_request(warmed()), "<?php echo boot_fn(), BootCls::hi();")
+
     assert out == "99boot"
   end
 

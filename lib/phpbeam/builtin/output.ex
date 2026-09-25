@@ -207,11 +207,6 @@ defmodule PhpBeam.Builtin.OutputFns do
 
   def php_sprintf(_, interp), do: {:ok, {:string, ""}, interp}
 
-  defp sprintf(fmt, args, interp) do
-    {out, _} = do_sprintf(fmt, args, interp)
-    {:ok, {:string, out}, interp}
-  end
-
   @sprintf_re ~r/%([-+0 ]*)(\d*)(?:\.(\d+))?([sdfFxXb%])/
 
   defp do_sprintf(fmt, args, interp) do

@@ -49,7 +49,6 @@ defmodule PhpBeam.Builtin.MiscFns do
       "hash_hmac_algos" => &hash_hmac_algos_v/2,
       "hash_algos" => &hash_hmac_algos_v/2,
       "hash_equals" => &hash_equals_v/2,
-      "hash_equals" => &hash_equals_v/2,
       "hash_algos" => &hash_algos_v/2,
       "is_resource" => &is_resource_v/2,
       "is_callable" => &is_callable_v/2,
