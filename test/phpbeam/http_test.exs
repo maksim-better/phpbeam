@@ -72,6 +72,13 @@ defmodule PhpBeam.HttpTest do
   end
 
   defp kill(port) do
+    # Port.close alone does not terminate :nouse_stdio children on this
+    # platform — the servers outlived the suite and held pipes open
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} when is_integer(os_pid) -> System.cmd("kill", [Integer.to_string(os_pid)])
+      _ -> :ok
+    end
+
     if Port.info(port) != nil, do: Port.close(port)
   catch
     _, _ -> :ok
