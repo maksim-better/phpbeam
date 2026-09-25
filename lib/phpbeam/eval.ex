@@ -125,11 +125,16 @@ defmodule PhpBeam.Eval do
         obj = get_object(interp2, obj_ref)
         key = prop_name_string(name_e, env2, interp2)
 
-        case PArray.fetch(obj.props, {:string, String.downcase(key)}) do
-          {:ok, v} ->
+        hidden = prop_read_violation(interp2, obj.class, String.downcase(key), env)
+
+        case {hidden, PArray.fetch(obj.props, {:string, String.downcase(key)})} do
+          {nil, {:ok, v}} ->
             {{:val, deref(v, interp2)}, env2, interp2}
 
-          :error ->
+          {msg, _} when is_binary(msg) ->
+            {{:unwind, {:fatal, msg}}, env2, interp2}
+
+          _ ->
             case PhpBeam.Classes.find_method(interp2, obj.class, "__get") do
               nil ->
                 interp3 =
@@ -273,8 +278,14 @@ defmodule PhpBeam.Eval do
 
         case PhpBeam.Classes.find_prop(interp, key, name) do
           {:ok, prop} when prop.static? ->
-            statics = Map.get(interp.statics, static_props_key(key), %{})
-            {{:val, Map.get(statics, prop.name, prop.default)}, env, interp}
+            case static_prop_violation(interp, key, prop, env) do
+              nil ->
+                statics = Map.get(interp.statics, static_props_key(key), %{})
+                {{:val, Map.get(statics, prop.name, prop.default)}, env, interp}
+
+              msg ->
+                {{:unwind, {:fatal, msg}}, env, interp}
+            end
 
           _ ->
             {{:unwind,
@@ -286,6 +297,79 @@ defmodule PhpBeam.Eval do
     else
       {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
     end
+  end
+
+  # php: reading a private/protected prop from an unrelated scope is a
+  # fatal Error; a subclass reading the parent's PRIVATE prop is not visible
+  # (falls through to Undefined-property semantics on the subclass copy)
+  defp prop_read_violation(interp, class_key, key, env) do
+    walk_prop_visibility(interp, class_key, key, env)
+  end
+
+  defp walk_prop_visibility(_interp, nil, _key, _env), do: nil
+
+  defp walk_prop_visibility(interp, class_key, key, env) do
+    class = interp.classes[class_key]
+
+    case class && Enum.find(class.props, &(&1.name == key)) do
+      %{visibility: vis} when vis in [:private, :protected] ->
+        scope = env && env.scope_class
+
+        cond do
+          vis == :private and scope != nil and scope != class_key ->
+            # from another class scope, an invisible prop behaves as
+            # undeclared (php: Undefined property warning, not a fatal)
+            :hidden
+
+          scope == nil ->
+            "Cannot access #{vis} property #{display_class(interp, class_key)}::$#{key}"
+
+          true ->
+            visible =
+              if(vis == :private,
+                do: scope == class_key,
+                else: scope_in_chain?(interp, scope, class_key)
+              )
+
+            if visible,
+              do: nil,
+              else: "Cannot access #{vis} property #{display_class(interp, class_key)}::$#{key}"
+        end
+
+      _ ->
+        parent = class && class.parent
+        walk_prop_visibility(interp, parent, key, env)
+    end
+  end
+
+  # static props have no "treat as undeclared" fallback — always a fatal
+  defp static_prop_violation(interp, class_key, prop, env) do
+    vis = prop.visibility
+
+    if vis in [:private, :protected] do
+      scope = env && env.scope_class
+
+      visible? =
+        cond do
+          scope == nil -> false
+          vis == :private -> scope == class_key
+          true -> scope_in_chain?(interp, scope, class_key)
+        end
+
+      if visible?,
+        do: nil,
+        else: "Cannot access #{vis} property #{display_class(interp, class_key)}::$#{prop.name}"
+    else
+      nil
+    end
+  end
+
+  defp scope_in_chain?(_interp, nil, _target), do: false
+
+  defp scope_in_chain?(interp, key, target) do
+    key == target or
+      (interp.classes[key] &&
+         scope_in_chain?(interp, interp.classes[key].parent, target))
   end
 
   # the display name keeps the source spelling (keys are lowercased)
