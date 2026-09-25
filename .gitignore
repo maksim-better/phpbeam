@@ -25,3 +25,4 @@ phpbeam-*.tar
 
 # macOS metadata
 .DS_Store
+.specify/
