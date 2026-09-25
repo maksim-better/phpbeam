@@ -12,6 +12,13 @@
 
 ## M24：WordPress install 实测（进行中，`2026-09-25`）
 
+- [x] **M24-p1（9557a5e）**：引擎修复大丰收（15+ 处）——MyXQL :text、__get/__set 守卫、$GLOBALS 写穿、嵌套属性写、str_replace 计数、可调用数组、匿名类、尾随逗号、STD* 流、display_errors/define 语义等。wp-load 带真库 exit 0。
+- [x] **M24-p2（5c01ef1）**：**生成器全量落地**（进程+interp 穿梭模型、yield/k=>v/from/裸、Generator 原生类六方法、foreach 驱动、php 探针矩阵逐字节一致）；**autoload 体系**（fetch_class 触发 spl autoloaders、ns 隔离防自递归、父类/接口/trait 链接期加载、FQ 大小写显示名）；**类编译期作用域**（方法/闭包/生成器体按定义文件+ns+uses 执行，__DIR__/警告归属修复）；**类常量惰性折叠**（self::CONST+前向引用）；__FUNCTION__ 族魔法常量；stdClass 原生类（曾继承 Throwable 构造器）；mb_*/strip_tags/addslashes 族；(string) 强转 tag 修复（裸 binary 曾泄漏进键/比较）。
+- [x] 状态：install.php 深入 wp-settings 后段（穿过了 Requests 库、PSR 接口、ai-client scoped 依赖、生成器现场）；phpt 273→**280/697**；差分 22 用例（byte 级）。
+- [ ] **当前硬墙**：`$x = &self::$prop[$k]`（静态属性数组元素的引用赋值）——class-wp-block-metadata-registry.php:171。
+- [ ] 待收尾：install.php 差分对齐（translations API 网络数据）、向导 step 模拟建表。
+- [ ] 低危队列：函数/类顶层声明提升；动态属性 Deprecated（需 error_reporting 分级）；`defined('Cls::CONST')`/class_exists 第二参；explode('') ValueError；null 方法调用 Error 可 catch；get_parent_class 显示名。
+
 - [x] **引擎修复大丰收（15+ 处，全部 php 探针/源码实证）**：MyXQL 默认 prepare 协议拒 `USE`（改 `query_type: :text` 走 COM_QUERY，M20 遗留）；`__get`/`__set` 重入守卫（同对象同属性不二入，php 语义——WP wpdb 全靠它）；`$GLOBALS['k']=v` 写穿到真实全局槽（wp_cache_init 靠它）；嵌套属性写 `$obj->p[$i][$j]=v` 走递归 read-modify-write（曾把整个 env 搞丢）；写上下文静默自动装配（quiet_read）；`str_replace` 空搜索串原样返回 + `&$count` 计数写回（_deep_replace 曾死循环）+ refs 写回线程化 env（函数作用域曾丢）；可调用数组 `[obj,'m']`（M5 占位终结）；匿名类（`父类@anonymous\0文件:行$序号` 命名精确）；调用尾随逗号（php 7.3+）；STDIN/STDOUT/STDERR 可写流（STDOUT→输出缓冲、STDERR→真实 stderr 即时可见）；display_errors ini 生效；define() 重定义警告+保留原值+返回 false；wp_timezone 内置摘除（WP 自定义被劫持）；命名空间函数定义注册 `ns\name`；array_fill_keys；PHP_SAPI 族常量。
 - [x] **wp-load 带真库完整 exit 0**（1.4s，php 0.2s）；install.php 差分推进到 wp-settings:273。
 - [ ] **硬墙：生成器（yield）**——WP html-api 遍地用（class-wp-html-tag-processor.php:1246 等），不实现则 install 页出不来。即 M25 的核心工程（新执行模型构件）。
