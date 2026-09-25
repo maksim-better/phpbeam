@@ -1,71 +1,120 @@
-# phpbeam — 待办计划（2026-09-25 重整）
+# phpbeam — 待办计划（2026-09-25 目标切换：Laravel）
 
-状态快照：phpt **280/697** · 差分 22/22（byte 级） · WP 内置频次覆盖 93% · wp-load 带真库 exit 0 · install.php 已穿过 Requests/PSR/ai-client/生成器现场。
+**北极星：浏览器访问 phpbeam 服务端口，完整运行一个 Laravel 编写的项目**——页面渲染、静态资源、表单提交（session/cookie）、数据库读写全部真实工作。
 
-进度自评：距"跑通 WordPress"约 70–75%；距"完整 PHP"为数十里程碑的长期线。北极星 = WordPress，完整 PHP = 长期回填。
+验收方式：同一 Laravel 项目分别在 `php -S` 与 phpbeam-Plug 下起服务，curl 对比响应（body 逐字节；Set-Cookie/header 顺序做规范化后比对）；最终以浏览器人工走通交互路径收口。
 
-## 已完成里程碑（压缩索引，细节见 git log）
+进度自评：语言核心已完成约 70%（类系统/生成器/autoload/命名空间作用域/异常/闭包绑定/引用语义等全部迁移复用）；实测缺口见下表。
 
-- M7–M22：phpt harness、include/位置追踪、继承严格性、eval/func_get_args、serialize/游标、preg_*、resource 流、WP 引导实测、真 MySQL（MyXQL）、可见性执法两层。
-- M23（830d15d）：`bind_params` 带标签返回终结 push_frame 崩溃族；ArgumentCountError php 精确；Zend 抽样护栏（199 例，阈值 0.12）。
-- M24-p1（9557a5e）：引擎修复 15+ 处（MyXQL :text、__get/__set 守卫、$GLOBALS 写穿、嵌套属性写、str_replace 计数、可调用数组、匿名类、尾随逗号、STD* 流、display_errors/define 语义）。
-- M24-p2（5c01ef1）：**生成器全量**（进程+interp 穿梭）；**autoload 体系**（spl 触发/ns 隔离/父类接口 trait 链接期/FQ 显示名）；**类编译期作用域**；类常量惰性折叠；__FUNCTION__ 族；stdClass；mb_*/strip_tags/addslashes。
-- M24-p3（0af9883）：元素引用赋值；path_get/path_put 按段求值；`[&$x]` ref 线程化；按值参数 deref 数组 ref；realpath；method_call unwind 穿透。
+## 已实测缺口（2026-09-25 探针，phpx 逐项验证）
 
-## 阶段一：M24 收尾——install 页面出来（**p4 已达成主目标**，`bd85da5`）
+语法（parser 级，1–2 会话冲刺）：
+- [ ] 构造器属性提升 `__construct(private int $x = 1)` —— parse error
+- [ ] 命名参数 `f(b: 3, a: 4)`（含 attribute 实参内）—— parse error
+- [ ] heredoc/nowdoc —— parse error（config/视图遍地）
+- [ ] 数组字面量展开 `[0, ...$a, 3]` —— parse error
+- [ ] 枚举 enum/backed/cases —— 显式未实现
+- [ ] readonly 类/属性；一等可调用 `strlen(...)`
+- [ ] attributes 解析已过（`#[Attr(1)]` 可载入），带参形式依赖命名参数
 
-- [x] **P0 异常**：`update_path_env` 自动装配臂返回 1 元组丢弃 interp（p3 两个哨兵都对——污染在 target 求值与 path_put 之间）。
-- [x] **install.php 完整渲染 exit 0**（4983 字节完整 HTML，welcome/setup 表单页）。此轮根因链：fetch_class 返回 ns/uses 剥离后的 interp（调用方作用域现恢复）；普通函数携带定义文件 ns/uses（7 元组）并在体内切换；trait `m as x;` 裸形式解析 + 适配块后无分号 + **as 别名保留原方法**；链接期签名兼容按**解析后类型**比较；substr 越界；assign_op 宽容臂；`{:int, 非整数}` 泄漏加固。新内置：hash_*、addcslashes 族、strtok（游标）、array_values、debug_backtrace、JSON_* 常量族；原生 DateTime/DateTimeZone。
-- [ ] install 页 byte 级对齐剩余三类差距：① CSS `<link>` 与部分 `<script src>` 未输出（wp_styles/wp_scripts do_items 的 src 型条目）② `wp_guess_url` 形态（php `http:///abs/path` vs 我们 `http:/relative`）③ 语言选择器需真实 translations API（网络数据，比对用 fixture/过滤）
-- [ ] 向导 step 1/2 模拟（$_POST 注入）走 `wp_install()` 全链路：wpdb `query()/insert()` 建 12 张表——M24 的原始验收目标
-- [ ] 安装完成后 `is_blog_installed()` → "Already Installed" 页差分
-- [ ] 差分用例固化：23_install_page.php（对 step=1 包装基线，过滤 data-pw 随机密码）+ 24_install_wizard.php（建表后 SHOW TABLES 对比）
-- phpt 280→**285/697**；单测+差分 784/0。
+运行时（大块）：
+- [ ] **Reflection API**（Class/Method/Function/Parameter/Property/NamedType + getAttributes）——Laravel 容器/DI 的心脏，没有它容器不工作
+- [ ] **Carbon 级 DateTime**：DateTimeImmutable/modify/diff/DateInterval/DatePeriod/时区换算（Carbon 是最重单依赖；现有原生 DateTime 仅 format('T','U','c') 最小集）
+- [ ] **PDO**（Eloquent/DB 只走 PDO；叠在 MyXQL 上，1–2 会话）
+- [ ] mbstring 深化（mb_convert_encoding/mb_str_split…）、iconv、ctype、tokenizer
+- [ ] session/cookie 原语与 header 收集（SAPI 的一部分）
 
-## 阶段二：M25——WP 安装后稳定性（预估 2–4 会话，深度未知）
+已迁移资产：M7–M24 全部语言核心与引擎修复；autoload 体系（fetch_class + spl 链 + 父类/接口/trait 链接期加载——Composer PSR-4 正好吃这套）；mysqli/MyXQL（PDO 底座）；ob_*/eval（Blade 需要）；文件流；Zend/phpt 护栏（285/697 + zend sample 12.6%）。
 
-- [ ] SPL 迭代器（WP 遍地用）：ArrayObject、ArrayIterator、IteratorIterator、RecursiveIteratorIterator（优先级按 WP 调用频次）
-- [ ] session 族：session_start/$_SESSION/headers 已发判定
-- [ ] wp-admin 首页/仪表盘渲染冒烟：options 页、plugins 页各跑一遍差分，缺口按频次补
-- [ ] 前台（twentytwentyx 主题首页）渲染冒烟
-- [ ] 长尾内置按 WP 调用频次补（当前 346+，目标随冒烟滚动扩充）
-- [ ] HTTP 最小层：wp_remote_get/wp_remote_post 的 Headers/Response 对象（若走真实网络则需 fixture 策略）
+## L0：HTTP SAPI——Plug 每请求一 BEAM 进程（先做，2 会话）
 
-## 阶段三：完整 PHP 长期线（按价值排序，数十里程碑）
+- [ ] `phpbeam serve <docroot>`：Plug/Cowboy 起 HTTP 服务；每请求 spawn 一个 BEAM 进程跑 interp（天然并发 + 隔离）
+- [ ] 请求种子：`$_SERVER`（REQUEST_METHOD/URI/HTTP_* 头/SCRIPT_NAME…）、`$_GET/$_POST/$_COOKIE/$_FILES` 按请求物化
+- [ ] 响应收集：`header()/header_remove()/setcookie()` 进 interp 响应区；`exit/die` 映射为响应结束；状态码
+- [ ] 静态文件直出（Plug.Static——css/js/图片不经过 PHP）
+- [ ] 验收：现有差分用例在 HTTP 形态下同样 byte 级成立（对 `php -S`）；`phpx serve` 能出一个 phpinfo 风格自检页
 
-语言核心：
-- [ ] attributes 解析与 ReflectionAttribute（Zend 抽样 8 崩溃之一）
-- [ ] 枚举（enum/backed enum/cases/match 配套）
-- [ ] readonly 属性/类、first-class callable 语法 `strlen(...)`
-- [ ] Fibers（协程语义，可能复用生成器进程模型）
-- [ ] 函数/类顶层声明提升（php 编译期 hoist；WP 偶有依赖）
-- [ ] parser 严格性：`f(...$arr, $x)` unpack 后位置参数应为编译错误
+## L1：语法冲刺（1–2 会话）
 
-运行时与扩展：
-- [ ] Reflection API（Class/Method/Property/Function——WP 调试路径）
-- [ ] error_handler 真分派、ErrorException、set_exception_handler
-- [ ] PDO（在 mysqli/MyXQL 之上）
-- [ ] filter、mbstring 完善矩阵、date 完整格式化矩阵
-- [ ] 剩余 phpt 桶：`{:badkey, :statics}` 崩溃族（4）、ob_start 缓冲重用 Fatal（3）、func/005 族
-- [ ] Zend 抽样残留：nullsafe `new $x?->y` 解析、`__NAMESPACE__` 边角
+- [ ] 构造器属性提升（含默认值/可见性/readonly 修饰）
+- [ ] 命名参数（调用点 + attribute 实参 + 跳参）
+- [ ] heredoc/nowdoc（含缩进 heredoc、`{$expr}` 插值）
+- [ ] 数组字面量展开（含字符串键规则）
+- [ ] 枚举（case/backed/::cases()/match on enum/纯枚举 ===）
+- [ ] readonly 属性与 readonly 类（写即 Error）
+- [ ] 一等可调用 `f(...)`/`$obj->m(...)`
+- [ ] nullsafe 边缘加固（链式、写路径、`?->` 后方法链）
+- [ ] 差分用例 25_laravel_syntax.php 固化
 
-低危队列（随手修）：
-- [ ] 动态属性 Deprecated 警告（需 error_reporting 分级过滤配套，否则反而多话）
-- [ ] `defined('Cls::CONST')`/class_exists 第二参（autoload 触发）
-- [ ] `explode('')` ValueError
-- [ ] null 方法调用 Error 应可 catch（现为引擎 fatal）
-- [ ] get_parent_class 返回显示名（现为 key）
+## L2：Composer vendor 实战（1 会话）
 
-## 远期（架构级）
+- [ ] `composer create-project laravel/laravel` 真树可被我们的 autoload 加载（psr-4/classmap/files 三通道）
+- [ ] `phpx artisan --version` 出版本号；差分对齐
+- [ ] 暴露并修复 vendor 加载沿途的崩溃/缺口清单
 
-- [ ] PHP → Elixir AST 编译后端（树遍历慢 1~2 数量级；README 路线图原定终点）
-- [ ] Plug 每请求一 BEAM 进程 Web 运行时（真 HTTP SAPI，替代 CLI 差分）
-- [ ] Elixir 互操作层
+## L3：Reflection API（2–3 会话，最大单项）
+
+- [ ] ReflectionClass（newInstance/getMethod/getProperties/isInstantiable/getConstructor/getAttributes）
+- [ ] ReflectionMethod/ReflectionFunction（invoke/invokeArgs/isPublic/getNumberOfParameters）
+- [ ] ReflectionParameter（getType/getName/isOptional/isDefaultValueAvailable/getDefaultValue）
+- [ ] ReflectionNamedType/UnionType（getName/allowsNull）
+- [ ] ReflectionProperty（setValue/getValue/setAccessible）
+- [ ] 验收：Laravel 容器能 `app(X::class)` 构造带依赖注入的类；`artisan list` 出命令清单
+
+## L4：Carbon 级 DateTime（1–2 会话）
+
+- [ ] DateTimeImmutable 全家（copy/modify/add/sub/diff/setTimezone/format 全说明符矩阵）
+- [ ] DateInterval/DatePeriod 构造与遍历
+- [ ] Carbon 兼容探针：vendor 下 Carbon 核心测试集抽样跑通
+- [ ] 验收：Laravel 路由表构建通过（时间相关的 middleware/config 不再炸）
+
+## L5：PDO on MyXQL（1–2 会话）
+
+- [ ] PDO/PDOStatement 类（prepare/execute/fetch/fetchAll/bindValue/errorInfo/setAttribute）
+- [ ] 预备语句语义（占位符→MyXQL 参数映射）
+- [ ] 验收：Eloquent `User::count()/first()/create()` 对真 MySQL 正确
+
+## L6：Laravel 在 HTTP 下 boot（1–2 会话）
+
+- [ ] `public/index.php` 经 L0 SAPI 完整执行：kernel handle → 响应
+- [ ] 简单路由（`Route::get('/', fn() => 'hello')`）200 出字符串
+- [ ] 每-请求性能实测；若秒级，进程池预热/已 boot interp 复用（配置缓存路径）
+
+## L7：完整浏览器体验（2 会话）
+
+- [ ] Blade 视图渲染（编译→eval 链路）
+- [ ] 静态资源（Vite 产物直出）+ CSS/JS 页面完整视觉
+- [ ] session/cookie：登录表单 POST → 重定向 → 登录态保持
+- [ ] DB 列表页（分页/查询）
+- [ ] 浏览器人工验收 + 与 `php -S` 的 curl 差分矩阵
+
+## L8：性能与架构（持续）
+
+- [ ] 请求级 profile：Laravel boot 的热点函数榜
+- [ ] interp 预热池；跨请求 static/类表复用的可行性论证
+- [ ] 远期：PHP → Elixir AST 编译后端（Laravel 是比 WP 更有价值的编译目标）
+
+## WordPress 线处置
+
+降级为**回归资产**，不再推进功能项：`wp-load` exit 0、install.php 完整渲染（`bd85da5`）作为既有能力保留；285/697 phpt + zend 抽样护栏继续作为每里程碑回归门禁。若后续需要 WP，从 install 向导建表处续。
+
+## 低危队列（随手修）
+
+- [ ] 函数/类顶层声明提升；动态属性 Deprecated（需 error_reporting 分级）
+- [ ] `defined('Cls::CONST')`/class_exists 第二参触发 autoload
+- [ ] `explode('')` ValueError；null 方法调用 Error 可 catch；get_parent_class 显示名
+- [ ] 剩余 phpt 桶：`{:badkey, :statics}` 族、ob_start 重用 Fatal、func/005
+
+## 风险登记
+
+- **树遍历性能**：Laravel 全 boot 每 request 可能秒级——L6 起需池化/预热，根治靠编译后端（L8）
+- **Reflection 深度**：容器用的细粒度 API（getType()->getName() 等）不能做半吊子
+- **PHP 8.2+ 语义**：readonly 约束、枚举背衬、promotion 默认值需按 php 探针对齐
+- **差分 oracle 变化**：HTTP 响应对比需规范化（Set-Cookie 顺序、Date 头剔除）
 
 ## 环境备忘
 
-- MySQL 容器：`docker start phpbeam-mysql`（8.0，wp_test/wp/wppass，127.0.0.1:3306，native_password）
-- WP 树：/tmp/wp_extract/wordpress（7.1.2，wp-config 已配真库；改动后可 `unzip -p /tmp/wp.zip` 对应文件恢复）
-- hex 仓库被网络 TLS 挡——依赖走 git（mix.exs 注释有说明）
-- 排障工具沉淀：BEAM 采样（Process.info current_function/backtrace 写文件）、exit 截断二分（截断语法 255 ≠ 挂起 142）、`fwrite(STDERR)` 即时插桩、哨兵 raise 带栈
+- MySQL 容器：`docker start phpbeam-mysql`（8.0，wp_test/wp/wppass，127.0.0.1:3306，native_password）——Laravel 项目另建库 `laravel_test`
+- hex 仓库被网络 TLS 挡——依赖走 git（mix.exs 注释）；composer 走系统 php，不受影响
+- 排障工具沉淀：BEAM 采样、exit 截断二分（截断语法 255≠挂起 142）、`fwrite(STDERR)` 即时插桩
 - 验收纪律：语义疑问先查 php-src（/Users/guozhu/Downloads/php-8.4.24）或 `php -r` 探针，不空想（AGENTS.md 有正文）
