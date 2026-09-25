@@ -214,11 +214,14 @@ defmodule PhpBeam.Builtin.RuntimeFns do
 
   # ───────────────────────── date/time (UTC, gmdate-parity) ─────────────────────────
 
-  defp header_remove_v(_vals, i), do: {:ok, :null, i}
+  defp header_remove_v(vals, i), do: {:ok, :null, PhpBeam.Interp.sapi_remove_header(i, vals)}
 
-  defp headers_list_v(_vals, i), do: {:ok, {:array, PhpBeam.PArray.new()}, i}
+  defp headers_list_v(_vals, i), do: {:ok, {:array, PhpBeam.Interp.sapi_list_headers(i)}, i}
 
-  defp http_response_code_v(_vals, i), do: {:ok, {:int, 200}, i}
+  defp http_response_code_v(vals, i) do
+    {code, i2} = PhpBeam.Interp.sapi_status(i, vals)
+    {:ok, {:int, code}, i2}
+  end
 
   defp tz_set(_vals, i), do: {:ok, {:bool, true}, i}
 

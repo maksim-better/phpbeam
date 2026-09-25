@@ -899,7 +899,26 @@ defmodule PhpBeam.Builtin.MiscFns do
 
   ## ───────────────────── runtime no-ops ─────────────────────
 
-  defp header_v(_vals, i) do
+  defp header_v([{:string, h} | rest], i) do
+    # HTTP mode buffers all body output (php -S output_buffering): headers
+    # stay settable until the response is assembled
+    if i.sapi != nil do
+      replace? =
+        case rest do
+          [v | _] -> Value.truthy?(v)
+          [] -> false
+        end
+
+      {:ok, :null,
+       PhpBeam.Interp.sapi_add_header(i, String.replace_suffix(h, "\r\n", ""), replace?)}
+    else
+      header_cli([{:string, h} | rest], i)
+    end
+  end
+
+  defp header_cli([{:string, h} | rest], i) do
+    _ = rest
+
     case i.output_origin do
       {file, line} when file != nil ->
         i2 =
@@ -911,11 +930,104 @@ defmodule PhpBeam.Builtin.MiscFns do
         {:ok, :null, i2}
 
       _ ->
-        {:ok, :null, i}
+        replace? =
+          case rest do
+            [v | _] -> Value.truthy?(v)
+            [] -> false
+          end
+
+        i2 = PhpBeam.Interp.sapi_add_header(i, String.replace_suffix(h, "\r\n", ""), replace?)
+        {:ok, :null, i2}
     end
   end
 
-  defp setcookie_v(_vals, i), do: {:ok, {:bool, true}, i}
+  defp header_v(_, i), do: {:ok, :null, i}
+
+  defp setcookie_v([{:string, name} | rest], i) do
+    if i.sapi != nil do
+      val = stringify(Enum.at(rest, 0, {:string, ""}))
+      expires = int_arg(Enum.at(rest, 1, {:int, 0}))
+      path = stringify(Enum.at(rest, 2, {:string, ""}))
+      domain = stringify(Enum.at(rest, 3, {:string, ""}))
+      secure = truthy_arg(Enum.at(rest, 4, {:bool, false}))
+      httponly = truthy_arg(Enum.at(rest, 5, {:bool, false}))
+
+      parts = ["#{name}=#{val}"]
+      parts = if expires != 0, do: parts ++ ["expires=" <> http_date(expires)], else: parts
+      parts = if path != "", do: parts ++ ["path=" <> path], else: parts
+      parts = if domain != "", do: parts ++ ["domain=" <> domain], else: parts
+      parts = if secure, do: parts ++ ["secure"], else: parts
+      parts = if httponly, do: parts ++ ["HttpOnly"], else: parts
+
+      i2 = PhpBeam.Interp.sapi_add_header(i, "Set-Cookie: " <> Enum.join(parts, "; "), false)
+      {:ok, {:bool, true}, i2}
+    else
+      setcookie_cli([{:string, name} | rest], i)
+    end
+  end
+
+  defp setcookie_cli([{:string, name} | rest], i) do
+    _ = name
+    _ = rest
+
+    case i.output_origin do
+      {file, line} when file != nil ->
+        i2 =
+          PhpBeam.Interp.warn(
+            i,
+            "Cannot modify header information - headers already sent by (output started at #{file}:#{line})"
+          )
+
+        {:ok, {:bool, false}, i2}
+
+      _ ->
+        val = stringify(Enum.at(rest, 0, {:string, ""}))
+        expires = int_arg(Enum.at(rest, 1, {:int, 0}))
+        path = stringify(Enum.at(rest, 2, {:string, "/"}))
+        domain = stringify(Enum.at(rest, 3, {:string, ""}))
+        secure = truthy_arg(Enum.at(rest, 4, {:bool, false}))
+        httponly = truthy_arg(Enum.at(rest, 5, {:bool, false}))
+
+        parts = ["#{name}=#{val}"]
+
+        parts =
+          if expires != 0,
+            do: parts ++ ["expires=" <> http_date(expires)],
+            else: parts
+
+        parts = if path != "", do: parts ++ ["path=" <> path], else: parts
+        parts = if domain != "", do: parts ++ ["domain=" <> domain], else: parts
+        parts = if secure, do: parts ++ ["secure"], else: parts
+        parts = if httponly, do: parts ++ ["HttpOnly"], else: parts
+
+        i2 = PhpBeam.Interp.sapi_add_header(i, "Set-Cookie: " <> Enum.join(parts, "; "), false)
+        {:ok, {:bool, true}, i2}
+    end
+  end
+
+  defp setcookie_v(_, i), do: {:ok, {:bool, true}, i}
+
+  defp stringify({:string, s}), do: s
+  defp stringify(v), do: PhpBeam.Eval.php_to_string(v)
+
+  defp int_arg({:int, n}), do: n
+  defp int_arg(_), do: 0
+
+  defp truthy_arg(v), do: Value.truthy?(v)
+
+  defp http_date(ts) do
+    {{yr, mo, dy}, {hh, mm, ss}} =
+      :calendar.gregorian_seconds_to_datetime(ts + 62_167_219_200)
+
+    wd = :calendar.day_of_the_week({yr, mo, dy})
+    wdn = Enum.at(~w(Mon Tue Wed Thu Fri Sat Sun), wd - 1)
+    mon = Enum.at(~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec), mo - 1)
+
+    "#{wdn}, #{String.pad_leading(Integer.to_string(dy), 2, "0")} #{mon} #{yr} " <>
+      "#{String.pad_leading(Integer.to_string(hh), 2, "0")}:" <>
+      "#{String.pad_leading(Integer.to_string(mm), 2, "0")}:" <>
+      "#{String.pad_leading(Integer.to_string(ss), 2, "0")} GMT"
+  end
 
   defp headers_sent_v(_vals, i),
     do: {:ref_call, {:bool, false}, [{:string, ""}, {:int, 0}], i}

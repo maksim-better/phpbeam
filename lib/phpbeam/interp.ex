@@ -61,6 +61,9 @@ defmodule PhpBeam.Interp do
             get_guards: MapSet.new(),
             # same guard for __set — re-writes create the property directly
             set_guards: MapSet.new(),
+            # HTTP SAPI response area (nil under CLI): header()/setcookie()/
+            # http_response_code() accumulate here for the server to emit
+            sapi: nil,
             # {file, line} => nth instantiation, for php's
             # `Parent@anonymous file:line$id` class naming
             anon_sites: %{},
@@ -154,6 +157,52 @@ defmodule PhpBeam.Interp do
   def run_quiet(src) do
     {out, code, _interp} = run(src)
     {out, code}
+  end
+
+  @doc """
+  HTTP-server entry: runs `src` with pre-seeded superglobals (globals map of
+  name => value) and an active SAPI response area. Returns
+  {body, exit_code, interp} like run/2; the server reads status/headers from
+  the interp's sapi area.
+  """
+  def run_http(src, file, globals, sapi) do
+    interp =
+      register_builtins(%__MODULE__{file_stack: [file], sapi: sapi})
+      |> Map.update!(:globals, &Map.merge(&1, globals))
+
+    env = Env.global_scope([])
+
+    with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
+         {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
+      {res, _env, interp2} = exec_stmts(stmts, env, interp)
+
+      case res do
+        {:unwind, {:halt, _code}} ->
+          finish(interp2, 0)
+
+        {:unwrap, _} ->
+          finish(interp2, 0)
+
+        :ok ->
+          finish(interp2, 0)
+
+        {:unwind, {:php_throw, val}} ->
+          {render_uncaught(val, interp2), 255, interp2}
+
+        {:unwind, {:fatal, msg}} ->
+          {uncaught_out(interp2, "Error", msg), 255, interp2}
+
+        {:unwind, {:engine_fatal, msg}} ->
+          {engine_fatal_out(interp2, msg), 255, interp2}
+
+        {:unwind, {:parse_error, msg, f, line}} ->
+          {parse_error_out(interp2, "syntax error, " <> msg, f, line), 255, interp2}
+      end
+    else
+      {:error, msg, line} ->
+        {"PHP Parse error:  syntax error, #{msg}" <> maybe_line(line) <> "\n", 255,
+         interp2_stub()}
+    end
   end
 
   # ───────────────────────── persistent REPL state ─────────────────────────
@@ -351,6 +400,89 @@ defmodule PhpBeam.Interp do
 
   # php-cli populates $_SERVER with structural keys (env keys are machine
   # specific and stay absent); WP's bootstrap reads PHP_SELF/SCRIPT_FILENAME
+
+  # ── SAPI response area ──────────────────────────────────────────
+  # header()/setcookie()/http_response_code() accumulate here when running
+  # under the HTTP server (interp.sapi set); no-ops under the CLI.
+
+  def sapi_add_header(%{sapi: nil} = i, _h, _replace), do: i
+
+  def sapi_add_header(%{sapi: sapi} = i, h, replace?) do
+    # php: "Status:" / "HTTP/..." set the response code instead
+    case h do
+      "Status:" <> code ->
+        code_i =
+          code |> String.trim() |> String.split(" ") |> hd() |> parse_status()
+
+        %{i | sapi: %{sapi | status: code_i || sapi.status}}
+
+      <<"HTTP/", _::binary>> = http_line ->
+        parts = String.split(http_line, " ")
+        code_i = parts |> Enum.at(1, "") |> parse_status()
+        %{i | sapi: %{sapi | status: code_i || sapi.status}}
+
+      _ ->
+        headers =
+          if replace? do
+            {name, _} = split_header(h)
+            Enum.reject(sapi.headers, fn ex -> elem(split_header(ex), 0) == name end)
+          else
+            sapi.headers
+          end
+
+        %{i | sapi: %{sapi | headers: headers ++ [h]}}
+    end
+  end
+
+  defp parse_status(s) do
+    case Integer.parse(s) do
+      {n, _} -> n
+      :error -> nil
+    end
+  end
+
+  defp split_header(h) do
+    case :binary.split(h, ":") do
+      [name | _] -> {String.downcase(String.trim(name)), nil}
+      [] -> {String.downcase(h), nil}
+    end
+  end
+
+  def sapi_remove_header(%{sapi: nil} = i, _vals), do: i
+
+  def sapi_remove_header(%{sapi: sapi} = i, vals) do
+    case vals do
+      [{:string, name} | _] ->
+        keep =
+          Enum.reject(sapi.headers, fn h -> elem(split_header(h), 0) == String.downcase(name) end)
+
+        %{i | sapi: %{sapi | headers: keep}}
+
+      _ ->
+        %{i | sapi: %{sapi | headers: []}}
+    end
+  end
+
+  def sapi_list_headers(%{sapi: nil}), do: PhpBeam.PArray.new()
+
+  def sapi_list_headers(%{sapi: sapi}) do
+    PhpBeam.PArray.from_pairs(Enum.map(sapi.headers, &{nil, {:string, &1}}))
+  end
+
+  def sapi_status(i, vals) do
+    case {i.sapi, vals} do
+      {nil, _} ->
+        {200, i}
+
+      {sapi, [{:int, n} | _]} when n >= 100 and n < 600 ->
+        # php: setting returns the new code
+        {n, %{i | sapi: %{sapi | status: n}}}
+
+      {sapi, _} ->
+        {sapi.status, i}
+    end
+  end
+
   def set_mysqli_report(interp, mode), do: %{interp | mysqli_report: mode}
   def get_mysqli_report(interp), do: interp.mysqli_report || 3
 

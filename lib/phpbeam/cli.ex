@@ -27,6 +27,10 @@ defmodule PhpBeam.CLI do
       ["--repl"] ->
         PhpBeam.Repl.start()
 
+      ["serve" | rest] ->
+        {docroot, port} = serve_opts(rest)
+        PhpBeam.Http.serve(docroot, port)
+
       [file | _rest] ->
         case File.read(file) do
           {:ok, src} ->
@@ -80,6 +84,26 @@ defmodule PhpBeam.CLI do
       nil ->
         {"PHP Fatal error:  execution timed out\n", 255}
     end
+  end
+
+  defp serve_opts(rest) do
+    {flags, pos} = Enum.split_with(rest, &String.starts_with?(&1, "--"))
+
+    docroot =
+      case pos do
+        [d | _] -> d
+        [] -> "."
+      end
+
+    port =
+      Enum.find_value(flags, 8080, fn f ->
+        case String.split(f, "=", parts: 2) do
+          ["--port", p] -> String.to_integer(p)
+          _ -> nil
+        end
+      end)
+
+    {docroot, port}
   end
 
   # php canonicalizes the main script path (symlinks) in errors/__FILE__
