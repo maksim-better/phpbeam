@@ -15,7 +15,8 @@
 - [x] **M24-p1（9557a5e）**：引擎修复大丰收（15+ 处）——MyXQL :text、__get/__set 守卫、$GLOBALS 写穿、嵌套属性写、str_replace 计数、可调用数组、匿名类、尾随逗号、STD* 流、display_errors/define 语义等。wp-load 带真库 exit 0。
 - [x] **M24-p2（5c01ef1）**：**生成器全量落地**（进程+interp 穿梭模型、yield/k=>v/from/裸、Generator 原生类六方法、foreach 驱动、php 探针矩阵逐字节一致）；**autoload 体系**（fetch_class 触发 spl autoloaders、ns 隔离防自递归、父类/接口/trait 链接期加载、FQ 大小写显示名）；**类编译期作用域**（方法/闭包/生成器体按定义文件+ns+uses 执行，__DIR__/警告归属修复）；**类常量惰性折叠**（self::CONST+前向引用）；__FUNCTION__ 族魔法常量；stdClass 原生类（曾继承 Throwable 构造器）；mb_*/strip_tags/addslashes 族；(string) 强转 tag 修复（裸 binary 曾泄漏进键/比较）。
 - [x] 状态：install.php 深入 wp-settings 后段（穿过了 Requests 库、PSR 接口、ai-client scoped 依赖、生成器现场）；phpt 273→**280/697**；差分 22 用例（byte 级）。
-- [ ] **当前硬墙**：`$x = &self::$prop[$k]`（静态属性数组元素的引用赋值）——class-wp-block-metadata-registry.php:171。
+- [x] **M24-p3（0af9883）**：元素引用赋值（`&$arr[$k]`/`&self::$prop[$k]`/`&$obj->p[$k]`——元素变 cell 写回原路径）；path_get/path_put 重构为按段求值（`$d[$k]["n"]=v` 与深层自动装配，非字面量嵌套写曾静默丢失）；数组字面量 `[&$x]` 线程化 ref 注册（曾丢 interp → do_action_ref_array 回调收 NULL）；按值参数 deref 数组中的 ref；写引用元素更新 cell。差分 22 扩展 byte 级一致。
+- [ ] **当前调查中（下一会话从这里继续）**：`$_wp_post_type_features` 某赋值路径把 PArray 放进了 interp 位（badkey :globals）。已排除：eval(:assign) 的 RHS（哨兵 A 不触发）、assign(var) 直接入参在主进程一致。哨兵 A/B 结论矛盾 → 疑与生成器穿梭或被 const_fold 的 rescue 吞掉的哨兵有关。复现：wp-admin/install.php 直接跑；排查建议：给 start_generator/gen_resume 的消息加 interp 结构校验，或在 Env.lookup 入口做一次性结构断言打印进程 pid。
 - [ ] 待收尾：install.php 差分对齐（translations API 网络数据）、向导 step 模拟建表。
 - [ ] 低危队列：函数/类顶层声明提升；动态属性 Deprecated（需 error_reporting 分级）；`defined('Cls::CONST')`/class_exists 第二参；explode('') ValueError；null 方法调用 Error 可 catch；get_parent_class 显示名。
 
