@@ -69,38 +69,64 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:array, entries}, env, interp) do
-    {pairs, env2, interp2} =
-      Enum.reduce(entries, {[], env, interp}, fn
-        nil, acc ->
-          acc
+    case array_pairs(entries, env, interp) do
+      {:unwind, u, e2, i2} ->
+        {{:unwind, u}, e2, i2}
 
-        {:kv, k, v, by_ref?}, {ps, e, i} ->
-          {k_pair, e1, i1} =
-            case k do
-              nil ->
-                {nil, e, i}
+      {:ok, pairs, env2, interp2} ->
+        {{:val, {:array, PArray.from_pairs(Enum.reverse(pairs))}}, env2, interp2}
+    end
+  end
 
-              kexpr ->
-                {{:val, kv}, e2, i2} = eval(kexpr, e, i)
-                {kv, e2, i2}
+  # array-literal element/key evaluation must thread unwinds: [g()] where g()
+  # throws propagates the exception, not a crash
+  defp array_pairs(entries, env, interp) do
+    entries
+    |> Enum.reduce_while({:ok, [], env, interp}, fn
+      nil, {:ok, acc, e, i} ->
+        {:cont, {:ok, acc, e, i}}
+
+      {:kv, k, v, by_ref?}, {:ok, ps, e, i} ->
+        case array_key(k, e, i) do
+          {:unwind, u, e2, i2} ->
+            {:halt, {:unwind, u, e2, i2}}
+
+          {:nokey, e2, i2} ->
+            array_value(v, nil, by_ref?, ps, e2, i2)
+
+          {:key, kv, e2, i2} ->
+            array_value(v, kv, by_ref?, ps, e2, i2)
+        end
+    end)
+  end
+
+  defp array_key(nil, e, i), do: {:nokey, e, i}
+
+  defp array_key(kexpr, e, i) do
+    case eval(kexpr, e, i) do
+      {{:val, kv}, e2, i2} -> {:key, kv, e2, i2}
+      {{:unwind, _} = u, e2, i2} -> {:unwind, elem(u, 1), e2, i2}
+    end
+  end
+
+  defp array_value(v, kv, by_ref?, ps, e, i) do
+    case eval(v, e, i) do
+      {{:unwind, _} = u, e3, i3} ->
+        {:halt, {:unwind, elem(u, 1), e3, i3}}
+
+      {{:val, vv}, e3, i3} ->
+        vv2 =
+          if by_ref? do
+            case vv do
+              {:ref, _} -> vv
+              plain -> make_ref_cell(plain, i3) |> elem(0)
             end
+          else
+            vv
+          end
 
-          {{:val, vv}, e3, i3} = eval(v, e1, i1)
-
-          vv2 =
-            if by_ref? do
-              case vv do
-                {:ref, _} -> vv
-                plain -> make_ref_cell(plain, i3) |> elem(0)
-              end
-            else
-              vv
-            end
-
-          {[{k_pair, vv2} | ps], e3, i3}
-      end)
-
-    {{:val, {:array, PArray.from_pairs(Enum.reverse(pairs))}}, env2, interp2}
+        {:cont, {:ok, [{kv, vv2} | ps], e3, i3}}
+    end
   end
 
   def eval({:index, container, idx}, env, interp) do
@@ -963,6 +989,16 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  # display name + declaring file for a class key (methods declare errors in
+  # their defining class's file)
+  defp decl_site_of(interp, key) do
+    case PhpBeam.Classes.get_class(interp, key) do
+      %{name: n, file: f} when is_binary(f) and f != "" -> {n, f}
+      %{name: n} -> {n, eval_file(interp)}
+      _ -> {key, eval_file(interp)}
+    end
+  end
+
   # objects live in the interpreter (handle semantics); the value is a ref id
   def make_instance(interp, key) do
     id = interp.next_obj
@@ -996,7 +1032,9 @@ defmodule PhpBeam.Eval do
       method ->
         case call_php_method(obj_ref, method, args, env, interp) do
           {{:val, _ret}, e2, i2} -> {{:val, obj_ref}, e2, i2}
-          {{:unwind, _} = u, _, _} -> u
+          # propagate with the method's interp: side effects (objects, output)
+          # made before the throw must survive
+          {{:unwind, _} = u, _, it2} -> {u, env, it2}
         end
     end
   end
@@ -1057,7 +1095,10 @@ defmodule PhpBeam.Eval do
         captures
       end
 
-    {{:val, {:closure, params, body, captures, arrow?}}, env2, interp2}
+    # php names closures `{closure:file:line}` (definition site) in error
+    # messages and stack traces — carry the site in the runtime value
+    {{:val, {:closure, params, body, captures, arrow?, eval_file(interp), interp.cur_line}}, env2,
+     interp2}
   end
 
   def eval({:method_call, obj_e, name_e, args, nullsafe?}, env, interp) do
@@ -1184,28 +1225,43 @@ defmodule PhpBeam.Eval do
         scope_class: method.class || obj.class
       }
 
-      {binds, vals, interp2} = bind_params(method.params, args, fenv, env, interp)
+      ckey = method.class || obj.class
+      {defc, cfile} = decl_site_of(interp, ckey)
 
-      fenv2 =
-        binds
-        |> Enum.reduce(%{fenv | args: vals}, fn {n, v}, acc ->
-          %{acc | vars: Map.put(acc.vars, n, v)}
-        end)
+      case bind_params(
+             method.params,
+             args,
+             fenv,
+             env,
+             interp,
+             "#{defc}::#{method.name}",
+             "#{defc}->#{method.name}",
+             {cfile, method.line || interp.cur_line}
+           ) do
+        {:ok, binds, vals, interp2} ->
+          fenv2 =
+            binds
+            |> Enum.reduce(%{fenv | args: vals}, fn {n, v}, acc ->
+              %{acc | vars: Map.put(acc.vars, n, v)}
+            end)
 
-      interp2 =
-        Interp.push_frame(interp2, "#{display_class(interp2, obj.class)}->#{method.name}", vals)
+          interp2 = Interp.push_frame(interp2, "#{defc}->#{method.name}", vals)
 
-      {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
+          {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
 
-      {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+          {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
 
-      interp5 = Interp.pop_frame(interp4)
+          interp5 = Interp.pop_frame(interp4)
 
-      case res do
-        :ok -> {{:val, :null}, env_out, interp5}
-        {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
-        # a throw escaping keeps its frame alive for the uncaught trace
-        {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+          case res do
+            :ok -> {{:val, :null}, env_out, interp5}
+            {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
+            # a throw escaping keeps its frame alive for the uncaught trace
+            {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+          end
+
+        {{:unwind, _} = u, _, it2} ->
+          {u, env, it2}
       end
     end
   end
@@ -1296,23 +1352,39 @@ defmodule PhpBeam.Eval do
         scope_class: method.class || key
       }
 
-      {binds, vals, interp2} = bind_params(method.params, args, fenv, env, interp)
+      ckey = method.class || key
+      {defc, cfile} = decl_site_of(interp, ckey)
 
-      fenv2 =
-        Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
-          %{acc | vars: Map.put(acc.vars, n, v)}
-        end)
+      case bind_params(
+             method.params,
+             args,
+             fenv,
+             env,
+             interp,
+             "#{defc}::#{method.name}",
+             "#{defc}::#{method.name}",
+             {cfile, method.line || interp.cur_line}
+           ) do
+        {:ok, binds, vals, interp2} ->
+          fenv2 =
+            Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
+              %{acc | vars: Map.put(acc.vars, n, v)}
+            end)
 
-      interp2 = Interp.push_frame(interp2, "#{display_class(interp2, key)}::#{method.name}", vals)
+          interp2 = Interp.push_frame(interp2, "#{defc}::#{method.name}", vals)
 
-      {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
-      {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
+          {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
+          {interp4, env_out} = write_back_refs(method.params, args, env, fenv2, interp3)
 
-      case res do
-        :ok -> {{:val, :null}, env_out, Interp.pop_frame(interp4)}
-        {:unwind, {:return, v}} -> {{:val, v}, env_out, Interp.pop_frame(interp4)}
-        # a throw escaping keeps its frame alive for the uncaught trace
-        {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+          case res do
+            :ok -> {{:val, :null}, env_out, Interp.pop_frame(interp4)}
+            {:unwind, {:return, v}} -> {{:val, v}, env_out, Interp.pop_frame(interp4)}
+            # a throw escaping keeps its frame alive for the uncaught trace
+            {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+          end
+
+        {{:unwind, _} = u, _, it2} ->
+          {u, env, it2}
       end
     end
   end
@@ -1354,7 +1426,7 @@ defmodule PhpBeam.Eval do
 
   defp call_named(parts, name, fq, args, env, interp) do
     case resolve_function(name, fq, interp) do
-      {:user, _params, _body, _def_file} = fn_def ->
+      {:user, _params, _body, _def_file, _def_line} = fn_def ->
         call_function(fn_def, name, args, env, interp, false)
 
       %{fun: _} = entry ->
@@ -2027,7 +2099,7 @@ defmodule PhpBeam.Eval do
   # call a PHP callable value
   def call_cb(cb, call_args, env, interp)
 
-  def call_cb({:closure, _, _, _, _} = closure_value, call_args, env, interp),
+  def call_cb({:closure, _, _, _, _, _, _} = closure_value, call_args, env, interp),
     do: call_value(closure_value, wrap_args(call_args), env, interp)
 
   def call_cb({:closure, _, _, _, _, _} = closure_ast, call_args, env, interp) do
@@ -2121,7 +2193,12 @@ defmodule PhpBeam.Eval do
     |> then(&{{:val, &1}, env, interp})
   end
 
-  defp call_value({:closure, params, body, captures, _arrow?}, args, env, interp) do
+  defp call_value(
+         {:closure, params, body, captures, _arrow?, def_file, def_line},
+         args,
+         env,
+         interp
+       ) do
     # captures may hold {:ref, id} cells for by-ref uses; reads and writes
     # flow through Env.lookup / assign naturally
     {this, called_class, scope_class} =
@@ -2139,48 +2216,69 @@ defmodule PhpBeam.Eval do
       scope_class: scope_class
     }
 
-    {binds, vals, interp2} = bind_params(params, args, fenv, env, interp)
-    interp2 = Interp.push_frame(interp2, "{closure}", vals)
+    # php names closures by definition site: {closure:file:line}
+    cname = "{closure:#{def_file}:#{def_line}}"
 
-    fenv2 =
-      Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
-        %{acc | vars: Map.put(acc.vars, n, v)}
-      end)
+    case bind_params(params, args, fenv, env, interp, cname, cname, {def_file, def_line}) do
+      {:ok, binds, vals, interp2} ->
+        interp2 = Interp.push_frame(interp2, cname, vals)
 
-    case Interp.exec_stmts(body, fenv2, interp2) do
-      {:ok, e, i} -> {{:val, :null}, e, Interp.pop_frame(i)}
-      {{:unwind, {:return, v}}, _, i} -> {{:val, v}, env, Interp.pop_frame(i)}
-      {{:unwind, _} = u, _, _} -> {u, env, interp2}
+        fenv2 =
+          Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
+            %{acc | vars: Map.put(acc.vars, n, v)}
+          end)
+
+        case Interp.exec_stmts(body, fenv2, interp2) do
+          {:ok, e, i} -> {{:val, :null}, e, Interp.pop_frame(i)}
+          {{:unwind, {:return, v}}, _, i} -> {{:val, v}, env, Interp.pop_frame(i)}
+          {{:unwind, _} = u, _, _} -> {u, env, interp2}
+        end
+
+      {{:unwind, _} = u, _, it2} ->
+        {u, env, it2}
     end
   end
 
-  def call_function({:user, params, body, def_file}, name, args, env, interp, _from_method?) do
+  def call_function(
+        {:user, params, body, def_file, def_line},
+        name,
+        args,
+        env,
+        interp,
+        _from_method?
+      ) do
     fenv = Env.function_scope(name, name)
-    {binds, vals, interp2} = bind_params(params, args, fenv, env, interp)
-    interp2 = Interp.push_frame(interp2, name, vals)
 
-    # write back by-ref arguments
-    fenv2 =
-      Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
-        %{acc | vars: Map.put(acc.vars, n, v)}
-      end)
+    case bind_params(params, args, fenv, env, interp, name, name, {def_file, def_line}) do
+      {:ok, binds, vals, interp2} ->
+        interp2 = Interp.push_frame(interp2, name, vals)
 
-    # php attributes errors inside a function to its DEFINING file —
-    # push that file for the duration of the body
-    interp2 = %{interp2 | file_stack: [def_file | interp2.file_stack]}
+        # write back by-ref arguments
+        fenv2 =
+          Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
+            %{acc | vars: Map.put(acc.vars, n, v)}
+          end)
 
-    {res, _, interp3} = Interp.exec_stmts(body, fenv2, interp2)
+        # php attributes errors inside a function to its DEFINING file —
+        # push that file for the duration of the body
+        interp2 = %{interp2 | file_stack: [def_file | interp2.file_stack]}
 
-    {interp4, env_out} =
-      write_back_refs(params, args, env, fenv2, interp3)
+        {res, _, interp3} = Interp.exec_stmts(body, fenv2, interp2)
 
-    interp5 = Interp.pop_frame(pop_file_once(interp4))
+        {interp4, env_out} =
+          write_back_refs(params, args, env, fenv2, interp3)
 
-    case res do
-      :ok -> {{:val, :null}, env_out, interp5}
-      {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
-      # a throw escaping keeps its frame alive for the uncaught trace
-      {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+        interp5 = Interp.pop_frame(pop_file_once(interp4))
+
+        case res do
+          :ok -> {{:val, :null}, env_out, interp5}
+          {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
+          # a throw escaping keeps its frame alive for the uncaught trace
+          {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+        end
+
+      {{:unwind, _} = u, _, it2} ->
+        {u, env, it2}
     end
   end
 
@@ -2207,48 +2305,77 @@ defmodule PhpBeam.Eval do
     end)
   end
 
-  defp bind_params(params, args, fenv, env, interp) do
+  # returns {:ok, binds, vals, interp} or {{:unwind, u}, env, interp} — the
+  # unwind covers both argument-expression throws (spread_args) and
+  # ArgumentCountError (missing required params). msg_name/frame_disp feed the
+  # php-exact error message and stack frame; decl_site ({file, line}, the
+  # declaration) becomes the throw position: php raises the error at the
+  # function's RECV opcodes, so file/line = declaration site.
+  defp bind_params(params, args, fenv, env, interp, msg_name, frame_disp, decl_site) do
     args =
       Enum.map(args, fn
         {:arg, e, _, _} -> e
         {:arg_spread, e, _} -> {:spread, e}
       end)
 
-    {vals, env2, interp2} = spread_args(args, env, interp)
-    {binds, interp3} = do_bind_params(params, vals, fenv, env2, interp2, [])
-    plain_vals = Enum.map(vals, fn {:val, v} -> v end)
-    {binds, plain_vals, interp3}
+    case spread_args(args, env, interp) do
+      {:unwind, u, en2, it2} ->
+        {{:unwind, u}, en2, it2}
+
+      {:ok, vals, env2, interp2} ->
+        case do_bind_params(params, vals, fenv, env2, interp2, []) do
+          {:ok, binds, interp3} ->
+            {:ok, binds, Enum.map(vals, fn {:val, v} -> v end), interp3}
+
+          {:missing, interp3} ->
+            arg_count_error(msg_name, frame_disp, params, vals, env2, interp3, decl_site)
+        end
+    end
   end
 
   defp spread_args(args, env, interp) do
-    # bind_params stops after the first arg that unwound — spread_args must
-    # not evaluate further args with the resulting nil env
     args
-    |> Enum.reduce_while({[], env, interp}, fn
-      {:spread, e}, {acc, en, it} ->
+    |> Enum.reduce_while({:ok, [], env, interp}, fn
+      {:spread, e}, {:ok, acc, en, it} ->
         case eval(e, en, it) do
           {{:val, {:array, arr}}, en2, it2} ->
-            {:cont, {acc ++ Enum.map(PArray.values(arr), &{:val, &1}), en2, it2}}
+            {:cont, {:ok, acc ++ Enum.map(PArray.values(arr), &{:val, &1}), en2, it2}}
 
           {{:val, _}, en2, it2} ->
-            {:cont, {acc, en2, warn(en2, it2, "only arrays can be spread")}}
+            {:cont, {:ok, acc, en2, warn(en2, it2, "only arrays can be spread")}}
 
-          {{:unwind, _} = u, en2, it2} ->
-            {:halt, {[u | acc], en2, it2}}
+          {{:unwind, u}, en2, it2} ->
+            {:halt, {:unwind, u, en2, it2}}
         end
 
-      e, {acc, en, it} ->
+      e, {:ok, acc, en, it} ->
         case eval(e, en, it) do
-          {{:val, v}, en2, it2} -> {:cont, {acc ++ [{:val, v}], en2, it2}}
-          {{:unwind, _} = u, en2, it2} -> {:halt, {[u | acc], en2, it2}}
+          {{:val, v}, en2, it2} -> {:cont, {:ok, acc ++ [{:val, v}], en2, it2}}
+          {{:unwind, u}, en2, it2} -> {:halt, {:unwind, u, en2, it2}}
         end
     end)
-    |> normalize_spread()
   end
 
-  # the reduce_while arms already return {vals, env, interp} with the real
-  # state in both shapes — the old [u|vals] head leaked nil env/interp
-  defp normalize_spread({vals, env, interp}), do: {vals, env, interp}
+  # php: "Too few arguments to function %s(), %d passed in %s on line %d and
+  # %s %d expected" — name is scope-qualified (C::m even for instance calls,
+  # {closure:file:line} for closures); counts exclude variadics; "exactly" iff
+  # every declared param is required
+  defp arg_count_error(msg_name, frame_disp, params, vals, env, interp, {df, dl}) do
+    plain = Enum.map(vals, fn {:val, v} -> v end)
+    named = Enum.reject(params, &match?({:param, _, _, _, _, true}, &1))
+    num = length(named)
+    req = Enum.count(named, &match?({:param, _, _, nil, _, _}, &1))
+    how = if req == num, do: "exactly", else: "at least"
+
+    msg =
+      "Too few arguments to function #{msg_name}(), #{length(vals)} passed" <>
+        " in #{eval_file(interp)} on line #{interp.cur_line} and #{how} #{req} expected"
+
+    it2 = Interp.push_frame(interp, frame_disp, plain)
+    {obj_ref, it3} = materialize_native({:native_error, "ArgumentCountError", msg}, it2)
+    # the exception's file/line is the declaration, not the propagation point
+    {{:unwind, {:php_throw, obj_ref}}, env, %{it3 | throw_pos: {df, dl}}}
+  end
 
   defp do_bind_params(
          [{:param, name, _t, default, by_ref?, variadic?} | rest],
@@ -2280,9 +2407,9 @@ defmodule PhpBeam.Eval do
         [] ->
           case default do
             nil ->
-              # ArgumentCountError is a PHP Error (catchable)
-              err = %Error{kind: :argument_count_error, message: "Too few arguments"}
-              {Enum.reverse(acc) ++ [{name, :null}], throw_error_tuple(err, interp)}
+              # ArgumentCountError is a catchable PHP Error; the caller-side
+              # arg_count_error renders the php-exact message
+              {:missing, interp}
 
             dexpr ->
               {{:val, dv}, _e2, it2} = eval(dexpr, fenv, interp)
@@ -2292,7 +2419,7 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  defp do_bind_params([], _args, _fenv, _env, interp, acc), do: {Enum.reverse(acc), interp}
+  defp do_bind_params([], _args, _fenv, _env, interp, acc), do: {:ok, Enum.reverse(acc), interp}
 
   defp call_builtin(entry, name, args, env, interp) do
     %{fun: fun, refs: ref_positions} = entry
@@ -2540,8 +2667,6 @@ defmodule PhpBeam.Eval do
   end
 
   def materialize_native(other, interp), do: {other, interp}
-
-  defp throw_error_tuple(err, interp), do: throw_error(err) |> elem(1) |> then(&{&1, interp})
 
   defp with_val(e, env, interp, f) do
     {{:val, v}, env2, interp2} = eval(e, env, interp)

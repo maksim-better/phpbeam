@@ -18,7 +18,8 @@ defmodule PhpBeam.Classes do
             props: [],
             methods: %{},
             abstract?: false,
-            final?: false
+            final?: false,
+            file: ""
 
   @type t :: %__MODULE__{}
   @type obj :: %{__ref__: pos_integer(), class: binary(), props: PArray.t()}
@@ -101,7 +102,7 @@ defmodule PhpBeam.Classes do
       end)
 
     methods_map =
-      Map.new(methods, fn {vis, static?, abstract?, final?, _by_ref?, mname, params, body} ->
+      Map.new(methods, fn {vis, static?, abstract?, final?, _by_ref?, mname, params, body, line} ->
         {String.downcase(mname),
          %{
            name: mname,
@@ -112,6 +113,7 @@ defmodule PhpBeam.Classes do
            params: params,
            body: body,
            class: key,
+           line: line,
            native: nil
          }}
       end)
@@ -126,9 +128,15 @@ defmodule PhpBeam.Classes do
       props: props_list,
       methods: methods_map,
       abstract?: "abstract" in mods,
-      final?: "final" in mods
+      final?: "final" in mods,
+      # php attributes method-declared errors (ArgumentCountError) to the
+      # file containing the class declaration
+      file: decl_file(interp)
     }
   end
+
+  defp decl_file(%{file_stack: [f | _]}), do: f
+  defp decl_file(_), do: "Command line code"
 
   defp full_key(name, interp) do
     if interp.ns == [] do

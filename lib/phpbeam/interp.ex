@@ -1011,7 +1011,15 @@ defmodule PhpBeam.Interp do
       {:ok, env, warn(interp, "Cannot redeclare function #{name}()")}
     else
       {:ok, env,
-       %{interp | functions: Map.put(interp.functions, name, {:user, params, body, def_file})}}
+       %{
+         interp
+         | functions:
+             Map.put(
+               interp.functions,
+               name,
+               {:user, params, body, def_file, interp.cur_line}
+             )
+       }}
     end
   end
 

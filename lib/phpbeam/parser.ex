@@ -585,7 +585,9 @@ defmodule PhpBeam.Parser do
     end
   end
 
-  defp method_member([{_, _, "function"} | rest], vis, static?, abstract?, final?) do
+  # fl = the `function` keyword's line: php attributes ArgumentCountError to
+  # the method declaration site
+  defp method_member([{_, fl, "function"} | rest], vis, static?, abstract?, final?) do
     {by_ref?, rest1} =
       case take_op(rest, "&") do
         {true, r} -> {true, r}
@@ -609,7 +611,7 @@ defmodule PhpBeam.Parser do
           {stmts, r}
       end
 
-    {{:methods, [{vis, static?, abstract?, final?, by_ref?, name, params, body}]}, rest6}
+    {{:methods, [{vis, static?, abstract?, final?, by_ref?, name, params, body, fl}]}, rest6}
   end
 
   # statement-level `const A = 1, B = 2;`
