@@ -60,6 +60,23 @@ defmodule PhpBeam.Eval.Call do
       {:user_gen, _params, _body, _def_file, _def_line, _ns, _uses} = fn_def ->
         call_generator_fn(fn_def, name, args, env, interp)
 
+      # higher-order builtins (registry v2): raw mode receives argument ASTs
+      # (lvalue writeback), eval mode receives evaluated values
+      %{ho: %{args: :raw}} = entry ->
+        asts =
+          Enum.map(args, fn
+            {:arg, e, _, _} -> e
+            {:arg_spread, e, _} -> e
+          end)
+
+        entry.ho.fun.(asts, env, interp)
+
+      %{ho: %{args: :eval}} = entry ->
+        case resolve_args(eval_args(args, env, interp, false)) do
+          {:ok, vals, it} -> entry.ho.fun.(vals, env, it || interp)
+          {:unwind, u, it} -> {{:unwind, u}, env, it || interp}
+        end
+
       %{fun: _} = entry ->
         call_builtin(entry, name, args, env, interp)
 

@@ -49,9 +49,71 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "set_time_limit" => &set_time_limit/2
     }
 
-    Enum.reduce(entries, fns, fn {name, fun}, acc ->
+    entries
+    |> Enum.reduce(fns, fn {name, fun}, acc ->
       Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []})
     end)
+    |> Map.merge(ho_entries())
+  end
+
+  # ── higher-order builtins (registry v2 ho: entries) ──
+  # call_user_func family re-enters the evaluator via the Eval.Call gateway;
+  # exit/die surface the halt signal through the unwind channel
+
+  defp ho_entries do
+    nofun = fn _v, i, _c -> {:ok, :null, i} end
+
+    %{
+      "call_user_func" => %{
+        fun: nofun,
+        refs: [],
+        ho: %{
+          args: :eval,
+          fun: fn vals, env, interp ->
+            case vals do
+              [cb | rest] ->
+                PhpBeam.Eval.call_cb(cb, rest, env, interp)
+
+              _ ->
+                {{:unwind, {:fatal, "Call to undefined function call_user_func()"}}, env, interp}
+            end
+          end
+        }
+      },
+      "call_user_func_array" => %{
+        fun: nofun,
+        refs: [],
+        ho: %{
+          args: :eval,
+          fun: fn vals, env, interp ->
+            case vals do
+              [cb, {:array, arr}] ->
+                PhpBeam.Eval.call_cb(cb, PArray.values(arr), env, interp)
+
+              _ ->
+                {{:unwind, {:fatal, "Call to undefined function call_user_func_array()"}}, env,
+                 interp}
+            end
+          end
+        }
+      },
+      "exit" => %{fun: nofun, refs: [], ho: %{args: :eval, fun: &exit_call/3}},
+      "die" => %{fun: nofun, refs: [], ho: %{args: :eval, fun: &exit_call/3}}
+    }
+  end
+
+  defp exit_call(vals, env, interp) do
+    case Enum.at(vals, 0) do
+      {:int, code} ->
+        {{:unwind, {:halt, code}}, env, interp}
+
+      {:string, msg} ->
+        interp2 = PhpBeam.Interp.write(interp, msg)
+        {{:unwind, {:halt, 0}}, env, interp2}
+
+      _ ->
+        {{:unwind, {:halt, 0}}, env, interp}
+    end
   end
 
   ## ─────────────────────────── ini ───────────────────────────

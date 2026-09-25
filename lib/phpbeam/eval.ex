@@ -1222,9 +1222,6 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  defp wrap_bare(n) when is_integer(n), do: {:int, n}
-  defp wrap_bare(other), do: other
-
   defp unwrap_key({:int, n}), do: {:int, n}
   defp unwrap_key({:string, _} = s), do: s
   defp unwrap_key(other), do: other
@@ -1991,7 +1988,7 @@ defmodule PhpBeam.Eval do
     cond do
       # sorts + preg $matches writers need raw argument lvalues for writeback;
       # the callback variant needs the callback AST
-      name in ~w(usort uasort uksort preg_match preg_match_all preg_replace_callback array_any array_all parse_str) ->
+      name in ~w(preg_match preg_match_all preg_replace_callback parse_str) ->
         unwrap_args =
           Enum.map(args, fn
             {:arg, e, _, _} -> e
@@ -2000,7 +1997,7 @@ defmodule PhpBeam.Eval do
 
         dispatch_ho(name, unwrap_args, env, interp)
 
-      name in ~w(call_user_func call_user_func_array array_map array_filter array_reduce array_walk eval func_get_args func_get_arg func_num_args compact extract exit die) ->
+      name in ~w(eval func_get_args func_get_arg func_num_args) ->
         case resolve_args(eval_args(args, env, interp, false)) do
           {:ok, vals, it} -> dispatch_ho(name, vals, env, it || interp)
           {:unwind, u, it} -> {{:unwind, u}, env, it || interp}
@@ -2112,66 +2109,6 @@ defmodule PhpBeam.Eval do
   def eval_file(%{file_stack: [f | _]}), do: f
   def eval_file(_), do: "Command line code"
 
-  defp dispatch_ho("call_user_func", [cb | rest], env, interp),
-    do: call_cb(cb, rest, env, interp)
-
-  defp dispatch_ho("call_user_func_array", [cb, {:array, arr}], env, interp),
-    do: call_cb(cb, PArray.values(arr), env, interp)
-
-  defp dispatch_ho("array_map", [cb | arrays], env, interp) do
-    case arrays do
-      [{:array, arr} | more] ->
-        more_vals = Enum.map(more, fn {:array, a} -> PArray.values(a) end)
-        map_cb(cb, arr, more_vals, env, interp)
-
-      _ ->
-        {{:val, {:array, PArray.new()}}, env, interp}
-    end
-  end
-
-  defp dispatch_ho("array_map", _, env, interp),
-    do: {{:val, {:array, PArray.new()}}, env, interp}
-
-  defp dispatch_ho("array_filter", [{:array, arr} | rest], env, interp),
-    do: filter_cb(arr, rest, env, interp)
-
-  defp dispatch_ho("array_reduce", [{:array, arr}, cb | rest], env, interp) do
-    initial =
-      case rest do
-        [v | _] -> v
-        [] -> :null
-      end
-
-    reduce_cb(arr, cb, initial, env, interp)
-  end
-
-  defp dispatch_ho("array_walk", _, env, interp),
-    do: {{:val, {:bool, false}}, env, interp}
-
-  # user-comparator sorts mutate their array argument (writeback via lvalue)
-  # ───────────────────── scope-writing misc ─────────────────────
-
-  # compact("a", ["b", ...]) — reads the CALLING scope; skips undefined vars
-  defp dispatch_ho("compact", vals, env, interp) do
-    names =
-      vals
-      |> Enum.flat_map(fn
-        {:string, n} -> [n]
-        {:array, arr} -> Enum.map(PArray.values(arr), &Value.cast_string_unsafe/1)
-        _ -> []
-      end)
-      |> Enum.uniq()
-
-    pairs =
-      for n <- names,
-          {:ok, v} <- [Env.lookup(env, interp, n)] do
-        {{:string, n}, v}
-      end
-
-    {{:val, {:array, PArray.from_pairs(pairs)}}, env, interp}
-  end
-
-  # parse_str(qs) → current scope vars; parse_str(qs, $arr) → writes the array
   defp dispatch_ho("parse_str", [q_arg | rest], env, interp) do
     {{:val, qv}, _, i1} = eval(q_arg, env, interp)
     parsed = parse_query(Value.cast_string_unsafe(qv))
@@ -2253,106 +2190,6 @@ defmodule PhpBeam.Eval do
     {:ok, a2} = PArray.push(arr, v)
     a2
   end
-
-  defp dispatch_ho("extract", vals, env, interp) do
-    case Enum.at(vals, 0) do
-      {:array, arr} ->
-        flags = extract_flags(vals)
-
-        {env2, interp2, count} =
-          Enum.reduce(PArray.to_pairs(arr), {env, interp, 0}, fn {k, v}, {e, it, n} ->
-            name = if is_binary(k), do: k, else: Integer.to_string(k)
-
-            if String.match?(name, ~r/^[a-zA-Z_]/) do
-              skip? =
-                (flags == 1 and match?({:ok, _}, Env.lookup(e, interp, name))) or
-                  (flags == 6 and match?(:error, map_fetch_env(e, interp, name)))
-
-              if skip? do
-                {e, it, n}
-              else
-                {:ok, e2, it2} = Env.bind_var(e, it, name, v)
-                {e2, it2, n + 1}
-              end
-            else
-              {e, it, n}
-            end
-          end)
-
-        {{:val, {:int, count}}, env2, interp2}
-
-      _ ->
-        {{:val, {:int, 0}}, env, interp}
-    end
-  end
-
-  defp extract_flags(vals) do
-    case Enum.at(vals, 1) do
-      {:int, f} -> f
-      _ -> 0
-    end
-  end
-
-  defp map_fetch_env(env, interp, name) do
-    case Env.lookup(env, interp, name) do
-      {:ok, _} -> {:ok, :found}
-      _ -> :error
-    end
-  end
-
-  # exit()/die() invoked as function calls
-  defp dispatch_ho("exit", vals, env, interp), do: exit_call(vals, env, interp)
-  defp dispatch_ho("die", vals, env, interp), do: exit_call(vals, env, interp)
-
-  defp exit_call(vals, env, interp) do
-    case Enum.at(vals, 0) do
-      {:int, code} ->
-        {{:unwind, {:halt, code}}, env, interp}
-
-      {:string, msg} ->
-        interp2 = Interp.write(interp, msg)
-        {{:unwind, {:halt, 0}}, env, interp2}
-
-      nil ->
-        {{:unwind, {:halt, 0}}, env, interp}
-
-      _ ->
-        {{:unwind, {:halt, 0}}, env, interp}
-    end
-  end
-
-  # php 8.4 array_any/array_all with callback (raw AST)
-  defp dispatch_ho("array_any", [arr_arg, cb_arg | _], env, interp) do
-    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
-
-    any =
-      PArray.values(arr)
-      |> Enum.any?(fn v ->
-        case call_cb_raw(cb_arg, [v], env, i1) do
-          {{:val, r}, _, _} -> Value.truthy?(r)
-          _ -> false
-        end
-      end)
-
-    {{:val, {:bool, any}}, env, i1}
-  end
-
-  defp dispatch_ho("array_all", [arr_arg, cb_arg | _], env, interp) do
-    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
-
-    all =
-      PArray.values(arr)
-      |> Enum.all?(fn v ->
-        case call_cb_raw(cb_arg, [v], env, i1) do
-          {{:val, r}, _, _} -> Value.truthy?(r)
-          _ -> false
-        end
-      end)
-
-    {{:val, {:bool, all}}, env, i1}
-  end
-
-  # ───────────────────────── preg family ─────────────────────────
 
   defp dispatch_ho("preg_match", [pat_arg, subj_arg | rest], env, interp) do
     {{:val, pv}, _, i1} = eval(pat_arg, env, interp)
@@ -2535,92 +2372,16 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  defp dispatch_ho("usort", [arr_arg, cb_arg | _], env, interp) do
-    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
-
-    cmp_val = fn a, b ->
-      case call_cb_raw(cb_arg, [a, b], env, i1) do
-        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
-        _ -> 0
-      end
-    end
-
-    sorted = merge_sort(PArray.values(arr), cmp_val)
-    {e2, i2} = assign(arr_arg, {:array, PArray.from_pairs(Enum.map(sorted, &{nil, &1}))}, env, i1)
-    {{:val, {:bool, true}}, e2, i2}
-  end
-
-  defp dispatch_ho("uasort", [arr_arg, cb_arg | _], env, interp) do
-    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
-
-    cmp_val = fn {_ka, a}, {_kb, b} ->
-      case call_cb_raw(cb_arg, [a, b], env, i1) do
-        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
-        _ -> 0
-      end
-    end
-
-    sorted = merge_sort(PArray.to_pairs(arr), cmp_val)
-
-    out =
-      Enum.reduce(sorted, PArray.new(), fn {k, v}, acc ->
-        {:ok, a2} = PArray.put(acc, wrap_bare(k), v)
-        a2
-      end)
-
-    {e2, i2} = assign(arr_arg, {:array, out}, env, i1)
-    {{:val, {:bool, true}}, e2, i2}
-  end
-
-  defp dispatch_ho("uksort", [arr_arg, cb_arg | _], env, interp) do
-    {{:val, {:array, arr}}, _, i1} = eval(arr_arg, env, interp)
-
-    cmp_val = fn {ka, _}, {kb, _} ->
-      case call_cb_raw(cb_arg, [wrap_bare(ka), wrap_bare(kb)], env, i1) do
-        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
-        _ -> 0
-      end
-    end
-
-    sorted = merge_sort(PArray.to_pairs(arr), cmp_val)
-
-    out =
-      Enum.reduce(sorted, PArray.new(), fn {k, v}, acc ->
-        {:ok, a2} = PArray.put(acc, wrap_bare(k), v)
-        a2
-      end)
-
-    {e2, i2} = assign(arr_arg, {:array, out}, env, i1)
-    {{:val, {:bool, true}}, e2, i2}
-  end
-
-  defp wrap_bare(k) when is_integer(k), do: {:int, k}
-  defp wrap_bare(k) when is_binary(k), do: {:string, k}
-
-  # comparator returns -1|0|1; negative = keep order
-  defp merge_sort(list, cmp_val) when length(list) > 1 do
-    mid = div(length(list), 2)
-    {left, right} = Enum.split(list, mid)
-    merge(merge_sort(left, cmp_val), merge_sort(right, cmp_val), cmp_val)
-  end
-
-  defp merge_sort([_] = single, _cmp_val), do: single
-  defp merge_sort([], _cmp_val), do: []
-
-  defp merge([], right, _cmp), do: right
-  defp merge(left, [], _cmp), do: left
-
-  defp merge([a | rest_a], [b | rest_b], cmp) do
-    if cmp.(a, b) <= 0 do
-      [a | merge(rest_a, [b | rest_b], cmp)]
-    else
-      [b | merge([a | rest_a], rest_b, cmp)]
-    end
-  end
-
   defp dispatch_ho(_, _, env, interp), do: :not_mine
 
-  defp call_cb_raw(cb_ast, call_args, env, interp) do
+  # bare key → value wrapper (generator yields also use it; ArrayFns keeps
+  # its own copy for the migrated sorts)
+  defp wrap_bare(k) when is_integer(k), do: {:int, k}
+  defp wrap_bare(k) when is_binary(k), do: {:string, k}
+  defp wrap_bare(other), do: other
+
+  # raw-AST callback gateway for ho builtins (sorts/preg writers)
+  def call_cb_raw(cb_ast, call_args, env, interp) do
     case eval(cb_ast, env, interp) do
       {{:val, cb}, e2, i2} -> call_cb(cb, call_args, e2, i2)
       unw -> unw
@@ -2644,76 +2405,6 @@ defmodule PhpBeam.Eval do
   end
 
   # call a PHP callable value
-  defp map_cb(cb, %PhpBeam.PArray{} = arr, more_arrs, env, interp) do
-    rows = pad_zip([PArray.values(arr) | more_arrs])
-
-    {vals, {e2, i2}} =
-      Enum.reduce(rows, {[], {env, interp}}, fn row, {acc, ctx} ->
-        case call_cb(cb, row, elem(ctx, 0), elem(ctx, 1)) do
-          {{:val, v}, e3, i3} -> {acc ++ [v], {e3, i3}}
-          _ -> {acc, ctx}
-        end
-      end)
-
-    {{:val, {:array, PArray.from_pairs(Enum.map(vals, &{nil, &1}))}}, e2, i2}
-  end
-
-  defp pad_zip([first | rest]) do
-    n = length(first)
-
-    Enum.map(Enum.with_index(first), fn {v, idx} ->
-      [v | Enum.map(rest, fn arr -> Enum.at(arr, idx) || :null end)]
-    end)
-    |> Kernel.++(if n > 0, do: [], else: [])
-  end
-
-  defp pad_zip([]), do: []
-
-  defp filter_cb(arr, rest, env, interp) do
-    cb =
-      case rest do
-        [c | _] -> c
-        [] -> nil
-      end
-
-    kept =
-      PArray.to_pairs(arr)
-      |> Enum.filter(fn {_k, v} ->
-        case cb do
-          nil ->
-            Value.truthy?(v)
-
-          c ->
-            case call_cb(c, [v], env, interp) do
-              {{:val, res}, _, _} -> Value.truthy?(res)
-              _ -> false
-            end
-        end
-      end)
-
-    out =
-      Enum.reduce(kept, PArray.new(), fn {k, v}, acc ->
-        {:ok, a2} = PArray.put(acc, wrap_raw_key(k), v)
-        a2
-      end)
-
-    {{:val, {:array, out}}, env, interp}
-  end
-
-  defp wrap_raw_key(k) when is_integer(k), do: {:int, k}
-  defp wrap_raw_key(k) when is_binary(k), do: {:string, k}
-
-  defp reduce_cb(arr, cb, initial, env, interp) do
-    PArray.values(arr)
-    |> Enum.reduce(initial, fn v, acc ->
-      case call_cb(cb, [acc, v], env, interp) do
-        {{:val, res}, _, _} -> res
-        _ -> acc
-      end
-    end)
-    |> then(&{{:val, &1}, env, interp})
-  end
-
   def apply_binop(op, l, r, _env, interp) do
     interp = interp || PhpBeam.Interp.new_stub()
 

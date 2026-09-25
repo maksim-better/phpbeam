@@ -5,7 +5,7 @@ defmodule PhpBeam.Builtin.ArrayFns do
   new array back into the argument lvalue.
   """
 
-  alias PhpBeam.{PArray, Value}
+  alias PhpBeam.{Env, PArray, Value}
 
   def register(fns) do
     entries = %{
@@ -64,7 +64,32 @@ defmodule PhpBeam.Builtin.ArrayFns do
         Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: refs})
       end)
 
-    fns
+    Map.merge(fns, ho_entries())
+  end
+
+  # ── higher-order builtins (registry v2 ho: entries) ──
+  # raw mode: sorts/array_any/array_all receive argument ASTs (lvalue writeback
+  # for the sorted array; callbacks stay unevaluated until invoked)
+  # eval mode: map/filter/reduce/compact/extract receive values
+
+  defp ho_entries do
+    nofun = fn _v, i, _c -> {:ok, :null, i} end
+    ho = fn args, fun -> %{fun: nofun, refs: [], ho: %{args: args, fun: fun}} end
+
+    %{
+      "usort" => ho.(:raw, &ho_impl_usort/3),
+      "uasort" => ho.(:raw, &ho_impl_uasort/3),
+      "uksort" => ho.(:raw, &ho_impl_uksort/3),
+      "array_any" => ho.(:raw, &ho_impl_array_any/3),
+      "array_all" => ho.(:raw, &ho_impl_array_all/3),
+      "array_map" => ho.(:eval, &ho_impl_array_map/3),
+      "array_filter" => ho.(:eval, &ho_impl_array_filter/3),
+      "array_reduce" => ho.(:eval, &ho_impl_array_reduce/3),
+      "array_walk" =>
+        ho.(:eval, fn _vals, env, interp -> {{:val, {:bool, false}}, env, interp} end),
+      "compact" => ho.(:eval, &ho_impl_compact/3),
+      "extract" => ho.(:eval, &ho_impl_extract/3)
+    }
   end
 
   defp arr([{:array, a} | _]), do: a
@@ -669,4 +694,308 @@ defmodule PhpBeam.Builtin.ArrayFns do
     do: {:ok, {:array, PArray.from_pairs(Enum.map(PArray.values(a), &{nil, &1}))}, i}
 
   defp array_values([_ | _], i), do: {:ok, {:array, PArray.new()}, i}
+  # bare key → value wrapper (superset of the two same-named helpers
+  # that lived at different sites in eval.ex)
+
+  defp wrap_bare(n) when is_integer(n), do: {:int, n}
+
+  defp wrap_bare(other), do: other
+
+  defp ho_impl_array_map([cb | arrays], env, interp) do
+    case arrays do
+      [{:array, arr} | more] ->
+        more_vals = Enum.map(more, fn {:array, a} -> PArray.values(a) end)
+        map_cb(cb, arr, more_vals, env, interp)
+
+      _ ->
+        {{:val, {:array, PArray.new()}}, env, interp}
+    end
+  end
+
+  defp ho_impl_array_map(_, env, interp),
+    do: {{:val, {:array, PArray.new()}}, env, interp}
+
+  defp ho_impl_array_filter([{:array, arr} | rest], env, interp),
+    do: filter_cb(arr, rest, env, interp)
+
+  defp ho_impl_array_reduce([{:array, arr}, cb | rest], env, interp) do
+    initial =
+      case rest do
+        [v | _] -> v
+        [] -> :null
+      end
+
+    reduce_cb(arr, cb, initial, env, interp)
+  end
+
+  defp ho_impl_array_walk(_, env, interp),
+    do: {{:val, {:bool, false}}, env, interp}
+
+  # user-comparator sorts mutate their array argument (writeback via lvalue)
+  # ───────────────────── scope-writing misc ─────────────────────
+
+  # compact("a", ["b", ...]) — reads the CALLING scope; skips undefined vars
+
+  defp ho_impl_compact(vals, env, interp) do
+    names =
+      vals
+      |> Enum.flat_map(fn
+        {:string, n} -> [n]
+        {:array, arr} -> Enum.map(PArray.values(arr), &Value.cast_string_unsafe/1)
+        _ -> []
+      end)
+      |> Enum.uniq()
+
+    pairs =
+      for n <- names,
+          {:ok, v} <- [Env.lookup(env, interp, n)] do
+        {{:string, n}, v}
+      end
+
+    {{:val, {:array, PArray.from_pairs(pairs)}}, env, interp}
+  end
+
+  # parse_str(qs) → current scope vars; parse_str(qs, $arr) → writes the array
+
+  defp ho_impl_extract(vals, env, interp) do
+    case Enum.at(vals, 0) do
+      {:array, arr} ->
+        flags = extract_flags(vals)
+
+        {env2, interp2, count} =
+          Enum.reduce(PArray.to_pairs(arr), {env, interp, 0}, fn {k, v}, {e, it, n} ->
+            name = if is_binary(k), do: k, else: Integer.to_string(k)
+
+            if String.match?(name, ~r/^[a-zA-Z_]/) do
+              skip? =
+                (flags == 1 and match?({:ok, _}, Env.lookup(e, interp, name))) or
+                  (flags == 6 and match?(:error, map_fetch_env(e, interp, name)))
+
+              if skip? do
+                {e, it, n}
+              else
+                {:ok, e2, it2} = Env.bind_var(e, it, name, v)
+                {e2, it2, n + 1}
+              end
+            else
+              {e, it, n}
+            end
+          end)
+
+        {{:val, {:int, count}}, env2, interp2}
+
+      _ ->
+        {{:val, {:int, 0}}, env, interp}
+    end
+  end
+
+  defp extract_flags(vals) do
+    case Enum.at(vals, 1) do
+      {:int, f} -> f
+      _ -> 0
+    end
+  end
+
+  defp map_fetch_env(env, interp, name) do
+    case Env.lookup(env, interp, name) do
+      {:ok, _} -> {:ok, :found}
+      _ -> :error
+    end
+  end
+
+  # exit()/die() invoked as function calls
+
+  defp ho_impl_array_any([arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = PhpBeam.Eval.eval(arr_arg, env, interp)
+
+    any =
+      PArray.values(arr)
+      |> Enum.any?(fn v ->
+        case PhpBeam.Eval.call_cb_raw(cb_arg, [v], env, i1) do
+          {{:val, r}, _, _} -> Value.truthy?(r)
+          _ -> false
+        end
+      end)
+
+    {{:val, {:bool, any}}, env, i1}
+  end
+
+  defp ho_impl_array_all([arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = PhpBeam.Eval.eval(arr_arg, env, interp)
+
+    all =
+      PArray.values(arr)
+      |> Enum.all?(fn v ->
+        case PhpBeam.Eval.call_cb_raw(cb_arg, [v], env, i1) do
+          {{:val, r}, _, _} -> Value.truthy?(r)
+          _ -> false
+        end
+      end)
+
+    {{:val, {:bool, all}}, env, i1}
+  end
+
+  # ───────────────────────── preg family ─────────────────────────
+
+  defp ho_impl_usort([arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = PhpBeam.Eval.eval(arr_arg, env, interp)
+
+    cmp_val = fn a, b ->
+      case PhpBeam.Eval.call_cb_raw(cb_arg, [a, b], env, i1) do
+        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
+        _ -> 0
+      end
+    end
+
+    sorted = merge_sort(PArray.values(arr), cmp_val)
+
+    {e2, i2} =
+      PhpBeam.Eval.assign(
+        arr_arg,
+        {:array, PArray.from_pairs(Enum.map(sorted, &{nil, &1}))},
+        env,
+        i1
+      )
+
+    {{:val, {:bool, true}}, e2, i2}
+  end
+
+  defp ho_impl_uasort([arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = PhpBeam.Eval.eval(arr_arg, env, interp)
+
+    cmp_val = fn {_ka, a}, {_kb, b} ->
+      case PhpBeam.Eval.call_cb_raw(cb_arg, [a, b], env, i1) do
+        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
+        _ -> 0
+      end
+    end
+
+    sorted = merge_sort(PArray.to_pairs(arr), cmp_val)
+
+    out =
+      Enum.reduce(sorted, PArray.new(), fn {k, v}, acc ->
+        {:ok, a2} = PArray.put(acc, wrap_bare(k), v)
+        a2
+      end)
+
+    {e2, i2} = PhpBeam.Eval.assign(arr_arg, {:array, out}, env, i1)
+    {{:val, {:bool, true}}, e2, i2}
+  end
+
+  defp ho_impl_uksort([arr_arg, cb_arg | _], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = PhpBeam.Eval.eval(arr_arg, env, interp)
+
+    cmp_val = fn {ka, _}, {kb, _} ->
+      case PhpBeam.Eval.call_cb_raw(cb_arg, [wrap_bare(ka), wrap_bare(kb)], env, i1) do
+        {{:val, v}, _, _} -> PhpBeam.Value.compare(v, {:int, 0})
+        _ -> 0
+      end
+    end
+
+    sorted = merge_sort(PArray.to_pairs(arr), cmp_val)
+
+    out =
+      Enum.reduce(sorted, PArray.new(), fn {k, v}, acc ->
+        {:ok, a2} = PArray.put(acc, wrap_bare(k), v)
+        a2
+      end)
+
+    {e2, i2} = PhpBeam.Eval.assign(arr_arg, {:array, out}, env, i1)
+    {{:val, {:bool, true}}, e2, i2}
+  end
+
+  defp merge_sort(list, cmp_val) when length(list) > 1 do
+    mid = div(length(list), 2)
+    {left, right} = Enum.split(list, mid)
+    merge(merge_sort(left, cmp_val), merge_sort(right, cmp_val), cmp_val)
+  end
+
+  defp merge_sort([_] = single, _cmp_val), do: single
+
+  defp merge_sort([], _cmp_val), do: []
+
+  defp merge([], right, _cmp), do: right
+
+  defp merge(left, [], _cmp), do: left
+
+  defp merge([a | rest_a], [b | rest_b], cmp) do
+    if cmp.(a, b) <= 0 do
+      [a | merge(rest_a, [b | rest_b], cmp)]
+    else
+      [b | merge([a | rest_a], rest_b, cmp)]
+    end
+  end
+
+  defp map_cb(cb, %PhpBeam.PArray{} = arr, more_arrs, env, interp) do
+    rows = pad_zip([PArray.values(arr) | more_arrs])
+
+    {vals, {e2, i2}} =
+      Enum.reduce(rows, {[], {env, interp}}, fn row, {acc, ctx} ->
+        case PhpBeam.Eval.call_cb(cb, row, elem(ctx, 0), elem(ctx, 1)) do
+          {{:val, v}, e3, i3} -> {acc ++ [v], {e3, i3}}
+          _ -> {acc, ctx}
+        end
+      end)
+
+    {{:val, {:array, PArray.from_pairs(Enum.map(vals, &{nil, &1}))}}, e2, i2}
+  end
+
+  defp pad_zip([first | rest]) do
+    n = length(first)
+
+    Enum.map(Enum.with_index(first), fn {v, idx} ->
+      [v | Enum.map(rest, fn arr -> Enum.at(arr, idx) || :null end)]
+    end)
+    |> Kernel.++(if n > 0, do: [], else: [])
+  end
+
+  defp pad_zip([]), do: []
+
+  defp filter_cb(arr, rest, env, interp) do
+    cb =
+      case rest do
+        [c | _] -> c
+        [] -> nil
+      end
+
+    kept =
+      PArray.to_pairs(arr)
+      |> Enum.filter(fn {_k, v} ->
+        case cb do
+          nil ->
+            Value.truthy?(v)
+
+          c ->
+            case PhpBeam.Eval.call_cb(c, [v], env, interp) do
+              {{:val, res}, _, _} -> Value.truthy?(res)
+              _ -> false
+            end
+        end
+      end)
+
+    out =
+      Enum.reduce(kept, PArray.new(), fn {k, v}, acc ->
+        {:ok, a2} = PArray.put(acc, wrap_raw_key(k), v)
+        a2
+      end)
+
+    {{:val, {:array, out}}, env, interp}
+  end
+
+  defp wrap_raw_key(k) when is_integer(k), do: {:int, k}
+
+  defp wrap_raw_key(k) when is_binary(k), do: {:string, k}
+
+  defp reduce_cb(arr, cb, initial, env, interp) do
+    PArray.values(arr)
+    |> Enum.reduce(initial, fn v, acc ->
+      case PhpBeam.Eval.call_cb(cb, [acc, v], env, interp) do
+        {{:val, res}, _, _} -> res
+        _ -> acc
+      end
+    end)
+    |> then(&{{:val, &1}, env, interp})
+  end
+
+  defp wrap_bare(other), do: other
 end
