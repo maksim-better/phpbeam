@@ -19,11 +19,11 @@ interpolation: 3 items for ~€26.74
 
 | Metric | Value |
 | --- | --- |
-| php-src official tests (tests/{lang,strings,func,classes,basic,output}) | **264 / 697 passing**, rising every milestone |
-| Zend/tests core-language sample (300 random) | ~11% — type-system corners are the current frontier |
-| WordPress builtin-function demand covered (by call frequency) | **80%** (170/632 by kind) |
-| Differential cases vs local PHP 8.4 (stdout byte-exact) | 17/17 |
-| Codebase | ~13k lines of Elixir, 11 builtin modules |
+| php-src official tests (tests/{lang,strings,func,classes,basic,output}) | **273 / 697 passing** (visibility enforcement landed; Zend-suite regression under repair, see PLAN.md) |
+| WordPress builtin-function demand covered (by call frequency) | **93%** (346 builtins; real MySQL via MyXQL) |
+| Differential cases vs local PHP 8.4 (stdout byte-exact) | 19/19 |
+| wp-load.php | unconfigured: error page **byte-identical**; with wp-config + live MySQL: completes, exit 0 |
+| Codebase | ~16k lines of Elixir, 13 builtin modules |
 
 ## Quick start
 

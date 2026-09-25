@@ -19,11 +19,11 @@ interpolation: 3 items for ~€26.74
 
 | 指标 | 数值 |
 | --- | --- |
-| php-src 官方测试（tests/{lang,strings,func,classes,basic,output}） | **264 / 697 通过**，逐里程碑上升 |
-| Zend/tests 核心语言抽样（300 个随机） | ~11%——类型系统边角是当前战线 |
-| WordPress 内置函数需求覆盖（按调用频次） | **80%**（按种类 170/632） |
-| 对本机 PHP 8.4 的差分用例（stdout 逐字节） | 17/17 |
-| 代码量 | 约 1.3 万行 Elixir，11 个内置模块 |
+| php-src 官方测试（tests/{lang,strings,func,classes,basic,output}） | **273 / 697 通过**（可见性执法已落地；Zend 套件回归修复中，见 PLAN.md） |
+| WordPress 内置函数需求覆盖（按调用频次） | **93%**（346 个内置；真 MySQL 走 MyXQL） |
+| 对本机 PHP 8.4 的差分用例（stdout 逐字节） | 19/19 |
+| wp-load.php | 无配置：错误页**逐字节一致**；带 wp-config + 真 MySQL：完整跑通 exit 0 |
+| 代码量 | 约 1.6 万行 Elixir，13 个内置模块 |
 
 ## 快速开始
 
