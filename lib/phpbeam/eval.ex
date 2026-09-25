@@ -1752,8 +1752,18 @@ defmodule PhpBeam.Eval do
     # body containing yield makes the closure a generator factory
     gen? = PhpBeam.Ast.has_yield?(body)
 
-    {{:val, {:closure, params, body, captures, arrow?, eval_file(interp), interp.cur_line, gen?}},
-     env2, interp2}
+    closure =
+      PhpBeam.Closure.runtime(
+        params,
+        body,
+        captures,
+        arrow?,
+        eval_file(interp),
+        interp.cur_line,
+        gen?
+      )
+
+    {{:val, closure}, env2, interp2}
   end
 
   def eval({:method_call, obj_e, name_e, args, nullsafe?}, env, interp) do

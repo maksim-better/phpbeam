@@ -62,3 +62,17 @@ defmodule PhpBeam.ObjectsTest do
     assert Objects.get_object(%PhpBeam.Interp{}, {:int, 3}) == {:int, 3}
   end
 end
+
+defmodule PhpBeam.ClosureTest do
+  @moduledoc "Seam tests: the two closure shapes discriminate by arity only via Closure"
+  use ExUnit.Case, async: true
+
+  test "runtime/7 constructs the 8-elem value; ast?/runtime? discriminate" do
+    v = PhpBeam.Closure.runtime([], {:int, 1}, %{}, false, "f.php", 3, false)
+    assert PhpBeam.Closure.runtime?(v)
+    refute PhpBeam.Closure.ast?(v)
+    # parser shape stays 6-elem
+    assert PhpBeam.Closure.ast?({:closure, [], [], false, {:int, 1}, false})
+    refute PhpBeam.Closure.runtime?({:closure, [], [], false, {:int, 1}, false})
+  end
+end
