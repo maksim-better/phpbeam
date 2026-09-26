@@ -332,6 +332,8 @@ defmodule PhpBeam.Parser do
       modifiers: mods,
       extends: extends,
       implements: implements,
+      # php attributes early-binding/inheritance fatals to the class' end
+      end_line: peek_line(rest6),
       consts: List.flatten(Keyword.get_values(members, :consts)),
       props: List.flatten(Keyword.get_values(members, :props)),
       methods: List.flatten(Keyword.get_values(members, :methods)),

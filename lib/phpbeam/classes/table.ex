@@ -28,7 +28,9 @@ defmodule PhpBeam.Classes.Table do
             enum_cases: [],
             backed?: false,
             # source modifiers (["readonly", ...]) for readonly-class checks
-            modifiers: []
+            modifiers: [],
+            # closing-brace line: php attributes early-binding fatals here
+            end_line: 0
 
   @type t :: %__MODULE__{}
   @type obj :: %{__ref__: pos_integer(), class: binary(), props: PArray.t()}
@@ -82,7 +84,8 @@ defmodule PhpBeam.Classes.Table do
             props,
             methods,
             mods,
-            interp
+            interp,
+            decl[:end_line] || 0
           )
 
         case apply_traits(class, uses, interp) do
@@ -91,6 +94,7 @@ defmodule PhpBeam.Classes.Table do
 
             case link_checks(class2, key, interp2) do
               :ok -> {:ok, interp2}
+              {:error, _msg, _line} = err -> err
               {:error, msg} -> {:error, msg}
             end
 
@@ -101,7 +105,19 @@ defmodule PhpBeam.Classes.Table do
     end
   end
 
-  defp build_class(name, kind, key, parent_key, iface_keys, consts, props, methods, mods, interp) do
+  defp build_class(
+         name,
+         kind,
+         key,
+         parent_key,
+         iface_keys,
+         consts,
+         props,
+         methods,
+         mods,
+         interp,
+         end_line
+       ) do
     # php allows forward refs and self::CONST in const expressions (they
     # resolve with full class scope) — non-literal folds defer to the AST and
     # evaluate lazily on first access
@@ -231,7 +247,8 @@ defmodule PhpBeam.Classes.Table do
       file: decl_file(interp),
       ns: interp.ns,
       uses: interp.uses,
-      modifiers: mods
+      modifiers: mods,
+      end_line: end_line
     }
   end
 
@@ -505,6 +522,12 @@ defmodule PhpBeam.Classes.Table do
          :ok <- check_abstract_methods(class, key, chain, interp),
          :ok <- check_readonly_props(class) do
       :ok
+    else
+      # per-check attribution: {:error, msg, line} carries the zend line
+      # (child member line); bare errors keep cur_line (class START — the
+      # abstract-count convention)
+      {:error, _msg, _line} = err -> err
+      {:error, msg} -> {:error, msg}
     end
   end
 
@@ -564,7 +587,8 @@ defmodule PhpBeam.Classes.Table do
 
                 vis_rank(cp.visibility) < vis_rank(p.visibility) ->
                   "Access level to #{class.name}::$#{cp.display} must be #{p.visibility}" <>
-                    " (as in class #{ancestor.name})"
+                    " (as in class #{ancestor.name})" <>
+                    if(p.visibility == :public, do: "", else: " or weaker")
 
                 true ->
                   nil
@@ -594,27 +618,31 @@ defmodule PhpBeam.Classes.Table do
               nil
 
             cm ->
+              # zend attributes inheritance fatals to the CHILD method's
+              # declaration line
               cond do
                 pm.final? ->
-                  "Cannot override final method #{ancestor.name}::#{pm.name}()"
+                  {"Cannot override final method #{ancestor.name}::#{pm.name}()", cm.line}
 
                 pm.static? != cm.static? ->
                   if pm.static?,
                     do:
-                      "Cannot make static method #{ancestor.name}::#{pm.name}() non static" <>
-                        " in class #{class.name}",
+                      {"Cannot make static method #{ancestor.name}::#{pm.name}() non static" <>
+                         " in class #{class.name}", cm.line},
                     else:
-                      "Cannot make non static method #{ancestor.name}::#{pm.name}() static" <>
-                        " in class #{class.name}"
+                      {"Cannot make non static method #{ancestor.name}::#{pm.name}() static" <>
+                         " in class #{class.name}", cm.line}
 
                 vis_rank(cm.visibility) < vis_rank(pm.visibility) and pm.name != "__construct" ->
-                  "Access level to #{class.name}::#{cm.name}() must be #{pm.visibility}" <>
-                    " (as in class #{ancestor.name})"
+                  {"Access level to #{class.name}::#{cm.name}() must be #{pm.visibility}" <>
+                     " (as in class #{ancestor.name})" <>
+                     if(pm.visibility == :public, do: "", else: " or weaker"), cm.line}
 
                 pm.name != "__construct" and
                     not params_compat?(pm.params, cm.params, interp, class) ->
-                  "Declaration of #{class.name}::#{cm.name}(#{param_sig(cm.params)})" <>
-                    " must be compatible with #{ancestor.name}::#{pm.name}(#{param_sig(pm.params)})"
+                  {"Declaration of #{class.name}::#{cm.name}(#{param_sig(cm.params)})" <>
+                     " must be compatible with #{ancestor.name}::#{pm.name}(#{param_sig(pm.params)})",
+                   cm.line}
 
                 true ->
                   nil
@@ -625,7 +653,7 @@ defmodule PhpBeam.Classes.Table do
     end)
     |> case do
       nil -> :ok
-      msg -> {:error, msg}
+      {msg, line} -> {:error, msg, line}
     end
   end
 

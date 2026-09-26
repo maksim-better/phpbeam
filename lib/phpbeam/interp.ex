@@ -1272,9 +1272,18 @@ defmodule PhpBeam.Interp do
 
   def exec_stmt({:class_def, decl}, env, interp) do
     case PhpBeam.Classes.register(decl, interp) do
-      {:ok, interp2} -> {:ok, env, interp2}
-      # link-time fatals render plain (no Uncaught wrapper, no trace)
-      {:error, msg} -> {{:unwind, {:engine_fatal, msg}}, env, interp}
+      {:ok, interp2} ->
+        {:ok, env, interp2}
+
+      # link-time fatals render plain (no Uncaught wrapper, no trace);
+      # zend attributes each check to its own site (child member line vs
+      # class end line — Table carries it back)
+      {:error, msg, line} when is_integer(line) and line > 0 ->
+        it = %{interp | throw_pos: {current_file(interp), line}}
+        {{:unwind, {:engine_fatal, msg}}, env, it}
+
+      {:error, msg} ->
+        {{:unwind, {:engine_fatal, msg}}, env, interp}
     end
   end
 
