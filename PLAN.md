@@ -1,4 +1,30 @@
-# phpbeam — 待办计划（2026-09-25 目标切换：Laravel）
+# phpbeam — 待办计划（2026-09-26 主体切换：完整 phpruntime = 能力矩阵全覆盖）
+
+**验收定义（用户 2026-09-26 拍板）**：以能力矩阵全覆盖为准——从本机 php 8.4 实测导出的函数/类/扩展/SAPI/INI 清单逐子系统补齐；Laravel/WP 降为**验证目标与排序权重**，不再是驱动方式。差集清单在 `docs/matrix/`（matrix_gaps.txt 函数面、class_gaps.txt 类面，2026-09-26 实测）。
+
+**矩阵总账**（目标扩展集 = Laravel+WP 加权的 13 模块）：
+
+| 模块 | php 函数 | 已有 | 缺 | 类缺口 | 模块性质 |
+|---|---|---|---|---|---|
+| standard | 542 | 276 | **266** | — | 数组~40/字符串~50/流~30/网络/杂 |
+| date | 48 | 8 | **40** | 14（DatePeriod/Interval/Immutable…） | **Carbon 硬依赖**（当前 artisan 卡点即此） |
+| mbstring | 65 | 8 | **57** | — | 纯函数，机械 |
+| ctype | 11 | 0 | **11** | — | 纯函数，一屏 |
+| iconv | 10 | 0 | **10** | — | 纯函数 |
+| filter | 7 | 0 | **7** | — | Laravel 请求面 |
+| json | 5 | 4 | 1 | — | |
+| hash | 20 | 5 | **15** | — | composer/加密 |
+| session | 23 | 0 | **23** | — | Laravel 会话 |
+| spl | 15 | 5 | 10 | **16 类**（ArrayObject/Iterator/FileInfo…） | collections 底座 |
+| pcre | 11 | 9 | 2 | — | |
+| tokenizer | 2 | 0 | 2 | — | Blade |
+| Core | 59 | 29 | **30** | — | 杂（sleep/putenv/getopt…） |
+
+合计：函数缺 ~470、类缺 48。**SAPI/INI 缺口**：$_FILES、chunked、keep-alive、auto_prepend_file、max_execution_time 真实现（子项待补进矩阵）。
+
+**执行纪律**：按矩阵条目逐子系统推进（纯函数模块全量实现 → 探针差分 → 过门禁）；引擎 bug（trait 展平/interp 线程化残余）在验证目标踩到时修但**时间盒 2 小时**，超出登记 `docs/matrix/deferred.md` 顺延。artisan 链条每完成一个模块跑一次看推进。
+
+**模块顺序**（Laravel+WP 权重 × 机械度）：M1 date（Carbon 卡点）→ M2 mbstring+ctype+iconv（纯函数 78 个）→ M3 standard-数组族 → M4 hash+filter → M5 SPL 类族 → M6 session → M7 standard-字符串/流残余 → M8 Core 杂项 → M9 SAPI/INI 子项。每个模块一个或多个 commit，函数签名从 php-src `ext/*/` 对照实现。
 
 **北极星：浏览器访问 phpbeam 服务端口，完整运行一个 Laravel 编写的项目**——页面渲染、静态资源、表单提交（session/cookie）、数据库读写全部真实工作。
 
