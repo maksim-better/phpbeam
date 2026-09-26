@@ -1448,8 +1448,10 @@ defmodule PhpBeam.Parser do
         {t, r} = param_type_atom(tl(ts))
         type_union_tail(r, acc <> "|" <> t)
 
-      # `&` followed by a variable is the by-ref marker, not an intersection
-      at_op?(ts, "&") and not match?([{:variable, _, _} | _], tl(ts)) ->
+      # `&` before a variable or `...` is the by-ref marker (incl. by-ref
+      # variadics `mixed &...$vars`), not a type intersection
+      at_op?(ts, "&") and not match?([{:variable, _, _} | _], tl(ts)) and
+          not match?([{:op, _, "..."} | _], tl(ts)) ->
         {t, r} = param_type_atom(tl(ts))
         type_union_tail(r, acc <> "&" <> t)
 

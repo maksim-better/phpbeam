@@ -10,6 +10,7 @@ defmodule PhpBeam.Builtin.FileFns do
 
   def register(fns) do
     entries = %{
+      "stream_resolve_include_path" => &resolve_include_path/2,
       "file_get_contents" => &file_get_contents/2,
       "file_put_contents" => &file_put_contents/2,
       "file_exists" => &file_exists/2,
@@ -37,6 +38,29 @@ defmodule PhpBeam.Builtin.FileFns do
   end
 
   ## ─────────────────────────── contents ───────────────────────────
+
+  # php: search include_path entries for the file; false when absent
+  defp resolve_include_path(vals, i) do
+    case vals do
+      [{:string, rel} | _] ->
+        dirs =
+          (i.ini["include_path"] || ".")
+          |> String.split(":", trim: true)
+
+        hit =
+          Enum.find_value(dirs, fn d ->
+            full = if d == ".", do: rel, else: Path.join(d, rel)
+
+            if File.exists?(full),
+              do: {:string, PhpBeam.Interp.real_path(full)}
+          end)
+
+        {:ok, hit || {:bool, false}, i}
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
 
   defp file_get_contents(vals, i) do
     case vals do

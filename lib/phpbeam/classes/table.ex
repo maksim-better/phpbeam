@@ -710,7 +710,7 @@ defmodule PhpBeam.Classes.Table do
                      if(pm.visibility == :public, do: "", else: " or weaker"), cm.line}
 
                 pm.name != "__construct" and
-                    not params_compat?(pm.params, cm.params, interp, class) ->
+                    not params_compat?(pm.params, cm.params, interp, class, ancestor) ->
                   {"Declaration of #{class.name}::#{cm.name}(#{param_sig(cm.params)})" <>
                      " must be compatible with #{ancestor.name}::#{pm.name}(#{param_sig(pm.params)})",
                    cm.line}
@@ -804,7 +804,7 @@ defmodule PhpBeam.Classes.Table do
   defp vis_rank(:public), do: 2
 
   # param tuples: {:param, name, type, default, by_ref?, variadic?}
-  defp params_compat?(pp, cp, interp, class) do
+  defp params_compat?(pp, cp, interp, class, pclass) do
     p_var? = Enum.any?(pp, &match?({:param, _, _, _, _, true}, &1))
     c_var? = Enum.any?(cp, &match?({:param, _, _, _, _, true}, &1))
 
@@ -818,20 +818,22 @@ defmodule PhpBeam.Classes.Table do
       true ->
         Enum.zip(pp, cp)
         |> Enum.all?(fn {{:param, _, pt, _, pr, _}, {:param, _, ct, _, cr, _}} ->
-          pr == cr and type_eq?(pt, ct, interp, class)
+          pr == cr and type_eq?(pt, ct, interp, class, pclass)
         end)
     end
   end
 
   # php compares RESOLVED types: an aliased `HttpTransporterInterface` in the
   # child matches the parent's fully-qualified spelling
-  defp type_eq?(nil, _ct, _interp, _class), do: true
+  defp type_eq?(nil, _ct, _interp, _class, _pclass), do: true
 
-  defp type_eq?(pt, ct, _interp, _class) when pt == ct, do: true
+  defp type_eq?(_pt, nil, _interp, _class, _pclass), do: true
 
-  defp type_eq?(pt, ct, _interp, _class) do
+  defp type_eq?(pt, ct, _interp, _class, _pclass) when pt == ct, do: true
+
+  defp type_eq?(pt, ct, interp, class, pclass) do
     builtin_types =
-      ~w(int float string bool array callable iterable object mixed null false true self static mixed)
+      ~w(int float string bool array callable iterable object mixed null false true self static)
 
     pt_l = String.downcase(pt)
     ct_l = String.downcase(ct)
@@ -842,8 +844,35 @@ defmodule PhpBeam.Classes.Table do
         loose_builtin(pt_l) == loose_builtin(ct_l)
 
       true ->
-        # class types: compare their downcased last segments (alias vs FQ)
-        seg(pt) == seg(ct)
+        # class types resolve against their DECLARING class's aliases/ns —
+        # `SymfonyRequest` (child alias) meets the parent's `Request` alias
+        # as the same FQCN
+        resolve_type_fq(pt, interp, pclass) == resolve_type_fq(ct, interp, class)
+    end
+  end
+
+  defp resolve_type_fq(t, _interp, nil), do: String.downcase(t)
+
+  defp resolve_type_fq(t, _interp, cls) do
+    {fq?, t2} =
+      if String.starts_with?(t, "\\"), do: {true, String.trim_leading(t, "\\")}, else: {false, t}
+
+    parts = String.split(t2, "\\")
+
+    if length(parts) == 1 and not fq? do
+      lname = String.downcase(t2)
+
+      case cls.uses.normal[lname] do
+        nil ->
+          if cls.ns != [],
+            do: (cls.ns ++ [t2]) |> Enum.join("\\") |> String.downcase(),
+            else: lname
+
+        full ->
+          String.downcase(full)
+      end
+    else
+      String.downcase(t2)
     end
   end
 
@@ -1702,15 +1731,46 @@ defmodule PhpBeam.Classes.Table do
       consts: %{},
       props: [],
       methods: %{
-        "bind" => %{
+        "bind" =>
           native_fn("bind", fn _obj, args, i ->
             case args do
-              [cl | _] -> {:ok, {cl, nil}, i}
-              _ -> {:ok, {:null, nil}, i}
+              # Closure::bind($closure, $newThis, $newScope): rebind $this
+              # and the SCOPE class (private/protected access of that class);
+              # 'static' keeps the current scope, null/absent keeps old too
+              [{:closure, _, _, caps, _, _, _, _} = cl, new_this, scope | _] ->
+                old =
+                  Map.get(caps, :__obj_ctx) || %{this: nil, called_class: nil, scope_class: nil}
+
+                scope_key =
+                  case scope do
+                    {:string, s} when s != "static" ->
+                      PhpBeam.Eval.resolve_class_string(s, i)
+
+                    {:object, _} = oref ->
+                      PhpBeam.Eval.get_object(i, oref).class
+
+                    _ ->
+                      nil
+                  end
+
+                ctx = %{
+                  old
+                  | this: keep_obj(new_this) || old.this,
+                    scope_class: scope_key || old.scope_class,
+                    called_class: scope_key || old.called_class
+                }
+
+                bound = put_elem(cl, 3, Map.put(caps, :__obj_ctx, ctx))
+                {:ok, {bound, nil}, i}
+
+              [cl | _] ->
+                {:ok, {cl, nil}, i}
+
+              _ ->
+                {:ok, {:null, nil}, i}
             end
           end)
-          | static?: true
-        },
+          |> Map.put(:static?, true),
         "fromcallable" => %{
           native_fn("fromCallable", fn _obj, args, i ->
             [cb | _] = args
@@ -1728,6 +1788,9 @@ defmodule PhpBeam.Classes.Table do
       file: ""
     }
   end
+
+  defp keep_obj({:object, _} = o), do: o
+  defp keep_obj(_), do: nil
 
   defp native_stdclass do
     %__MODULE__{

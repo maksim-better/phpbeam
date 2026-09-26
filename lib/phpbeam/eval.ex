@@ -516,7 +516,7 @@ defmodule PhpBeam.Eval do
 
   def eval({:class_const, cname_e, cname}, env, interp) do
     with {:ok, key} <- class_key_of(cname_e, env, interp) do
-      {_, interp1} = fetch_class(interp, key, class_display_via_resolve(cname_e, env, interp))
+      {_, interp1} = fetch_class(interp, key, resolve_class_display(cname_e, env, interp))
 
       if is_nil(PhpBeam.Classes.get_class(interp1, key)) do
         class_const_missing(interp1, key, cname, env)
@@ -1334,7 +1334,7 @@ defmodule PhpBeam.Eval do
 
   def eval({:new, cls, args}, env, interp) do
     with {:ok, key} <- class_key_of(cls, env, interp) do
-      {klass, interp1} = fetch_class(interp, key, class_display_via_resolve(cls, env, interp))
+      {klass, interp1} = fetch_class(interp, key, resolve_class_display(cls, env, interp))
 
       case klass do
         nil ->
@@ -1456,6 +1456,15 @@ defmodule PhpBeam.Eval do
         captures
       end
 
+    # closures execute in their DEFINING namespace (php binds it at compile
+    # time); without this the caller's leaked ns rewrites class-name lookups
+    captures =
+      if interp.ns != [] or interp.uses != %{normal: %{}, function: %{}, const: %{}} do
+        Map.put(captures, :__ns_ctx, {interp.ns, interp.uses})
+      else
+        captures
+      end
+
     # php names closures `{closure:file:line}` (definition site) in error
     # messages and stack traces — carry the site in the runtime value; a
     # body containing yield makes the closure a generator factory
@@ -1540,7 +1549,7 @@ defmodule PhpBeam.Eval do
           {:arg,
            {:lit_val,
             {:array,
-             PArray.from_pairs(Enum.map(elem(arg_values(args, env, interp), 0), &{nil, &1}))}},
+             PArray.from_pairs(Enum.map(arg_values(args, env, interp) |> elem(1), &{nil, &1}))}},
            false, nil}
         ]
 
@@ -1552,7 +1561,7 @@ defmodule PhpBeam.Eval do
     name = prop_name_string(name_e, env, interp)
 
     with {:ok, key} <- class_key_of(cname_e, env, interp) do
-      {klass, interp1} = fetch_class(interp, key, class_display_via_resolve(cname_e, env, interp))
+      {klass, interp1} = fetch_class(interp, key, resolve_class_display(cname_e, env, interp))
 
       case klass do
         nil ->
@@ -1610,7 +1619,7 @@ defmodule PhpBeam.Eval do
           {:arg,
            {:lit_val,
             {:array,
-             PArray.from_pairs(Enum.map(elem(arg_values(args, env, interp), 0), &{nil, &1}))}},
+             PArray.from_pairs(Enum.map(arg_values(args, env, interp) |> elem(1), &{nil, &1}))}},
            false, nil}
         ]
 
@@ -1629,12 +1638,17 @@ defmodule PhpBeam.Eval do
 
     if method.native do
       {:native, native} = method.native
-      {vals, interp} = arg_values(args, env, interp)
 
-      case native.(%{__ref__: 0, class: key, props: PArray.new()}, vals, interp) do
-        {:ok, {ret, _obj2}, interp2} -> {{:val, ret}, env, interp2}
-        {{:unwind, _} = u, _, interp2} -> {u, env, interp2}
-        other -> other
+      case arg_values(args, env, interp) do
+        {:unwind, _} = u ->
+          u
+
+        {:ok, vals, interp} ->
+          case native.(%{__ref__: 0, class: key, props: PArray.new()}, vals, interp) do
+            {:ok, {ret, _obj2}, interp2} -> {{:val, ret}, env, interp2}
+            {{:unwind, _} = u, _, interp2} -> {u, env, interp2}
+            other -> other
+          end
       end
     else
       mkey = key <> "::" <> String.downcase(method.name)
@@ -2095,6 +2109,40 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  # the CASED full name (autoloaders like composer receive cased names;
+  # their PSR-4 prefix tables are case-sensitive)
+  def resolve_class_display({:cname, fq, parts}, env, interp) do
+    first = hd(parts)
+    rest = tl(parts)
+
+    name =
+      cond do
+        fq == true ->
+          Enum.join(parts, "\\")
+
+        first == "self" and env != nil and env.scope_class ->
+          join_maybe(env.scope_class, rest)
+
+        first == "static" and env != nil ->
+          join_maybe(env.called_class || env.scope_class, rest)
+
+        first == "parent" and env != nil and env.scope_class ->
+          parent = parent_key(interp, env.scope_class)
+          if parent, do: join_maybe(parent, rest), else: Enum.join(parts, "\\")
+
+        alias_key = Map.get(interp.uses.normal, String.downcase(first)) ->
+          Enum.join([alias_key | rest], "\\")
+
+        interp.ns != [] ->
+          Enum.join(interp.ns ++ parts, "\\")
+
+        true ->
+          Enum.join(parts, "\\")
+      end
+
+    name
+  end
+
   def resolve_class_key({:cname, fq, parts}, env, interp) do
     first = hd(parts)
     rest = tl(parts)
@@ -2117,7 +2165,10 @@ defmodule PhpBeam.Eval do
         alias_key = Map.get(interp.uses.normal, String.downcase(first)) ->
           Enum.join([alias_key | rest], "\\")
 
-        interp.ns != [] and rest == [] ->
+        # relative names (single OR multi segment) resolve against the
+        # current namespace: Configuration\ApplicationBuilder inside
+        # namespace Illuminate\Foundation is Illuminate\Foundation\Configuration\...
+        interp.ns != [] ->
           Enum.join(interp.ns ++ parts, "\\")
 
         true ->

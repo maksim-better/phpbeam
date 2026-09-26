@@ -22,6 +22,18 @@ defmodule PhpBeam.Lexer do
 
   @spec tokenize(binary()) :: {:ok, [Token.t()]} | error()
   def tokenize(src) do
+    # CLI main scripts may carry a shebang — php skips it before the first
+    # `<?php` open tag; without this it leaks out as inline HTML output
+    src =
+      if String.starts_with?(src, "#!") do
+        case :binary.split(src, "\n") do
+          [_, rest] -> rest
+          _ -> src
+        end
+      else
+        src
+      end
+
     case html_mode(src, 1, []) do
       {:ok, acc, _rest, line} -> {:ok, Enum.reverse(acc) ++ [{:eof, line, :eof}]}
       {:error, _, _} = e -> e

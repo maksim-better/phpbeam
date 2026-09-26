@@ -151,7 +151,7 @@ defmodule PhpBeam.Eval.Call do
     fenv = %Env{
       function: "{closure}",
       statics_key: nil,
-      closure_captures: Map.delete(captures, :__obj_ctx),
+      closure_captures: Map.delete(captures, :__obj_ctx) |> Map.delete(:__ns_ctx),
       this: this,
       called_class: called_class,
       scope_class: scope_class
@@ -167,28 +167,42 @@ defmodule PhpBeam.Eval.Call do
             %{acc | vars: Map.put(acc.vars, n, v)}
           end)
 
+        # defining-site ns/uses ride the closure (see eval.ex creation)
+        {dns, duses} =
+          case Map.get(captures, :__ns_ctx) do
+            {ns, uses} -> {ns, uses}
+            nil -> {interp2.ns, interp2.uses}
+          end
+
         if gen? do
           {res, env2, interp3} =
             start_generator(fenv2, body, env, %{
               interp2
-              | file_stack: [def_file | interp2.file_stack]
+              | file_stack: [def_file | interp2.file_stack],
+                ns: dns,
+                uses: duses
             })
 
-          {res, env2, pop_file(interp3)}
+          {res, env2, pop_file(%{interp3 | ns: interp2.ns, uses: interp2.uses})}
         else
           interp2 = Interp.push_frame(interp2, cname, vals)
           # closure bodies evaluate __DIR__ against their defining file
-          interp2 = %{interp2 | file_stack: [def_file | interp2.file_stack]}
+          interp2 = %{interp2 | file_stack: [def_file | interp2.file_stack], ns: dns, uses: duses}
 
           case Interp.exec_stmts(body, fenv2, interp2) do
-            {:ok, e, i} ->
-              {{:val, :null}, e, Interp.pop_frame(pop_file_once(i))}
+            # return the CALLER's env (like named functions): the closure
+            # scope must not clobber the caller's locals — by-ref params and
+            # use-cells flow through interp.refs, not through env identity
+            {:ok, _e, i} ->
+              {{:val, :null}, env,
+               Interp.pop_frame(pop_file_once(%{i | ns: interp.ns, uses: interp.uses}))}
 
             {{:unwind, {:return, v}}, _, i} ->
-              {{:val, v}, env, Interp.pop_frame(pop_file_once(i))}
+              {{:val, v}, env,
+               Interp.pop_frame(pop_file_once(%{i | ns: interp.ns, uses: interp.uses}))}
 
-            {{:unwind, _} = u, _, _} ->
-              {u, env, interp2}
+            {{:unwind, _} = u, _, i} ->
+              {u, env, %{i | ns: interp.ns, uses: interp.uses}}
           end
         end
 
@@ -891,10 +905,26 @@ defmodule PhpBeam.Eval.Call do
 
   def wrap_args(vals), do: Enum.map(vals, &{:arg, {:lit_val, &1}, false, nil})
 
+  # evaluates raw args for native-method invocation; unwinds PROPAGATE
+  # (an undefined function inside the arg list is a fatal, not an empty list)
+  defp native_call(obj, obj_ref, native, vals, env, interp) do
+    case native.(obj, vals, interp) do
+      {:ok, {ret, obj2}, interp2} ->
+        interp3 = put_object(interp2, obj_ref, obj2)
+        {{:val, ret}, env, interp3}
+
+      {{:unwind, _} = u, _, interp2} ->
+        {u, env, interp2}
+
+      other ->
+        other
+    end
+  end
+
   def arg_values(args, env, interp) do
     case resolve_args(eval_args(args, env, interp, false)) do
-      {:ok, vals, it} -> {vals, it || interp}
-      {:unwind, _, _} -> {[], interp}
+      {:ok, vals, it} -> {:ok, vals, it || interp}
+      {:unwind, u, it} -> {:unwind, u, it || interp}
     end
   end
 
@@ -910,20 +940,12 @@ defmodule PhpBeam.Eval.Call do
     if method.native do
       {:native, native} = method.native
 
-      {vals, interp} = arg_values(args, env, interp)
+      case arg_values(args, env, interp) do
+        {:unwind, _} = u ->
+          u
 
-      case native.(obj, vals, interp) do
-        {:ok, {ret, obj2}, interp2} ->
-          interp3 = put_object(interp2, obj_ref, obj2)
-          {{:val, ret}, env, interp3}
-
-        # native throws (enum from()'s ValueError, generator rewind) carry no
-        # env — re-seat the caller's so catch machinery never sees nil
-        {{:unwind, _} = u, _, interp2} ->
-          {u, env, interp2}
-
-        other ->
-          other
+        {:ok, vals, interp} ->
+          native_call(obj, obj_ref, native, vals, env, interp)
       end
     else
       mkey = obj.class <> "::" <> String.downcase(method.name)
