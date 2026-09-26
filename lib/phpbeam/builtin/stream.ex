@@ -8,6 +8,9 @@ defmodule PhpBeam.Builtin.StreamFns do
   def register(fns) do
     entries = %{
       "fopen" => &fopen_v/2,
+      "stream_isatty" => &stream_isatty/2,
+      "stream_set_blocking" => &stream_nop/2,
+      "stream_set_write_buffer" => &stream_nop/2,
       "fclose" => &fclose_v/2,
       "fread" => &fread_v/2,
       "fwrite" => &fwrite_v/2,
@@ -145,10 +148,30 @@ defmodule PhpBeam.Builtin.StreamFns do
   @truncating ~w(w w+)
   @appending ~w(a a+)
 
+  # php: CLI std streams are TTYs when interactive; artisan only checks
+  defp stream_isatty(vals, i) do
+    case vals do
+      [{:resource, id} | _] when id in [0, 1, 2] -> {:ok, {:bool, false}, i}
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp stream_nop(_vals, i), do: {:ok, {:int, 0}, i}
+
   defp fopen_v(vals, i) do
     path = s(vals)
     mode = s(vals, 1)
 
+    # php:// std streams map onto the pre-seeded resource registry slots
+    case path do
+      "php://stdout" -> {:ok, {:resource, 1}, i}
+      "php://stdin" -> {:ok, {:resource, 0}, i}
+      "php://stderr" -> {:ok, {:resource, 2}, i}
+      _ -> fopen_file(path, mode, vals, i)
+    end
+  end
+
+  defp fopen_file(path, mode, vals, i) do
     case Map.fetch(@mode_opts, mode) do
       :error ->
         i2 = PhpBeam.Interp.warn(i, "fopen(#{path}): mode not supported")

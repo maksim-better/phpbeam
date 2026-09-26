@@ -89,8 +89,8 @@ defmodule PhpBeam.Classes.Table do
           )
 
         case apply_traits(class, uses, interp) do
-          {:ok, class2} ->
-            interp2 = %{interp | classes: Map.put(interp.classes, key, class2)}
+          {:ok, class2, it} ->
+            interp2 = %{it | classes: Map.put(it.classes, key, class2)}
             interp2 = warn_magic_methods(class2, interp2)
 
             case link_checks(class2, key, interp2) do
@@ -343,16 +343,16 @@ defmodule PhpBeam.Classes.Table do
 
   # each `use` statement contributes one {trait_names, adaptions} pair
   defp apply_traits(class, uses_list, interp) when is_list(uses_list) do
-    Enum.reduce(uses_list, {:ok, class}, fn
-      {traits, adaptions}, {:ok, acc} ->
-        apply_traits_pair(acc, traits, adaptions, interp)
+    Enum.reduce(uses_list, {:ok, class, interp}, fn
+      {traits, adaptions}, {:ok, acc, it} ->
+        apply_traits_pair(acc, traits, adaptions, it)
 
       _pair, error ->
         error
     end)
   end
 
-  defp apply_traits(class, nil, _interp), do: {:ok, class}
+  defp apply_traits(class, nil, interp), do: {:ok, class, interp}
 
   defp apply_traits_pair(class, trait_names, adaptions, interp) do
     trait_keys = Enum.map(trait_names, &resolve_decl_name(&1, interp))
@@ -387,7 +387,10 @@ defmodule PhpBeam.Classes.Table do
       {:error, "Trait \"#{bad}\" not found"}
     else
       merged = merge_trait_methods(class, trait_keys, adaptions, interp)
-      {:ok, %{class | methods: merged, traits: trait_keys}}
+      # thread the trait-loaded interp back: link_checks' signature
+      # compatibility resolves types against the DECLARING class (the trait)
+      # — those classes must be visible
+      {:ok, %{class | methods: merged, traits: trait_keys}, interp}
     end
   end
 
@@ -395,7 +398,10 @@ defmodule PhpBeam.Classes.Table do
     candidates =
       Enum.flat_map(trait_keys, fn tkey ->
         trait = Map.get(interp.classes, tkey)
-        Enum.map(trait.methods, fn {mname, m} -> {mname, m, tkey} end)
+        # keep the TRAIT as declaring class: php compiled the signature in
+        # the trait file's use-alias context (DateInterval resolves GLOBAL
+        # there even when the using class lacks the import)
+        Enum.map(trait.methods, fn {mname, m} -> {mname, %{m | class: tkey}, tkey} end)
       end)
 
     # insteadof: method from `from`-trait wins; excluded traits' versions drop
@@ -712,8 +718,14 @@ defmodule PhpBeam.Classes.Table do
                      " (as in class #{ancestor.name})" <>
                      if(pm.visibility == :public, do: "", else: " or weaker"), cm.line}
 
-                pm.name != "__construct" and
-                    not params_compat?(pm.params, cm.params, interp, class, ancestor) ->
+                pm.name != "__construct" and pm.native == nil and
+                    not params_compat?(
+                      pm.params,
+                      cm.params,
+                      interp,
+                      interp.classes[cm.class] || class,
+                      ancestor
+                    ) ->
                   {"Declaration of #{class.name}::#{cm.name}(#{param_sig(cm.params)})" <>
                      " must be compatible with #{ancestor.name}::#{pm.name}(#{param_sig(pm.params)})",
                    cm.line}
@@ -821,7 +833,9 @@ defmodule PhpBeam.Classes.Table do
       true ->
         Enum.zip(pp, cp)
         |> Enum.all?(fn {{:param, _, pt, _, pr, _}, {:param, _, ct, _, cr, _}} ->
+          r = pr == cr and type_eq?(pt, ct, interp, class, pclass)
           pr == cr and type_eq?(pt, ct, interp, class, pclass)
+          r
         end)
     end
   end
@@ -855,8 +869,9 @@ defmodule PhpBeam.Classes.Table do
       true ->
         # class types resolve against their DECLARING class's aliases/ns —
         # `SymfonyRequest` (child alias) meets the parent's `Request` alias
-        # as the same FQCN
-        resolve_type_fq(pt, interp, pclass) == resolve_type_fq(ct, interp, class)
+        # as the same FQCN. Unions compare as UNORDERED sets (php ignores
+        # member order: float|int|string == string|int|float)
+        types_equiv?(pt, ct, interp, pclass, class)
     end
   end
 
@@ -885,6 +900,13 @@ defmodule PhpBeam.Classes.Table do
   end
 
   defp resolve_type_fq(t, _interp, nil), do: String.downcase(t)
+
+  @builtin_type_names ~w(int float string bool array callable iterable object mixed null false true self static)
+
+  # builtin spellings are NOT class names — ns/alias resolution must not
+  # touch them (union members like string|float are not Carbon\string)
+  defp resolve_type_fq(t, _interp, _cls) when t in @builtin_type_names,
+    do: String.downcase(t)
 
   defp resolve_type_fq(t, _interp, cls) do
     {fq?, t2} =
@@ -917,6 +939,25 @@ defmodule PhpBeam.Classes.Table do
       {p, "?" <> p2} -> p == p2
       _ -> false
     end
+  end
+
+  # union/intersection types compare as unordered sets; each MEMBER resolves
+  # against its declaring class before comparison (a union is not a class
+  # name — ns-prefixing the whole string poisons the first member)
+  defp types_equiv?(a, b, interp, pclass, class) do
+    members =
+      fn t, cls ->
+        t
+        |> String.split("|")
+        |> Enum.map(&resolve_type_fq(String.trim(&1), interp, cls))
+        |> Enum.sort()
+      end
+
+    members.(a, pclass) == members.(b, class)
+  end
+
+  defp normalize_type_set(t) do
+    t |> String.split("|") |> Enum.map(&String.trim/1) |> Enum.sort()
   end
 
   defp loose_builtin("integer"), do: "int"
@@ -1185,7 +1226,8 @@ defmodule PhpBeam.Classes.Table do
           {"jsonserializable", "JsonSerializable"},
           {"iterator", "Iterator"},
           {"iteratoraggregate", "IteratorAggregate"},
-          {"traversable", "Traversable"}
+          {"traversable", "Traversable"},
+          {"datetimeinterface", "DateTimeInterface"}
         ],
         fn {key, name} -> {key, native_iface(name)} end
       )
@@ -1902,7 +1944,7 @@ defmodule PhpBeam.Classes.Table do
 
         env = %Env{function: "__construct", called_class: key, scope_class: key, this: oref}
 
-        {{:val, _}, _, i4} =
+        res =
           Eval.call_php_method(
             oref,
             m,
@@ -1911,7 +1953,13 @@ defmodule PhpBeam.Classes.Table do
             i3
           )
 
-        {:ok, {oref, obj}, %{i4 | ns: i.ns, uses: i.uses}}
+        case res do
+          {{:val, _}, _, i4} ->
+            {:ok, {oref, obj}, %{i4 | ns: i.ns, uses: i.uses}}
+
+          other ->
+            {:ok, {oref, obj}, i}
+        end
     end
   end
 

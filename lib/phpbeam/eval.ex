@@ -1728,7 +1728,7 @@ defmodule PhpBeam.Eval do
              "#{defc}::#{method.name}",
              {cfile, method.line || interp.cur_line}
            ) do
-        {:ok, binds, vals, srcs, interp2} ->
+        {:ok, binds, vals, srcs, interp2, _env_args} ->
           fenv2 =
             Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
               %{acc | vars: Map.put(acc.vars, n, v)}
@@ -2115,10 +2115,8 @@ defmodule PhpBeam.Eval do
                   {{:val, _}, _, it2} ->
                     it2
 
-                  {{:unwind, u2}, _, it2} ->
-                    if key =~ "console..kernel" do
-                      IO.puts(:stderr, "DBG-k-unwind: #{inspect(u2, printable_limit: 300)}")
-                    end
+                  {{:unwind, _}, _, it2} ->
+                    it2
 
                     it2
                 end

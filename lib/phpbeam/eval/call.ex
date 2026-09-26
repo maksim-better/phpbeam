@@ -99,7 +99,7 @@ defmodule PhpBeam.Eval.Call do
     fenv = Env.function_scope(name, name)
 
     case bind_params(params, args, fenv, env, interp, name, name, {def_file, def_line}) do
-      {:ok, binds, vals, _srcs, interp2} ->
+      {:ok, binds, vals, _srcs, interp2, _env_args} ->
         fenv2 =
           Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
             %{acc | vars: Map.put(acc.vars, n, v)}
@@ -161,7 +161,7 @@ defmodule PhpBeam.Eval.Call do
     cname = "{closure:#{def_file}:#{def_line}}"
 
     case bind_params(params, args, fenv, env, interp, cname, cname, {def_file, def_line}) do
-      {:ok, binds, vals, _srcs, interp2} ->
+      {:ok, binds, vals, _srcs, interp2, _env_args} ->
         fenv2 =
           Enum.reduce(binds, %{fenv | args: vals}, fn {n, v}, acc ->
             %{acc | vars: Map.put(acc.vars, n, v)}
@@ -337,7 +337,7 @@ defmodule PhpBeam.Eval.Call do
     fenv = Env.function_scope(name, name)
 
     case bind_params(params, args, fenv, env, interp, name, name, {def_file, def_line}) do
-      {:ok, binds, vals, srcs, interp2} ->
+      {:ok, binds, vals, srcs, interp2, env_args} ->
         interp2 = Interp.push_frame(interp2, name, vals)
 
         # write back by-ref arguments
@@ -358,7 +358,7 @@ defmodule PhpBeam.Eval.Call do
         {res, _, interp3} = Interp.exec_stmts(body, fenv2, interp2)
 
         {interp4, env_out} =
-          write_back_refs(params, srcs, env, fenv2, interp3)
+          write_back_refs(params, srcs, env_args, fenv2, interp3)
 
         interp5 = Interp.pop_frame(pop_file_once(interp4))
 
@@ -481,7 +481,9 @@ defmodule PhpBeam.Eval.Call do
 
             case do_bind_params(params, ordered, fenv, env2, interp2, []) do
               {:ok, binds, interp3} ->
-                {:ok, binds, display, srcs, interp3}
+                # env2 carries the arg-expression bindings ($i = X inside a
+                # call's argument list) — the caller must resume with it
+                {:ok, binds, display, srcs, interp3, env2}
 
               {:missing, interp3, miss_idx} ->
                 arg_count_error(
@@ -975,7 +977,7 @@ defmodule PhpBeam.Eval.Call do
              "#{defc}->#{method.name}",
              {cfile, method.line || interp.cur_line}
            ) do
-        {:ok, binds, vals, srcs, interp2} ->
+        {:ok, binds, vals, srcs, interp2, env_args} ->
           fenv2 =
             binds
             |> Enum.reduce(%{fenv | args: vals}, fn {n, v}, acc ->
@@ -997,7 +999,7 @@ defmodule PhpBeam.Eval.Call do
 
               {res, _, interp3} = Interp.exec_stmts(method.body, fenv2, interp2)
 
-              {interp4, env_out} = write_back_refs(method.params, srcs, env, fenv2, interp3)
+              {interp4, env_out} = write_back_refs(method.params, srcs, env_args, fenv2, interp3)
 
               interp5 = Interp.pop_frame(pop_file_once(interp4))
 

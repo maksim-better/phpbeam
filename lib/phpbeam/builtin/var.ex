@@ -35,6 +35,8 @@ defmodule PhpBeam.Builtin.VarFns do
       "get_object_vars" => &get_object_vars/2,
       "get_class_methods" => &get_class_methods/2,
       "spl_object_id" => &spl_object_id/2,
+      "get_resource_type" => &get_resource_type/2,
+      "gettype" => &gettype/2,
       "spl_object_hash" => &spl_object_hash/2
     }
 
@@ -275,6 +277,24 @@ defmodule PhpBeam.Builtin.VarFns do
         {:ok, {:string, String.duplicate("0", 32)}, i}
     end
   end
+
+  defp get_resource_type(vals, i) do
+    case vals do
+      [{:resource, id} | _] ->
+        r = Map.get(i.resources, id)
+        {:ok, {:string, resource_type_name(r)}, i}
+
+      _ ->
+        {:ok, {:string, "Unknown"}, i}
+    end
+  end
+
+  defp resource_type_name(%{std: :stdin}), do: "stream"
+  defp resource_type_name(%{std: :stdout}), do: "stream"
+  defp resource_type_name(%{std: :stderr}), do: "stream"
+  defp resource_type_name(%{device: _}), do: "stream"
+  defp resource_type_name(%{mysqli: _}), do: "mysql link"
+  defp resource_type_name(_), do: "Unknown"
 
   defp spl_object_id(vals, i) do
     case vals do
