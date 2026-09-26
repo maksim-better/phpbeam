@@ -401,7 +401,9 @@ defmodule PhpBeam.Eval do
             visible =
               if(vis == :private,
                 do: scope == class_key,
-                else: scope_in_chain?(interp, scope, class_key)
+                else:
+                  scope_in_chain?(interp, scope, class_key) or
+                    scope_in_chain?(interp, class_key, scope)
               )
 
             if visible,
@@ -432,11 +434,15 @@ defmodule PhpBeam.Eval do
         true ->
           # trait-flattened methods carry the trait's key as their class —
           # the USING class's chain also grants access
+          # zend_check_protected: access when declaring class and scope are
+          # related EITHER direction through inheritance (a parent scope may
+          # call a protected method its child declares)
           visible =
             if vis == :private,
               do: scope in [method.class, class_key],
               else:
                 scope_in_chain?(interp, scope, method.class || class_key) or
+                  scope_in_chain?(interp, method.class || class_key, scope) or
                   scope_in_chain?(interp, scope, class_key)
 
           if visible,
@@ -458,9 +464,15 @@ defmodule PhpBeam.Eval do
 
       visible? =
         cond do
-          scope == nil -> false
-          vis == :private -> scope == class_key
-          true -> scope_in_chain?(interp, scope, class_key)
+          scope == nil ->
+            false
+
+          vis == :private ->
+            scope == class_key
+
+          # zend protected: related either direction (see method_violation)
+          true ->
+            scope_in_chain?(interp, scope, class_key) or scope_in_chain?(interp, class_key, scope)
         end
 
       if visible?,
@@ -509,8 +521,19 @@ defmodule PhpBeam.Eval do
 
   def eval({:class_const, cname_e, "class"}, env, interp) do
     case class_key_of(cname_e, env, interp) do
-      {:ok, key} -> {{:val, {:string, display_class(interp, key)}}, env, interp}
-      {:error, msg} -> {{:unwind, {:fatal, msg}}, env, interp}
+      {:ok, key} ->
+        # compile-time spelling: for not-yet-loaded classes php preserves the
+        # SOURCE case (a downcased key would poison case-sensitive autoloaders)
+        name =
+          case PhpBeam.Classes.get_class(interp, key) do
+            %{name: n} -> n |> String.split("\0") |> List.first()
+            _ -> resolve_class_display(cname_e, env, interp)
+          end
+
+        {{:val, {:string, name}}, env, interp}
+
+      {:error, msg} ->
+        {{:unwind, {:fatal, msg}}, env, interp}
     end
   end
 
@@ -657,6 +680,22 @@ defmodule PhpBeam.Eval do
     end
   end
 
+  # php value tags are themselves 2-tuples ({:array, p}, {:string, s}) —
+  # they must NEVER be mistaken for binop result shapes and unwrapped
+  defguardp php_value_tag?(v)
+            when is_tuple(v) and
+                   elem(v, 0) in [
+                     :int,
+                     :float,
+                     :string,
+                     :bool,
+                     :array,
+                     :object,
+                     :ref,
+                     :closure,
+                     :resource
+                   ]
+
   def eval({:assign_op, op, target, rhs}, env, interp) do
     {cur0, get_env, interp2} = read_target(target, env, interp)
     cur = deref(cur0, interp2)
@@ -677,9 +716,10 @@ defmodule PhpBeam.Eval do
         {{:unwrap, _}, _, _} = {u, env2, interp3}
         {{:unwind, elem(u, 1)}, env2, interp3}
 
-      # some binop arms return the bare tagged value (or a 3-tuple with the
-      # threaded interp) — accept all three shapes
-      v when is_tuple(v) and tuple_size(v) in [2, 3] and elem(v, 0) != :ok ->
+      # binop result shapes: {v, env} | {v, env, interp} — only when NOT a
+      # tagged php value
+      v
+      when is_tuple(v) and not php_value_tag?(v) and tuple_size(v) in [2, 3] and elem(v, 0) != :ok ->
         val =
           case v do
             {_, val} -> val
@@ -699,11 +739,9 @@ defmodule PhpBeam.Eval do
         {env3, interp4} = assign(target, v, env2, interp3)
         {{:val, v}, env3, interp4}
 
-      # bare tagged value from the coalesce arm (??= with a non-null left
-      # side hands back closures/objects/arrays untouched)
-      v
-      when not is_tuple(v) or elem(v, 0) == :closure or elem(v, 0) == :object or
-             elem(v, 0) == :array ->
+      # bare tagged value (coalesce keeps the left side; ??= hands back
+      # arrays/objects/closures untouched) and scalars
+      v ->
         {env3, interp4} = assign(target, v, env2, interp3)
         {{:val, v}, env3, interp4}
     end
@@ -2066,8 +2104,11 @@ defmodule PhpBeam.Eval do
             case PhpBeam.Classes.get_class(it, key) do
               nil ->
                 case call_cb(deref(cb, it), [{:string, display_name}], nil_env(), it) do
-                  {{:val, _}, _, it2} -> it2
-                  {{:unwind, _}, _, it2} -> it2
+                  {{:val, _}, _, it2} ->
+                    it2
+
+                  {{:unwind, _}, _, it2} ->
+                    it2
                 end
 
               _ ->

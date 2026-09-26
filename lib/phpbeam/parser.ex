@@ -1531,6 +1531,25 @@ defmodule PhpBeam.Parser do
   defp assign(ts) do
     {l, rest} = ternary(ts)
 
+    # php grammar: assignment may appear as the RIGHT operand of a tighter
+    # operator — `false !== $p = f()` parses as `false !== ($p = f())`.
+    # Our chain parsed it as `(false !== $p) = f()`; rebalance when the
+    # binop's right side is itself an lvalue.
+    case {l, peek(rest)} do
+      {{:binop, op, a, lv}, {:op, _, "="}} ->
+        if lvalue_shape?(lv) do
+          {r, rest2} = assign(tl(rest))
+          {{:binop, op, a, {:assign, lv, r}}, rest2}
+        else
+          assign_plain(l, rest)
+        end
+
+      _ ->
+        assign_plain(l, rest)
+    end
+  end
+
+  defp assign_plain(l, rest) do
     case peek(rest) do
       {:op, _, "="} ->
         case tl(rest) do
@@ -1557,6 +1576,15 @@ defmodule PhpBeam.Parser do
   end
 
   @include_kws ~w(include include_once require require_once)
+
+  # shapes that can receive an assignment inside an expression
+  defp lvalue_shape?({:var, _}), do: true
+  defp lvalue_shape?({:var_var, _}), do: true
+  defp lvalue_shape?({:index, _, _}), do: true
+  defp lvalue_shape?({:prop, _, _}), do: true
+  defp lvalue_shape?({:static_prop, _, _}), do: true
+  defp lvalue_shape?({:list_pat, _}), do: true
+  defp lvalue_shape?(_), do: false
 
   # `include`/`require` sit below assignment (`$v = include ...` parses) and
   # consume a full ternary-level expression — the WordPress idiom

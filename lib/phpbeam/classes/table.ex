@@ -1325,16 +1325,23 @@ defmodule PhpBeam.Classes.Table do
             native_fn("__construct", fn obj, args, i ->
               case rc_resolve_key(obj, args, i) do
                 {:ok, key} ->
-                  case get_class(i, key) do
+                  # php's ReflectionClass autoloads before failing
+                  {klass, i2} =
+                    case get_class(i, key) do
+                      nil -> Eval.fetch_class(i, key, dt_s(Enum.at(args, 0, {:string, ""})))
+                      c -> {c, i}
+                    end
+
+                  case klass do
                     nil ->
                       rc_throw(
                         obj,
-                        i,
+                        i2,
                         "Class \"" <> dt_s(Enum.at(args, 0, :null)) <> "\" does not exist"
                       )
 
                     _ ->
-                      {:ok, {:null, rc_put(obj, "key", key)}, i}
+                      {:ok, {:null, rc_put(obj, "key", key)}, i2}
                   end
 
                 thrown ->

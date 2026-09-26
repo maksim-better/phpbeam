@@ -60,7 +60,10 @@ defmodule PhpBeam.Objects do
           |> Enum.reject(fn p ->
             p.static? or match?(%{readonly?: true}, p) or ro_class?
           end)
-          |> Enum.map(&{{:string, &1.display}, &1.default})
+          # prop names are case-insensitive in php: reads AND writes go
+          # through String.downcase, so seeds must too (cased seeds were
+          # invisible to method-scope reads — the ClassLoader prop mystery)
+          |> Enum.map(&{{:string, String.downcase(&1.display)}, &1.default})
 
         own ++ instance_defaults(interp, class.parent)
     end
