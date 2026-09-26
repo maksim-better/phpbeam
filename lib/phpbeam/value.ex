@@ -43,6 +43,8 @@ defmodule PhpBeam.Value do
   def type({:resource, _}), do: :resource
   def type({:array, _}), do: :array
   def type({:object, _}), do: :object
+  # runtime closures are Closure OBJECTS (php: gettype = "object")
+  def type({:closure, _, _, _, _, _, _, _}), do: :object
   def type(_other), do: :string
 
   def gettype(v) do

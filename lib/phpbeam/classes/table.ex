@@ -7,7 +7,7 @@ defmodule PhpBeam.Classes.Table do
   keep declaration order for construction and var_dump output.
   """
 
-  alias PhpBeam.{Eval, Interp, PArray}
+  alias PhpBeam.{Env, Eval, Interp, PArray}
 
   defstruct name: "",
             kind: :class,
@@ -1041,6 +1041,9 @@ defmodule PhpBeam.Classes.Table do
       "closure" => native_closure_class(),
       "reflectionclass" => native_reflection_class(),
       "reflectionmethod" => native_reflection_method_class(),
+      "reflectionparameter" => native_reflection_parameter_class(),
+      "reflectionnamedtype" => native_reflection_named_type_class(),
+      "reflectionattribute" => native_reflection_attribute_class(),
       "reflectionexception" => native_class("ReflectionException", "runtimeexception", []),
       "datetime" => native_datetime_class(),
       "datetimezone" => native_datetimezone_class(),
@@ -1095,7 +1098,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimezone reflectionclass reflectionmethod) do
+      if key in ~w(throwable stdclass closure datetime datetimezone reflectionclass reflectionmethod reflectionparameter reflectionnamedtype) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
@@ -1298,7 +1301,10 @@ defmodule PhpBeam.Classes.Table do
   defp rc_put(obj, k, v), do: dt_put(obj, k, v)
 
   # php class-name resolution for the ctor argument (string or object)
-  defp rc_resolve_key(_obj, [{:string, name} | _], i), do: {:ok, full_key(name, i)}
+  # php resolves DYNAMIC string class names verbatim — no namespace
+  # prefixing (that is compile-time behavior for literal names only);
+  # ReflectionClass('A\\B\\C') inside namespace Ns looks up A\\B\\C
+  defp rc_resolve_key(_obj, [{:string, name} | _], _i), do: {:ok, String.downcase(name)}
 
   defp rc_resolve_key(_obj, [{:object, _} = oref | _], i),
     do: {:ok, Eval.get_object(i, oref).class}
@@ -1377,6 +1383,91 @@ defmodule PhpBeam.Classes.Table do
               name = args |> Enum.at(0, {:string, ""}) |> dt_s()
               {:ok, {{:bool, find_method(i, key, name) != nil}, obj}, i}
             end),
+            native_fn("getAttributes", fn obj, _args, i ->
+              {:ok, {{:array, PArray.new()}, obj}, i}
+            end),
+            native_fn("isInstantiable", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              c = get_class(i, key)
+              inst = c != nil and c.kind == :class and not c.abstract?
+
+              inst =
+                inst and
+                  case find_method(i, key, "__construct") do
+                    nil -> true
+                    m -> m.visibility == :public
+                  end
+
+              {:ok, {{:bool, inst}, obj}, i}
+            end),
+            native_fn("getConstructor", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("key")
+
+              case find_method(i, key, "__construct") do
+                nil ->
+                  {:ok, {:null, obj}, i}
+
+                m ->
+                  {oref, i2} = rc_make_method(i, key, m)
+                  {:ok, {oref, obj}, i2}
+              end
+            end),
+            native_fn("newInstance", fn obj, args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              {{:object, _} = oref, i2} = Eval.make_instance(i, key)
+
+              case find_method(i2, key, "__construct") do
+                nil ->
+                  {:ok, {oref, obj}, i2}
+
+                m ->
+                  {{:val, _}, _, i3} =
+                    Eval.call_php_method(
+                      oref,
+                      m,
+                      Enum.map(args, &{:arg, {:lit_val, &1}, false, nil}),
+                      %Env{},
+                      i2
+                    )
+
+                  {:ok, {oref, obj}, i3}
+              end
+            end),
+            native_fn("newInstanceArgs", fn obj, args, i ->
+              key = rc_state(obj) |> Map.get("key")
+              vals = args |> Enum.at(0, {:array, PArray.new()}) |> PArray.values()
+              {{:object, _} = oref, i2} = Eval.make_instance(i, key)
+
+              case find_method(i2, key, "__construct") do
+                nil ->
+                  {:ok, {oref, obj}, i2}
+
+                m ->
+                  {{:val, _}, _, i3} =
+                    Eval.call_php_method(
+                      oref,
+                      m,
+                      Enum.map(vals, &{:arg, {:lit_val, &1}, false, nil}),
+                      %Env{},
+                      i2
+                    )
+
+                  {:ok, {oref, obj}, i3}
+              end
+            end),
+            native_fn("getMethods", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("key")
+
+              {arr, i2} =
+                class_meta(i, key).methods
+                |> Enum.reduce({PArray.new(), i}, fn {_k, mm}, {acc, it} ->
+                  {oref, it2} = rc_make_method(it, key, find_method(it, key, mm.name))
+                  a2 = PArray.push(acc, oref)
+                  {a2, it2}
+                end)
+
+              {:ok, {{:array, arr}, obj}, i2}
+            end),
             native_fn("getMethod", fn obj, args, i ->
               key = rc_state(obj) |> Map.get("key")
               name = args |> Enum.at(0, {:string, ""}) |> dt_s()
@@ -1412,6 +1503,17 @@ defmodule PhpBeam.Classes.Table do
     }
   end
 
+  # build a ReflectionMethod instance bound to (ckey, method-map)
+  defp rc_make_method(i, ckey, m) do
+    {{:object, mid}, i2} = Eval.make_instance(i, "reflectionmethod")
+    mob = Eval.get_object(i2, {:object, mid})
+
+    i3 =
+      Eval.put_object(i2, {:object, mid}, mob |> rc_put("ckey", ckey) |> rc_put("mname", m.name))
+
+    {{:object, mid}, i3}
+  end
+
   defp native_reflection_method_class do
     %__MODULE__{
       name: "ReflectionMethod",
@@ -1437,6 +1539,58 @@ defmodule PhpBeam.Classes.Table do
               m = find_method(i, key, name)
               {:ok, {{:bool, m != nil and m.visibility == :public}, obj}, i}
             end),
+            native_fn("getAttributes", fn obj, _args, i ->
+              {:ok, {{:array, PArray.new()}, obj}, i}
+            end),
+            native_fn("getParameters", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              name = rc_state(obj) |> Map.get("mname")
+              m = find_method(i, key, name)
+
+              {arr, i2} =
+                (m.params || [])
+                |> Enum.with_index()
+                |> Enum.reduce({PArray.new(), i}, fn {p, idx}, {acc, it} ->
+                  {oref, it2} = rc_make_parameter(it, key, name, p, idx)
+                  a2 = PArray.push(acc, oref)
+                  {a2, it2}
+                end)
+
+              {:ok, {{:array, arr}, obj}, i2}
+            end),
+            native_fn("isAbstract", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              name = rc_state(obj) |> Map.get("mname")
+              m = find_method(i, key, name)
+              {:ok, {{:bool, m && m.abstract?}, obj}, i}
+            end),
+            native_fn("isFinal", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              name = rc_state(obj) |> Map.get("mname")
+              m = find_method(i, key, name)
+              {:ok, {{:bool, m && m.final?}, obj}, i}
+            end),
+            native_fn("getDeclaringClass", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              {:ok, {{:string, (get_class(i, key) || %{name: key}).name}, obj}, i}
+            end),
+            native_fn("invoke", fn obj, args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              name = rc_state(obj) |> Map.get("mname")
+              m = find_method(i, key, name)
+              [target | rest] = args
+
+              {{:val, _} = r, _, i2} =
+                Eval.call_php_method(
+                  target,
+                  m,
+                  Enum.map(rest, &{:arg, {:lit_val, &1}, false, nil}),
+                  %Env{},
+                  i
+                )
+
+              {:ok, {elem(r, 1), obj}, i2}
+            end),
             native_fn("isStatic", fn obj, _args, i ->
               key = rc_state(obj) |> Map.get("ckey")
               name = rc_state(obj) |> Map.get("mname")
@@ -1446,6 +1600,184 @@ defmodule PhpBeam.Classes.Table do
           ],
           fn m -> {String.downcase(m.name), m} end
         ),
+      file: ""
+    }
+  end
+
+  # build a ReflectionParameter instance for (ckey, mname, param, idx)
+  defp rc_make_parameter(i, ckey, mname, {:param, pname, ptype, pdefault, _br, _var}, idx) do
+    {{:object, pid}, i2} = Eval.make_instance(i, "reflectionparameter")
+    pob = Eval.get_object(i2, {:object, pid})
+
+    st =
+      pob
+      |> rc_put("pname", pname)
+      |> rc_put("ptype", ptype)
+      |> rc_put("pdefault", pdefault)
+      |> rc_put("pidx", {:int, idx})
+      |> rc_put("ckey", ckey)
+      |> rc_put("mname", mname)
+      |> rc_put("pvariadic", {:bool, _var})
+
+    {{:object, pid}, Eval.put_object(i2, {:object, pid}, st)}
+  end
+
+  defp native_reflection_parameter_class do
+    %__MODULE__{
+      name: "ReflectionParameter",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods:
+        Map.new(
+          [
+            native_fn("getName", fn obj, _args, i ->
+              {:ok, {{:string, rc_state(obj) |> Map.get("pname")}, obj}, i}
+            end),
+            native_fn("getAttributes", fn obj, _args, i ->
+              {:ok, {{:array, PArray.new()}, obj}, i}
+            end),
+            native_fn("isVariadic", fn obj, _args, i ->
+              {:ok,
+               {{:bool,
+                 rc_state(obj) |> Map.get("pvariadic", {:bool, false}) == {:bool, true} or
+                   rc_state(obj) |> Map.get("pvariadic") == true}, obj}, i}
+            end),
+            native_fn("isArray", fn obj, _args, i ->
+              t = rc_state(obj) |> Map.get("ptype")
+              {:ok, {{:bool, is_binary(t) and t == "array"}, obj}, i}
+            end),
+            native_fn("isPassedByReference", fn obj, _args, i ->
+              {:ok, {{:bool, false}, obj}, i}
+            end),
+            native_fn("getType", fn obj, _args, i ->
+              ptype = rc_state(obj) |> Map.get("ptype")
+
+              if ptype == nil or ptype == "" do
+                {:ok, {:null, obj}, i}
+              else
+                # php bakes alias resolution into compiled types: getName()
+                # returns the DECLARING class's resolved FQCN
+                {bare, nullable?} =
+                  if String.starts_with?(ptype, "?"),
+                    do: {String.trim_leading(ptype, "?"), true},
+                    else: {ptype, false}
+
+                builtin? =
+                  bare in ~w(int float string bool array callable iterable object mixed null false true self static)
+
+                ckey = rc_state(obj) |> Map.get("ckey")
+
+                resolved =
+                  if builtin?,
+                    do: bare,
+                    else: resolve_type_fq(bare, i, get_class(i, ckey))
+
+                {{:object, tid}, i2} = Eval.make_instance(i, "reflectionnamedtype")
+                tob = Eval.get_object(i2, {:object, tid})
+
+                st =
+                  tob
+                  |> rc_put("tname", if(nullable?, do: "?" <> resolved, else: resolved))
+                  |> rc_put("tbuiltin", {:bool, builtin?})
+
+                {:ok, {{:object, tid}, obj}, Eval.put_object(i2, {:object, tid}, st)}
+              end
+            end),
+            native_fn("isOptional", fn obj, _args, i ->
+              d = rc_state(obj) |> Map.get("pdefault")
+              {:ok, {{:bool, d != nil}, obj}, i}
+            end),
+            native_fn("isDefaultValueAvailable", fn obj, _args, i ->
+              d = rc_state(obj) |> Map.get("pdefault")
+              {:ok, {{:bool, d != nil}, obj}, i}
+            end),
+            native_fn("getDefaultValue", fn obj, _args, i ->
+              d = rc_state(obj) |> Map.get("pdefault")
+
+              v =
+                if is_tuple(d) or is_atom(d),
+                  do: Eval.const_eval_quiet(d, nil, i),
+                  else: :null
+
+              {:ok, {v, obj}, i}
+            end),
+            native_fn("getPosition", fn obj, _args, i ->
+              {:ok, {rc_state(obj) |> Map.get("pidx"), obj}, i}
+            end),
+            native_fn("getDeclaringClass", fn obj, _args, i ->
+              key = rc_state(obj) |> Map.get("ckey")
+              {:ok, {{:string, (get_class(i, key) || %{name: key}).name}, obj}, i}
+            end),
+            native_fn("hasType", fn obj, _args, i ->
+              ptype = rc_state(obj) |> Map.get("ptype")
+              {:ok, {{:bool, ptype != nil and ptype != ""}, obj}, i}
+            end)
+          ],
+          fn m -> {String.downcase(m.name), m} end
+        ),
+      file: ""
+    }
+  end
+
+  defp native_reflection_named_type_class do
+    %__MODULE__{
+      name: "ReflectionNamedType",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods:
+        Map.new(
+          [
+            native_fn("getName", fn obj, _args, i ->
+              t = rc_state(obj) |> Map.get("tname")
+
+              name =
+                case t do
+                  "?" <> inner -> inner
+                  other -> other
+                end
+
+              {:ok, {{:string, name}, obj}, i}
+            end),
+            native_fn("__tostring", fn obj, _args, i ->
+              t = rc_state(obj) |> Map.get("tname")
+              {:ok, {{:string, t || ""}, obj}, i}
+            end),
+            native_fn("isBuiltin", fn obj, _args, i ->
+              {:ok, {rc_state(obj) |> Map.get("tbuiltin", {:bool, false}), obj}, i}
+            end),
+            native_fn("allowsNull", fn obj, _args, i ->
+              t = rc_state(obj) |> Map.get("tname")
+
+              {:ok, {:bool, (is_binary(t) and String.starts_with?(t, "?")) or t == "mixed"}, obj,
+               i}
+            end)
+          ],
+          fn m -> {String.downcase(m.name), m} end
+        ),
+      file: ""
+    }
+  end
+
+  defp native_reflection_attribute_class do
+    %__MODULE__{
+      name: "ReflectionAttribute",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{
+        "IS_FINAL" => {:int, 1},
+        "IS_ISOLATED" => {:int, 2},
+        "IS_INSTANCEOF" => {:int, 2},
+        "IS_REPEATABLE" => {:int, 4}
+      },
+      props: [],
+      methods: %{},
       file: ""
     }
   end
