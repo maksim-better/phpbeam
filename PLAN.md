@@ -71,11 +71,13 @@ L1 声称"命名参数已可用"经差分证伪（实为按位置绑定）；随
 - [ ] 按主题族推进（不按用例数）：可见性/继承错误路径、autoload、array_access（Laravel collections 底座）、destructor 次序、常量可见性
 - [ ] 长尾（~150–200 例）**保留失败**：由基线失败集护栏看管回归，不为凑数实现 bug26869 类边缘语义；个别架构不适用例（OOM/内存限制类）登记豁免理由
 
-## L2：Composer vendor 实战（1 会话）
+## L2：Composer vendor 实战（**进行中，2026-09-26 两轮**）
 
 - [ ] `composer create-project laravel/laravel` 真树可被我们的 autoload 加载（psr-4/classmap/files 三通道）
 - [ ] `phpx artisan --version` 出版本号；差分对齐
-- [ ] 暴露并修复 vendor 加载沿途的崩溃/缺口清单
+- [x] **已完成实质**：composer autoload 全链通（闭包 ns/环境、签名兼容别名解析、Closure::bind 真绑定、use function、相对命名空间、cased display、表达式内赋值、??= 保形、protected 双向、属性种子小写、动态字符串类名逐字解析）；**bootstrap/app.php 完整工作**（探针：返回的 app 实例携带核心绑定，契约 has()=true）；**DI 反射循环跑通**（ReflectionClass/Method/Parameter/NamedType/Attribute 全家，类型名烘焙别名解析）
+- [ ] 前线（artisan --version 最后一关）：bootstrap 返回的 app 绑定齐全，但 handleCommand→make(Kernel)→build 时**契约绑定查找失败**走 build 兜底（"Target [contracts\\foundation\\application] is not instantiable"）——疑点：流程中 make 用的 app 实例与 bootstrap 返回的不是同一个（实例同一性/instances 表在链条中丢失），下轮在 Container::resolveDependencies 前后 dump app 对象 id 比对
+- [ ] 沿带小缺口：gettype 已修 closure→object；$argv CLI 播种缺失（ArgvInput 用 $_SERVER['argv'] 兜底正常）
 
 ## L3：Reflection API（2–3 会话，最大单项）
 
