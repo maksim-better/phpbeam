@@ -76,7 +76,8 @@ L1 声称"命名参数已可用"经差分证伪（实为按位置绑定）；随
 - [ ] `composer create-project laravel/laravel` 真树可被我们的 autoload 加载（psr-4/classmap/files 三通道）
 - [ ] `phpx artisan --version` 出版本号；差分对齐
 - [x] **已完成实质**：composer autoload 全链通（闭包 ns/环境、签名兼容别名解析、Closure::bind 真绑定、use function、相对命名空间、cased display、表达式内赋值、??= 保形、protected 双向、属性种子小写、动态字符串类名逐字解析）；**bootstrap/app.php 完整工作**（探针：返回的 app 实例携带核心绑定，契约 has()=true）；**DI 反射循环跑通**（ReflectionClass/Method/Parameter/NamedType/Attribute 全家，类型名烘焙别名解析）
-- [ ] 前线（artisan --version 最后一关）：bootstrap 返回的 app 绑定齐全，但 handleCommand→make(Kernel)→build 时**契约绑定查找失败**走 build 兜底（"Target [contracts\\foundation\\application] is not instantiable"）——疑点：流程中 make 用的 app 实例与 bootstrap 返回的不是同一个（实例同一性/instances 表在链条中丢失），下轮在 Container::resolveDependencies 前后 dump app 对象 id 比对
+- [x] **2026-09-26 第四轮**：DI 死循环歼灭（instanceof Closure 认运行时闭包）+ 8 项连锁修复（e2fbd6d/ac339d5）→ **Carbon\\Carbon 可注册**（trait 声明类归属 + apply_traits 线程化 interp + 联合类型按成员解析/无序集合比较 + builtin 成员绕过 ns 解析 + native 父类跳过兼容检查）
+- [ ] 前线（下一入口）：artisan 到 Carbon 后在 Date::__get→get→$this->week() 处 13GB 内存循环——week() 等 Week-trait 方法没到达 Carbon 类（嵌套 trait use 展平在真实链路失效，最小复现通过）；另有 class_exists 触发的 autoload 把类注册进被丢弃 interp 的 bug（var_dump 包装时 bool(true) 但最终 interp 无此类）——两处均指向 trait 展平/interp 线程化的残余路径
 - [ ] 沿带小缺口：gettype 已修 closure→object；$argv CLI 播种缺失（ArgvInput 用 $_SERVER['argv'] 兜底正常）
 
 ## L3：Reflection API（2–3 会话，最大单项）
