@@ -451,7 +451,14 @@ defmodule PhpBeam.Interp do
     end
   end
 
-  defp arg_display(v, _), do: inspect(v)
+  # runtime closures (php traces render them as Closure objects); NEVER
+  # inspect — captures carry :__ns_ctx with the defining file's full use
+  # table, and push_frame renders args on EVERY call
+  defp arg_display({:closure, _, _, _, _, _, _, _}, _), do: "Object(Closure)"
+
+  defp arg_display(v, _) do
+    inspect(v, printable_limit: 120)
+  end
 
   def pop_frame(%{call_stack: [_ | rest]} = interp), do: %{interp | call_stack: rest}
 

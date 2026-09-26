@@ -310,7 +310,10 @@ defmodule PhpBeam.Classes.Table do
     end
   end
 
-  defp display_decl(other, _interp), do: inspect(other)
+  # non-name decl shapes (dynamic expressions): NEVER inspect unbounded —
+  # autoload dispatch renders this per class-load and a giant AST here
+  # pins the CPU in Inspect.Algebra for minutes
+  defp display_decl(other, _interp), do: inspect(other, printable_limit: 120)
 
   @doc "Public namespaced-key lookup for dynamically declared classes (anonymous classes)"
   def full_key_of(name, interp), do: full_key(name, interp)
