@@ -1,182 +1,140 @@
-# phpbeam — 待办计划（2026-09-26 主体切换：完整 phpruntime = 能力矩阵全覆盖）
+# phpbeam — 待办计划（2026-09-26 二次重排：完整 phpruntime on BEAM）
 
-**验收定义（用户 2026-09-26 拍板）**：以能力矩阵全覆盖为准——从本机 php 8.4 实测导出的函数/类/扩展/SAPI/INI 清单逐子系统补齐；Laravel/WP 降为**验证目标与排序权重**，不再是驱动方式。差集清单在 `docs/matrix/`（matrix_gaps.txt 函数面、class_gaps.txt 类面，2026-09-26 实测）。
+**验收定义（用户 2026-09-26 拍板，取代当日早间 3d7d1a8 的应用兼容路线）**：完整 phpruntime——
+任意 PHP 8.4 程序在 BEAM 上语义等价运行。三条终态判据：
 
-**矩阵总账**（目标扩展集 = Laravel+WP 加权的 13 模块）：
+1. **语义完备**：php-src 官方 phpt 套件全套件 pass 或显式豁免（`docs/matrix/exempt.md` 逐条登记）——失败集不再「保留」，逐例消灭或登记；harness 从当前 6 目录 697 例分批扩到全套件（扩目录纪律见下）
+2. **扩展完备**：本机 php 8.4 实测 67 扩展 = **51 个全量实现**（函数/类/常量注册面 + 差分探针）+ 3 个后置全量（intl/gd/sodium）+ 16 个豁免登记 + FFI 形态重映射（NIF 桥）。分层清单固化在 `docs/matrix/ext_inventory.txt`
+3. **运行时完备**：CLI + HTTP SAPI + INI 解析层（「php.ini 改变行为」有效集，非 677 全量）+ 流子系统（13 包装器）+ 错误协议（error_reporting 分级/handler/@ 抑制/shutdown/assert）+ 进程执行（exec 族/proc_open）+ pcntl→BEAM 进程映射
 
-| 模块 | php 函数 | 已有 | 缺 | 类缺口 | 模块性质 |
-|---|---|---|---|---|---|
-| standard | 542 | 276 | **266** | — | 数组~40/字符串~50/流~30/网络/杂 |
-| date | 48 | 8 | **40** | 14（DatePeriod/Interval/Immutable…） | **Carbon 硬依赖**（当前 artisan 卡点即此） |
-| mbstring | 65 | 8 | **57** | — | 纯函数，机械 |
-| ctype | 11 | 0 | **11** | — | 纯函数，一屏 |
-| iconv | 10 | 0 | **10** | — | 纯函数 |
-| filter | 7 | 0 | **7** | — | Laravel 请求面 |
-| json | 5 | 4 | 1 | — | |
-| hash | 20 | 5 | **15** | — | composer/加密 |
-| session | 23 | 0 | **23** | — | Laravel 会话 |
-| spl | 15 | 5 | 10 | **16 类**（ArrayObject/Iterator/FileInfo…） | collections 底座 |
-| pcre | 11 | 9 | 2 | — | |
-| tokenizer | 2 | 0 | 2 | — | Blade |
-| Core | 59 | 29 | **30** | — | 杂（sleep/putenv/getopt…） |
+## 与 3d7d1a8 的差异（显式修正）
 
-合计：函数缺 ~470、类缺 48。**SAPI/INI 缺口**：$_FILES、chunked、keep-alive、auto_prepend_file、max_execution_time 真实现（子项待补进矩阵）。
-
-**执行纪律**：按矩阵条目逐子系统推进（纯函数模块全量实现 → 探针差分 → 过门禁）；引擎 bug（trait 展平/interp 线程化残余）在验证目标踩到时修但**时间盒 2 小时**，超出登记 `docs/matrix/deferred.md` 顺延。artisan 链条每完成一个模块跑一次看推进。
-
-**模块顺序**（Laravel+WP 权重 × 机械度）：M1 date（Carbon 卡点）→ M2 mbstring+ctype+iconv（纯函数 78 个）→ M3 standard-数组族 → M4 hash+filter → M5 SPL 类族 → M6 session → M7 standard-字符串/流残余 → M8 Core 杂项 → M9 SAPI/INI 子项。每个模块一个或多个 commit，函数签名从 php-src `ext/*/` 对照实现。
-
-**北极星：浏览器访问 phpbeam 服务端口，完整运行一个 Laravel 编写的项目**——页面渲染、静态资源、表单提交（session/cookie）、数据库读写全部真实工作。
-
-验收方式：同一 Laravel 项目分别在 `php -S` 与 phpbeam-Plug 下起服务，curl 对比响应（body 逐字节；Set-Cookie/header 顺序做规范化后比对）；最终以浏览器人工走通交互路径收口。
-
-进度自评：语言核心已完成约 70%（类系统/生成器/autoload/命名空间作用域/异常/闭包绑定/引用语义等全部迁移复用）；实测缺口见下表。
-
-## 已实测缺口（**2026-09-26 复测**，重构+L1.5 后逐项探针；2026-09-25 首测见 git 历史）
-
-语法项 L1/L1.5 已全部关闭。运行时复测结论（phpx 实测）：
-
-| 域 | 状态 | 实测细节 |
+| 项 | 3d7d1a8（应用兼容路线） | 本次（运行时路线） |
 |---|---|---|
-| **autoload 链路** | ✅ **实测可用** | spl_autoload_register + 回调内 eval 建类 + 常量解析全通——L2 的引擎依赖已就位 |
-| Reflection | 🟡 仅薄切片 | ReflectionClass：getName/isAbstract/isInterface/isEnum/hasMethod/getMethod ✓；getMethods/getConstructor/newInstance ✗；ReflectionFunction/Parameter/NamedType 类不存在；attributes 语法解析 ✓ 但 getAttributes ✗（L3 主体工作，地基 Table meta API 已落） |
-| DateTime/Carbon | 🔴 **缺口比记载严重** | `new DateTime("2026-01-02 03:04:05")->format(...)` 返回 **1970-01-01 00:33:46——静默错值**（ISO 串解析缺失，比 Fatal 危险：Laravel 会算出错误时间不报错）；modify/diff/DateTimeImmutable/DatePeriod/strtotime 全缺（strtotime 是 bool(false) 缺失） |
-| PDO | 🔴 全缺（预期 L5） | class_exists("PDO")=false |
-| mbstring/ctype/iconv/tokenizer | 🟡 部分 | mb_strlen ✓；mb_convert_encoding/mb_str_split/ctype_digit/iconv/token_get_all ✗——真实需求面待 L2 vendor 加载沿途暴露 |
-| session | 🔴 缺（预期） | session_start 不存在；headers_sent/headers_list ✓（L0 已做） |
+| 目标集 | Laravel+WP 加权 13 模块 | 67 扩展分层全量（ext_inventory.txt） |
+| 北极星 | 浏览器完整运行 Laravel | 任意 PHP 程序语义等价运行 |
+| phpt | 368 失败基线「保留」 | 全清或逐条豁免，分批扩全套件 |
+| runtime 基础设施 | SAPI/INI「子项待补」顺延 | 独立 PHASE A 先行（错误协议/INI/流是差分正确性地基） |
+| 编译后端 | 「远期」 | PHASE F 正式排期，S/E 冻结点后启动 |
+| Laravel/WP/Composer | 北极星+排序权重 | 回归验证资产（每 PHASE 收尾冒烟，不再驱动排序） |
 
-**执行就绪度结论（2026-09-26）**：可以执行。L2（Composer vendor）引擎依赖实测就绪、随时可开工；L3 前置已落；L4 需把「DateTime 构造 ISO 串静默错值」升为该里程碑首修项（错值比缺功能危险）。
+## 矩阵总账（全部 2026-09-26 本机实测）
 
-## L0：HTTP SAPI（**已完成**，`283950f`）
+- 函数面：67 扩展 ~2400+ 函数；已实现 ~450。分层：T1 纯逻辑 18 扩展 / T2 BEAM 原生等价 13 / T3 外部客户端 7 / T4 后置全量 3 / T5 豁免 16 / 特殊形态 2（FFI、OPcache）——明细 `docs/matrix/ext_inventory.txt`
+- 13 流包装器：file（部分）php（部分）http/https/ftp/ftps/data/glob/compress.zlib/compress.bzip2(随 bz2 豁免)/phar/zip
+- INI 677 项（`php -i` 实测）→ 有效集分层：core 行为项（error_reporting/include_path/auto_prepend_file/max_execution_time…）+ 随扩展项 + 只读桩
+- phpt：当前 harness 6 目录 697 例，285 过 / 368 败（基线 `tmp/baseline_phpt_failures.txt`）
 
-- [x] `phpx serve <docroot> --port=N`：gen_tcp 零依赖 HTTP 服务（hex 被 TLS 挡，Plug 顺延——解释器只见请求种子+SAPI 响应区，后续可整体换 Plug 不动引擎）；每连接一 BEAM 进程跑 interp。
-- [x] 请求种子：`$_SERVER`（REQUEST_METHOD/URI/QUERY_STRING/HTTP_*/SCRIPT_NAME/DOCUMENT_ROOT…）、`$_GET/$_POST`（urlencoded）/`$_COOKIE/$_REQUEST`；目录→index.php；静态文件带 mime 直出；**未匹配路径回退 docroot 前端控制器**（php -S 实测行为，Laravel public/index.php 路由依赖）。
-- [x] Interp sapi 响应区：`header()/setcookie()/http_response_code()/header_remove()/headers_list()` HTTP 下真实现（CLI 保留旧警告语义）；HTTP 模式 body 全缓冲（= php -S output_buffering，echo 后仍可 setcookie）；响应形态对齐（脚本头在前、默认 Content-type 小写 t 追加、Set-Cookie 无默认 path）。
-- [x] 验收：`test/phpbeam/http_test.exs` 双服务器（phpx serve + php -S）6 例 curl 差分（根 GET 带参/POST 表单/静态/目录索引/重定向/前端控制器回退）全部一致（归一化 Host/Date/Connection/CL/X-Powered-By）。
-- 后续待补（低优先）：`$_FILES` 物化、chunked body、keep-alive、HTTP/1.0
+## 阶段计划（拒绝大爆炸：每模块单独 commit + 过 `scripts/gate.sh` 门禁）
 
-## L1：语法冲刺（**已完成**，`c602d64`）
+### PHASE A：runtime 地基（先行——错误协议/INI/流影响后续一半差分的正确性）
 
-- [x] 构造器属性提升（可见性+readonly 前缀解析；类构建时糖解构为声明属性 + 前置 `$this->x = $x;` 赋值；byte-diff 一致）
-- [x] **枚举**（php 8.1）：case/backed `enum S: string { case A = "a"; }`；case 单例在声明时物化（name/value 属性）；`Suit::Hearts` 经类常量通道解析；`::cases()/from()/tryFrom()` 闭包携带枚举 key；var_dump 渲染 `enum(Cls::Case)`
-- [x] readonly：`readonly class`/`final readonly class` 解析；写已初始化 readonly 属性抛可捕获 Error（物化 + php 措辞）
-- [x] 数组字面量展开 `[...$a, 'k' => v]`（字符串键保留、int 键顺序重编）；`PArray.from_pairs` 接受裸键
-- [x] 一等可调用 `strlen(...)`/`$obj->m(...)`/`Cls::m(...)`（裸名 FCC 产字符串可调用不做常量求值；`usort($a, strcmp(...))` 可用）
-- [x] **重大修复**：`strict_eq` 对对象句柄（整数 id）——**自 M1 起 `===` 对对象恒 false**（object_identity 只匹配全 map 形态）
-- [x] 差分 25_laravel_syntax.php 固化
+- [ ] A1 错误协议子系统：`error_reporting` 位掩码与 E_* 常量、`set_error_handler`/`set_exception_handler`/`restore_*`、`@` 抑制运算符、`register_shutdown_function`、`assert`（zend.assertions 语义）、致命错误与可捕获错误的分级渲染——当前散在「低危队列」，升格为主体；`Eval.warn` 通道已有，缺的是分级与 handler 派发
+- [ ] A2 INI 解析层：`php.ini`/`.user.ini` 读取（CLI `-c`/HTTP docroot 扫描）、`ini_get`/`ini_set`/`ini_get_all`/`ini_parse_quantity`、core 有效集接线（include_path 进 include 解析、auto_prepend_file 进 SAPI 启动、disable_functions 桩）
+- [ ] A3 流包装器基础：`php://`（memory/temp/filter/stdout 家族）、`data://`、`glob://`；`stream_context_create` 及 context 选项传递；file_get_contents/file_put_contents/fopen 走统一包装器分派（现在直连文件系统）
+- [ ] A4 L0 SAPI 欠账：`$_FILES` 物化（multipart 解析+上传临时文件）、chunked body、keep-alive、HTTP/1.0
+- 验收：phpt basic/output 套件失败集收缩；`php -c` 差分用例（INI 行为项）过门禁
 
-## L1.5：语法缺口收口（**已完成**，2026-09-25 校验后冲刺）
+### PHASE B：T1 纯逻辑扩展全量（快赢块，每模块：php-src 签名对照 → 实现 → 纳入 ext/*/tests → 门禁）
 
-L1 声称"命名参数已可用"经差分证伪（实为按位置绑定）；随 enum from()/readonly 一起收口：
+- [ ] B1 date 全量（48 函数 + 14 类：DateTimeImmutable/DateInterval/DatePeriod/时区）——**DateTime 构造 ISO 串静默错值是首修项**（1970-01-01 错值比 Fatal 危险）
+- [ ] B2 mbstring 57 + ctype 11 + iconv 10（78 纯函数，Erlang unicode 底座）
+- [ ] B3 standard 数组族 ~40（uintersect/udiff 族、array_multisort、shuffle、array_rand、array_find…）+ 杂项（ip2long/putenv/getopt/sleep 族/forward_static_call…）
+- [ ] B4 Reflection 全量（类缺 18：Function/Parameter/Property/UnionType/Attribute/Extension…）——原 L3，Table meta API 地基已落
+- [ ] B5 SPL 类族 16（ArrayObject/ArrayIterator/堆栈队列堆/FileInfo/ObjectStorage）——Laravel collections 底座
+- [ ] B6 hash 15（:crypto 映射）+ random 9 + filter 7 + tokenizer 2（lexer token 映射）+ calendar 18
+- [ ] B7 bcmath 14 + gmp 51（Elixir 任意精度整数）+ session 23（进程态）+ readline 12
+- 验收：每模块 ext/*/tests 目录纳入 harness（基线 `--record` 重建后只许收缩）；`docs/matrix/matrix_gaps.txt` 对应段清零；Carbon 核心测试抽样（原 L4 验收并入）
 
-- [x] **命名参数按名绑定**（用户函数/方法/构造器/闭包/静态）：`f(b: 3, a: 4)` 交换序、`str_replace(search:…, subject:…)` 内置重排（builtin.ex 挂 ReflectionFunction 核实的 arginfo 参数名表）、解包字符串键 `f(...["a"=>1])` 产命名实参；错误族 php 精确措辞（Unknown named parameter $z / Named parameter $a overwrites previous argument / `f(): Argument #2 ($b) not passed` 变体 + 帧渲染 `f(1, NULL, 9)`）；`func_get_args` 快照语义（位置+声明形参，变参收集的命名实参不计入）；编译期检查 `Cannot use positional argument after [argument unpacking|named argument]`（fatal 通道）
-- [x] **enum from() 非法值**：物化 ValueError + `S::from('zz')` 帧 + 背衬类型弱强制（`from("1")` 命中 int case）；消息 `"zz" is not a valid backing value for enum S`
-- [x] **readonly 属性（非 readonly class）写保护**：初始化一次（声明类或子类作用域内）；外部初始化 `Cannot modify protected(set) readonly property Q::$y from [global scope|scope W]`（php 8.4 措辞）；二次写 `Cannot modify readonly property`；unset 拒绝；读未初始化 `Typed property Q::$y must not be accessed before initialization`；链接期检查（readonly 带默认值/static readonly，提升 readonly 带默认值合法）
-- [x] **提升属性真声明修复**：原实现的属性收集在糖解构之后运行（死代码）——提升属性从未真正声明，全靠动态属性；readonly/默认值/instance_defaults 语义随之修正
-- [x] 顺手修复：三元/短三元条件 unwind 穿透（原裸 `=` 匹配崩）；FCC 链式调用 `strlen(...)("x")`/`$o->m(...)(7)`；非静态方法 FCC 创建即抛；var_export 尾换行；heredoc 插值警告行号（part 级行标记 + 关闭行后 lexer 行号 +1 漂移）；生成器 yield 后主进程 file_stack 丢失（用生成器后所有警告/异常文件名退化为 Command line code）；原生方法抛错通道 env=nil 崩 catch 机器（generator rewind/getReturn 物化 + 帧）
-- phpt 净变化：+3 过（func/008、func/009、classes/property_override…），无回归
+### PHASE C：T2 BEAM 原生等价
 
-## H0：phpt 清障（**2026-09-26 已执行：410→368，42 例清除**；剩 ~43 顺延）
+- [ ] C1 zlib(:zlib) + zip(:zip) + Phar——composer phar 分发在此解锁；`compress.zlib://`/`zip://` 包装器
+- [ ] C2 openssl 64（:crypto/:public_key：X509 解析/签名验签/加密族/pkey）+ `https://` 流包装器（OTP :ssl）
+- [ ] C3 sockets 37（gen_tcp/gen_udp/socket 直映射）
+- [ ] C4 curl 33（httpc 映射；CURLOPT 有效集分层）
+- [ ] C5 ftp 36（OTP :ftp）+ `ftp://`/`ftps://` 包装器
+- [ ] C6 xml 族：xml 22 + xmlwriter 42 + dom 类族 + SimpleXML + xmlreader（xmerl 树映射）
+- [ ] C7 posix 40（:os/:file 可映射子集，其余显式返回 false 按扩展语义）
+- 验收：`composer self-update`/`composer require` 在 phpbeam 下真实跑通（C1+C2+C4 的综合验收）
 
-2026-09-26 失败分诊（410 败 = 274 mismatch + 50 fatal + 16 undef_symbol + 9 parse_error + 10 timeout，另有 ~51 在基线内抖动边界）：mismatch 实测 **195 个独立家族**（最大家族仅 6 例）——长尾真实，"全部通过"按当前证据需 20–40 会话纯边缘语义苦工且大半与 Laravel 无关，**不设全通过目标**；四个可治桶（~85 例）全部高价值，先清：
+### PHASE D：T3 外部客户端
 
-**已落地**（每批过门禁，commit b19cb23 后续 H0-a/b/c 系列）：
-- harness 文件名规范化（14 例假失败：EXPECTF 的 `%s<base>.php` 撞 `.phpbeam.php` 命名）
-- Access-level 措辞补 ` or weaker` + zend 按检查归行（access-level→子方法行，abstract→类起始行）＝13 例
-- zend 编译期检查：接口非 public 方法/abstract+final/$this 参数/静态构造器/魔术方法可见性警告（继续执行）＝5 例
-- callable 可见性 TypeError（call_user_func 家族可捕获、php 逐字措辞）、`$obj::CONST`、`__LINE__`
-- **插值字符串常量折叠**（parser 的字符串统一表示 `{:interp,[text:s]}` 此前折叠为 null——switch 字符串 case 全家复活）
-- **foreach 驱动 Iterator/IteratorAggregate 协议**（rewind→valid→current→key(按需)→body→next；嵌套 aggregate 递归；普通对象迭代 public 属性；SPL 接口名修正 IteratorAggregate）＝9 例
-- switch 备用语法 `endswitch`、`function &foo()` 解析、`$a =& f()`（近似）
+- [ ] D1 PDO 抽象层 + pdo_mysql（MyXQL）——原 L5；prepare/execute/fetch 族/bindValue/errorInfo/setAttribute
+- [ ] D2 sqlite3 + pdo_sqlite（exqlite，git 依赖——hex 被 TLS 挡）
+- [ ] D3 pgsql 122 + pdo_pgsql（epgsql，git 依赖）
+- [ ] D4 mysqli 补全（106 中余 ~48）
+- 验收：Laravel Eloquent `User::count()/first()/create()` 对真库正确（mysql+sqlite 双跑）；`artisan migrate` 真实执行
 
-**顺延**（深修/需管道）：short_tags×4（--INI-- 管道）、unset_properties（__get/__set 重入死循环）、property_override 系（protected 属性跨类访问链）、lang/028（析构次序）、bug21600（引用赋值 Notice）、serialize_001、autoload_012/021、返回引用真语义（数组共享）、default+endswitch 残角、invalid_octal/71897 措辞
-- [x] 门禁：基线已收缩 `tmp/baseline_phpt_failures.txt` = 368
+### PHASE E：T4 后置全量 + 差异化件
 
-## H1：phpt 高价值 mismatch 子集——只做 classes/ 套件的 Laravel 相关族（2–4 会话，H0 后择机）
+- [ ] E1 intl 子集起步（Carbon/Laravel 需要的 ICU 面：locale 泛型/NumberFormatter/IntlDateFormatter）→ 全量 183 排尾部
+- [ ] E2 gd 105（git 依赖图像库评估：eimp/StbImage；getimagesize/imagesx 等无依赖件先行）
+- [ ] E3 sodium 110（:crypto 映射，Laravel 加密可选路径）
+- [ ] E4 FFI→BEAM NIF 桥：`FFI::cdef` 不做 C ABI，设计 PHP 侧调用 Elixir/NIF 的形态（差异化卖点，设计先行一节文档）
+- [ ] E5 pcntl→BEAM 进程模型：fork 语义映射（spawn + interp 状态拷贝=COW 近似）、信号→消息——设计文档先行（并发原语路线已排序过：Web 运行时→代码级原语）
 
-- [ ] 按主题族推进（不按用例数）：可见性/继承错误路径、autoload、array_access（Laravel collections 底座）、destructor 次序、常量可见性
-- [ ] 长尾（~150–200 例）**保留失败**：由基线失败集护栏看管回归，不为凑数实现 bug26869 类边缘语义；个别架构不适用例（OOM/内存限制类）登记豁免理由
+### PHASE F：编译后端（X 轴——冻结点判据：PHASE B+C+D 完成 且 phpt 全套件失败集只剩豁免类）
 
-## L2：Composer vendor 实战（**进行中，2026-09-26 两轮**）
+- [ ] PHP AST → Elixir AST 编译器（用户函数/方法体；builtin 层原样复用——两后端共享）
+- [ ] 差分/phpt/浏览器三层护栏全量回归（编译产物以解释器输出为 oracle 逐字节对齐）
+- [ ] SAPI 边界不动的承诺兑现（L0 已按此设计）：编译器整体替换解释器内核，Http/CLI 驱动零改动
+- 验收：Laravel 全量 boot 从秒级到可测量加速；phpt 通过率不回退
 
-- [ ] `composer create-project laravel/laravel` 真树可被我们的 autoload 加载（psr-4/classmap/files 三通道）
-- [ ] `phpx artisan --version` 出版本号；差分对齐
-- [x] **已完成实质**：composer autoload 全链通（闭包 ns/环境、签名兼容别名解析、Closure::bind 真绑定、use function、相对命名空间、cased display、表达式内赋值、??= 保形、protected 双向、属性种子小写、动态字符串类名逐字解析）；**bootstrap/app.php 完整工作**（探针：返回的 app 实例携带核心绑定，契约 has()=true）；**DI 反射循环跑通**（ReflectionClass/Method/Parameter/NamedType/Attribute 全家，类型名烘焙别名解析）
-- [x] **2026-09-26 第四轮**：DI 死循环歼灭（instanceof Closure 认运行时闭包）+ 8 项连锁修复（e2fbd6d/ac339d5）→ **Carbon\\Carbon 可注册**（trait 声明类归属 + apply_traits 线程化 interp + 联合类型按成员解析/无序集合比较 + builtin 成员绕过 ns 解析 + native 父类跳过兼容检查）
-- [ ] 前线（下一入口）：artisan 到 Carbon 后在 Date::__get→get→$this->week() 处 13GB 内存循环——week() 等 Week-trait 方法没到达 Carbon 类（嵌套 trait use 展平在真实链路失效，最小复现通过）；另有 class_exists 触发的 autoload 把类注册进被丢弃 interp 的 bug（var_dump 包装时 bool(true) 但最终 interp 无此类）——两处均指向 trait 展平/interp 线程化的残余路径
-- [ ] 沿带小缺口：gettype 已修 closure→object；$argv CLI 播种缺失（ArgvInput 用 $_SERVER['argv'] 兜底正常）
+## phpt 扩目录纪律（PHASE B 起）
 
-## L3：Reflection API（2–3 会话，最大单项）
+1. harness `test/phpbeam/phpt_test.exs` 的目录分块列表随模块扩展纳入对应 `ext/<mod>/tests`
+2. 新目录首次纳入：跑一遍全量分诊（class= 标签汇总）→ 失败集 `--record` 进基线 → 之后的提交只许收缩
+3. 每例失败三选一：修复 / 豁免登记（exempt.md 用例级格式）/ 时间盒 2h 超时登记 `docs/matrix/deferred.md` 顺延（顺延≠豁免，会话末清理）
+4. Zend/tests（语言语义主套件）在 PHASE B 中段整目录纳入——语言核心语义的最终考场
 
-- [x] 前置已落（2026-09-26 重构 Phase 1，见 ARCHITECTURE_DESIGN.md）：Classes.Table meta 只读 API + ReflectionClass/ReflectionMethod 薄切片（26_reflection.php 差分逐字节过）；L3 本体直接在 `builtin/reflection.ex` 扩
+## 既有基座（已完成，验收记录见 git 历史；此处只留索引）
 
-- [ ] ReflectionClass（newInstance/getMethod/getProperties/isInstantiable/getConstructor/getAttributes）
-- [ ] ReflectionMethod/ReflectionFunction（invoke/invokeArgs/isPublic/getNumberOfParameters）
-- [ ] ReflectionParameter（getType/getName/isOptional/isDefaultValueAvailable/getDefaultValue）
-- [ ] ReflectionNamedType/UnionType（getName/allowsNull）
-- [ ] ReflectionProperty（setValue/getValue/setAccessible）
-- [ ] 验收：Laravel 容器能 `app(X::class)` 构造带依赖注入的类；`artisan list` 出命令清单
+- **L0 HTTP SAPI**（`283950f`）：`phpx serve`、请求种子、SAPI 响应区、6 例 curl 差分全过；欠账（$_FILES/chunked/keep-alive）→ PHASE A4
+- **L1/L1.5 语法冲刺**（`c602d64`/2026-09-25）：提升属性/枚举/readonly/数组展开/FCC/命名参数按名绑定（含 php 精确错误措辞）；语言核心自评 ~70%
+- **H0 phpt 清障**：410→368，42 例清除（插值常量折叠/Iterator 协议/备用语法…）；顺延清单 → 引擎债
+- **L2 Composer/artisan 战果**（2026-09-26 四轮）：composer autoload 全链、bootstrap/app.php 完整工作、DI 反射循环跑通、**Carbon 可注册**（trait 归属/联合类型/native 父类兼容等 8 项连锁修复）
+- **架构重构 Phase 0-3**（2026-09-26）：四层模块图 + Table meta API + fork_request/warm 池化接缝（ARCHITECTURE_DESIGN.md）
 
-## L4：Carbon 级 DateTime（1–2 会话）
+## 引擎债（新主线外的待修清单，时间盒 2h 纪律）
 
-- [ ] DateTimeImmutable 全家（copy/modify/add/sub/diff/setTimezone/format 全说明符矩阵）
-- [ ] DateInterval/DatePeriod 构造与遍历
-- [ ] Carbon 兼容探针：vendor 下 Carbon 核心测试集抽样跑通
-- [ ] 验收：Laravel 路由表构建通过（时间相关的 middleware/config 不再炸）
+- [ ] trait 嵌套展平在真实链路失效（artisan→Carbon week() 13GB 循环）；class_exists 触发 autoload 注册进被丢弃 interp——两处同根：trait 展平/interp 线程化残余路径（原 L2 前线，不再驱动主线，phpx artisan 冒烟时修）
+- [ ] H0 顺延：short_tags（--INI-- 管道，A2 后可解）、unset_properties 重入死循环、property_override 跨类链、返回引用真语义（数组共享）、析构次序、serialize_001
+- [ ] 低危队列：顶层声明提升；动态属性 Deprecated（A1 的 error_reporting 分级落地后自然解锁）；`defined('Cls::CONST')`；`explode('')` ValueError
 
-## L5：PDO on MyXQL（1–2 会话）
+## 回归验证资产（Laravel/WP/Composer——每 PHASE 收尾跑一轮，不再驱动排序）
 
-- [ ] PDO/PDOStatement 类（prepare/execute/fetch/fetchAll/bindValue/errorInfo/setAttribute）
-- [ ] 预备语句语义（占位符→MyXQL 参数映射）
-- [ ] 验收：Eloquent `User::count()/first()/create()` 对真 MySQL 正确
+- Laravel：`phpx artisan --version` → `artisan list` → 简单路由 HTTP 200（每 PHASE 收尾冒烟；浏览器完整体验的原 L6/L7 目标转为 PHASE D 后的自然产物）
+- WordPress：wp-load exit 0、install.php 完整渲染（`bd85da5`）保留为 phpt 之外的活体回归
+- Composer：PHASE C7 后 `composer require` 真实跑通进常规冒烟
 
-## L6：Laravel 在 HTTP 下 boot（1–2 会话）
+## 执行纪律
 
-- [ ] `public/index.php` 经 L0 SAPI 完整执行：kernel handle → 响应
-- [ ] 简单路由（`Route::get('/', fn() => 'hello')`）200 出字符串
-- [ ] 每-请求性能实测；若秒级，进程池预热/已 boot interp 复用（配置缓存路径）
+- 语义疑问先 php 探针/php-src 源码，不空想（AGENTS.md 正文）
+- 每模块单独 commit + `scripts/gate.sh`（build + 非 phpt 全绿 + phpt 失败集与基线比对，只许收缩）
+- 引擎 bug 时间盒 2h，超时登记 deferred.md；豁免走 exempt.md 登记，不静默跳过
+- 差分用例 `test/cases/NN_主题.php` 进库；phpt 新目录首次纳入才允许 `--record`
+- 解释器状态新增字段 → Interp struct + repl_init/run 路径（AGENTS.md 既有纪律）
 
-## L7：完整浏览器体验（2 会话）
+## 写明不做什么
 
-- [ ] Blade 视图渲染（编译→eval 链路）
-- [ ] 静态资源（Vite 产物直出）+ CSS/JS 页面完整视觉
-- [ ] session/cookie：登录表单 POST → 重定向 → 登录态保持
-- [ ] DB 列表页（分页/查询）
-- [ ] 浏览器人工验收 + 与 `php -S` 的 curl 差分矩阵
-
-## L8：性能与架构（持续）
-
-- [ ] 请求级 profile：Laravel boot 的热点函数榜
-- [x] 池化接缝已落（2026-09-26）：`Interp.fork_request/1` + `warm/1`（fork 单测：boot 表共享、statics 重置）；预热池本体待 L6 实测收益后接 Http
-- [ ] 为编译后端铺路：L0 的 SAPI 边界（请求种子/响应收集）保持与求值器无耦合，编译后端可整体替换解释器内核
-
-## 远期（架构级，README 路线图三步终点）
-
-- [ ] **PHP → Elixir AST 编译后端**：树遍历慢 1~2 个数量级，Laravel 全量 boot 的根治方案；Laravel 的大型真实代码库是比 WP 更有价值的编译目标与正确性试金石（编译产物以现有差分/phpt/浏览器三层护栏回归）
-- [ ] **Web 运行时深化**：在 L0 的 Plug 每请求一 BEAM 进程模型上进化——进程池/预热、热重载（文件 mtime 触发重新 boot）、与 Elixir 生态的部署形态（release 内嵌 PHP 项目）
-- [ ] **Elixir 互操作层**：PHP 代码调用 Elixir 模块/函数（Enum/JSON/Ecto 等），双向边界（PHP 侧 `Elixir\Mod.fun()` 语法糖、Elixir 侧求值 PHP 片段），共享同一 interp/进程模型——phpbeam 的差异化终极形态：PHP 应用长在 BEAM 上
-
-## WordPress 线处置
-
-降级为**回归资产**，不再推进功能项：`wp-load` exit 0、install.php 完整渲染（`bd85da5`）作为既有能力保留；285/697 phpt + zend 抽样护栏继续作为每里程碑回归门禁。若后续需要 WP，从 install 向导建表处续。
-
-## 低危队列（随手修）
-
-- [ ] 函数/类顶层声明提升；动态属性 Deprecated（需 error_reporting 分级）
-- [ ] `defined('Cls::CONST')`/class_exists 第二参触发 autoload
-- [ ] `explode('')` ValueError；null 方法调用 Error 可 catch；get_parent_class 显示名
-- [ ] 剩余 phpt 桶：`{:badkey, :statics}` 族、ob_start 重用 Fatal、func/005
+- **不做解释器深性能优化**：编译后端（PHASE F）是根治方案；中间态只做池化/预热（fork_request/warm 已落）
+- **不做 php-fpm 协议**：BEAM 每请求一进程即应用服务器，Plug/gen_tcp HTTP 已覆盖 web 形态；OPcache 同理架构不适用
+- **不做多版本 PHP**：钉死 8.4 语义（金标准 /opt/homebrew/bin/php 8.4.2 + php-src 8.4.24）
+- **不追 INI 677 只读项**：按「php.ini 改变行为」有效集实现
+- **不碰豁免清单 16 扩展**（exempt.md，有信号随时解除）
+- **不做 FFI 的 C ABI**：BEAM 形态是 NIF/Elixir 互操作桥
 
 ## 风险登记
 
-- **树遍历性能**：Laravel 全 boot 每 request 可能秒级——L6 起需池化/预热，根治靠编译后端（L8）
-- **Reflection 深度**：容器用的细粒度 API（getType()->getName() 等）不能做半吊子
-- **PHP 8.2+ 语义**：readonly 约束、枚举背衬、promotion 默认值需按 php 探针对齐
-- **差分 oracle 变化**：HTTP 响应对比需规范化（Set-Cookie 顺序、Date 头剔除）
+- **xml/dom 类面**：DOMDocument API 树大，xmerl↔DOM 映射是 PHASE C6 最大单项
+- **git 依赖**（exqlite/epgsql/图像库）：hex 被 TLS 挡，仓库可用性需开工时验证
+- **intl/gd/sodium**（T4）：函数面 100+，子集边界要靠 Laravel/Carbon 实测圈定，防止滑向无限工程
+- **phpt 全量纳入的性能**：数万用例并行跑耗时会显著拉长门禁——目录级并行已有，必要时按目录拆 gate
+- **pcntl/FFI 形态设计**：是设计活不是抄写活，各需一节设计文档先行（PHASE E 内）
 
 ## 环境备忘
 
-- MySQL 容器：`docker start phpbeam-mysql`（8.0，wp_test/wp/wppass，127.0.0.1:3306，native_password）——Laravel 项目另建库 `laravel_test`
-- hex 仓库被网络 TLS 挡——依赖走 git（mix.exs 注释）；composer 走系统 php，不受影响
-- 排障工具沉淀：BEAM 采样、exit 截断二分（截断语法 255≠挂起 142）、`fwrite(STDERR)` 即时插桩
-- 验收纪律：语义疑问先查 php-src（/Users/guozhu/Downloads/php-8.4.24）或 `php -r` 探针，不空想（AGENTS.md 有正文）
+- MySQL 容器：`docker start phpbeam-mysql`（8.0，wp_test/wp/wppass，127.0.0.1:3306）；Laravel 用 `laravel_test` 库
+- hex 被 TLS 挡——依赖走 git（mix.exs 注释）；composer 走系统 php
+- php-src：/Users/guozhu/Downloads/php-8.4.24（PHP_SRC 可改指向）；本机 php 8.4.2
+- 排障工具：BEAM 采样、exit 截断二分（截断语法 255≠挂起 142）、`fwrite(STDERR)` 即时插桩

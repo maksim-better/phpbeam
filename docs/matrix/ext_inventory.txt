@@ -1,0 +1,72 @@
+# 本机 php 8.4.2 扩展全量清单 × phpbeam 分层处置（2026-09-26 实测 `php -m` + get_extension_funcs 计数）
+# 分层定义：
+#   T1 纯逻辑     —— 无外部库依赖，纯 Elixir 可实现，机械差分
+#   T2 BEAM 原生  —— 映射到 OTP 自带库（:crypto/:zlib/:ssl/:ftp/:zip/xmerl/httpc/gen_tcp）或形态重映射
+#   T3 外部客户端 —— 接真实服务器的客户端协议（MyXQL 先例）
+#   T4 后置全量   —— 有真实需求信号但函数面大（>100），先子集后全量
+#   T5 豁免登记   —— docs/matrix/exempt.md，低频/无 BEAM 落点，有需求信号随时解除
+# 「已有」列 = 2026-09-26 matrix_gaps.txt 实测（13 模块）；未标注的模块当前覆盖为零。
+
+== T1 纯逻辑（18 扩展）
+standard    542  已 276 缺 266（数组~40/字符串~50/流~30/网络/杂）
+Core         59  已 29 缺 30（sleep/putenv/getopt/forward_static_call…）
+mbstring     65  已 8 缺 57
+date         48  已 8 缺 40 + 类缺 14（DateTimeImmutable/Interval/Period…）；Carbon 硬依赖
+SPL          15  已 5 缺 10 + 类缺 16（ArrayObject/Iterator 族/FileInfo/Heap…）
+ctype        11  缺 11
+iconv        10  缺 10
+json          5  已 4 缺 1
+hash         20  已 5 缺 15（:crypto 可映射，实现面在 T1 工作量）
+pcre         11  已 9 缺 2
+tokenizer     2  缺 2（lexer 已有，token_get_all 是映射活）
+random        9  缺 9（random_bytes/random_int，PHP 8.2 起独立扩展）
+filter        7  缺 7
+session      23  缺 23（BEAM 进程态存储）
+calendar     18  缺 18
+bcmath       14  缺 14（Elixir 任意精度整数天然映射）
+gmp          51  缺 51（同 bcmath，映射 :rand/:crypto 源）
+readline     12  缺 12（CLI REPL 已有基础，readline_* 映射交互行读取）
+
+== T2 BEAM 原生等价（13 扩展）
+openssl      64  → :crypto/:public_key/:ssl（证书 X509 解析/签名/加密族；https 流包装器在此解锁）
+curl         33  → httpc（或 git 依赖客户端）；composer 下载面
+sockets      37  → gen_tcp/gen_udp/socket
+ftp          36  → OTP :ftp
+zlib         30  → OTP :zlib；compress.zlib 包装器
+zip          10  → OTP :zip；zip: 流包装器
+xml          22  → xmerl；xml_parse 族（expat 语义）
+xmlwriter    42  → xmerl 导出侧
+dom          类族 → xmerl 树 ↔ DOMDocument 映射（函数 2 但类面大）
+SimpleXML    类族 → xmerl（函数 3）
+xmlreader    类族 → xmerl 流式
+libxml        8  → 随 xml 族（版本/参数桩）
+Phar         类族 → 依赖 zlib/zip；composer phar 分发在此解锁
+posix        40  → :os/:file 部分映射（getpid/getuid/kill/uname…），其余子项随需
+pcntl        25  → BEAM 进程模型重映射（fork 概念不照抄：spawn+状态分叉语义设计）——差异化卖点
+
+== T3 外部客户端（7 扩展）
+mysqli      106  已 ~58，补全
+mysqlnd       0  mysqli 底层，无独立用户面，随 mysqli
+pgsql       122  → epgsql（git 依赖，hex 被挡）
+PDO          类族  抽象层（prepare/execute/fetch/bind/attr）——Laravel Eloquent 底座
+pdo_mysql    类族  → MyXQL
+pdo_sqlite   类族  → exqlite（git 依赖）
+sqlite3      类族  → exqlite
+
+== T4 后置全量（3 扩展，先 Laravel/Carbon 需要的子集，后全量）
+intl        183  ICU 面；Carbon 本地化/Laravel 翻译组件部分路径
+gd          105  图像处理；intervention/image 场景
+sodium      110  现代 crypto（:crypto 大部分可映射）
+
+== T5 豁免登记（16 扩展 → docs/matrix/exempt.md）
+snmp(24) ldap(56) odbc(48) pdo_dblib PDO_ODBC dba(15) tidy(24) xsl exif(4)
+fileinfo(6) gettext(10) soap(2+WSDL 类族) bz2(10) shmop(6) sysvmsg(7) sysvsem(4) sysvshm(7)
+
+== 特殊形态（2）
+FFI        0 用户面  → BEAM NIF/Elixir 互操作桥（不做 C FFI；差异化必做，排在 PHASE E）
+Zend OPcache —    架构不适用：BEAM 常驻进程即缓存（豁免登记）
+
+# 汇总：67 扩展 = T1 18 + T2 13 + T3 7 + T4 3 + T5 16 + 特殊 2（FFI/OPcache 含在计数内则 T5 15）
+# 函数面：全量 ~2400+ 函数，当前已实现 ~450（13 模块实测 + mysqli ~58）
+# 13 流包装器：file✓ php(部分) http https ftp ftps data glob compress.zlib compress.bzip2(T5) phar zip
+# INI：677 项（php -i 实测）——按「php.ini 改变行为」有效集分层实现，不追全量只读项
