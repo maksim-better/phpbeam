@@ -23,6 +23,13 @@
 - [ ] lang/028（析构次序）、bug21600（引用赋值 Notice）、serialize_001、autoload_012/021
 - [ ] 返回引用真语义（数组共享）、default+endswitch 残角、invalid_octal/71897 措辞
 
+## B2 顺延（2026-09-26）
+
+- [ ] **mb_ereg\* 全家族 11 函数**（mb_ereg/eregi/ereg_replace/eregi_replace/ereg_replace_callback/split/match/search\* 7 个/regex_encoding/regex_set_options）——多字节正则引擎（Oniguruma 语义），可先桥 :re + /u 的 UTF-8 模式（PCRE UTF 模式与 Oniguruma 边缘语义差异需差分护住）
+- [ ] mb_convert_kana（假名互转表）、mb_send_mail（mail 通道）、mb_convert_variables（多变体 ho 引用写回）
+- [ ] **iconv //TRANSLIT 精确表**：libiconv 的 latin1→ASCII 表把 é 转成 'e（撇号+e），我们的 NFD 剥离给 e；差分用例已绕开 //TRANSLIT 断言
+- [ ] mb_parse_str 当前恒 false（需要 ho raw-args + 引用写回，A3 的 context 通道可复用）
+
 ## B1 收尾顺延（2026-09-26）
 
 - [ ] **DatePeriod foreach 迭代**：展开日期为整数键属性后，find_prop（table.ex）对整数键抛 case_clause（属性机器假设字符串键）；需在 B5 Iterator 协议时统一（构造/存储已工作）

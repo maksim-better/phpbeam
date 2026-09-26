@@ -7,6 +7,7 @@ defmodule PhpBeam.Builtin do
 
   alias PhpBeam.Builtin.{
     ArrayFns,
+    MbFns,
     CursorFns,
     FileFns,
     MathFns,
@@ -40,6 +41,7 @@ defmodule PhpBeam.Builtin do
     |> CursorFns.register()
     |> ObFns.register()
     |> OutputFns.register()
+    |> MbFns.register()
     |> put_param_names()
   end
 
