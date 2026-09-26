@@ -6,25 +6,20 @@
 
 进度自评：语言核心已完成约 70%（类系统/生成器/autoload/命名空间作用域/异常/闭包绑定/引用语义等全部迁移复用）；实测缺口见下表。
 
-## 已实测缺口（2026-09-25 探针，phpx 逐项验证）
+## 已实测缺口（**2026-09-26 复测**，重构+L1.5 后逐项探针；2026-09-25 首测见 git 历史）
 
-语法（parser 级，1–2 会话冲刺）——**L1+L1.5 全部完成**：
-- [x] 构造器属性提升 `__construct(private int $x = 1)`
-- [x] 命名参数 `f(b: 3, a: 4)`（含 attribute 实参内）
-- [x] heredoc/nowdoc
-- [x] 数组字面量展开 `[0, ...$a, 3]`
-- [x] 枚举 enum/backed/cases
-- [x] readonly 类/属性；一等可调用 `strlen(...)`
-- [x] attributes 解析已过（`#[Attr(1)]` 可载入），带参形式依赖命名参数
+语法项 L1/L1.5 已全部关闭。运行时复测结论（phpx 实测）：
 
-运行时（大块）：
-- [ ] **Reflection API**（Class/Method/Function/Parameter/Property/NamedType + getAttributes）——Laravel 容器/DI 的心脏，没有它容器不工作
-- [ ] **Carbon 级 DateTime**：DateTimeImmutable/modify/diff/DateInterval/DatePeriod/时区换算（Carbon 是最重单依赖；现有原生 DateTime 仅 format('T','U','c') 最小集）
-- [ ] **PDO**（Eloquent/DB 只走 PDO；叠在 MyXQL 上，1–2 会话）
-- [ ] mbstring 深化（mb_convert_encoding/mb_str_split…）、iconv、ctype、tokenizer
-- [ ] session/cookie 原语与 header 收集（SAPI 的一部分）
+| 域 | 状态 | 实测细节 |
+|---|---|---|
+| **autoload 链路** | ✅ **实测可用** | spl_autoload_register + 回调内 eval 建类 + 常量解析全通——L2 的引擎依赖已就位 |
+| Reflection | 🟡 仅薄切片 | ReflectionClass：getName/isAbstract/isInterface/isEnum/hasMethod/getMethod ✓；getMethods/getConstructor/newInstance ✗；ReflectionFunction/Parameter/NamedType 类不存在；attributes 语法解析 ✓ 但 getAttributes ✗（L3 主体工作，地基 Table meta API 已落） |
+| DateTime/Carbon | 🔴 **缺口比记载严重** | `new DateTime("2026-01-02 03:04:05")->format(...)` 返回 **1970-01-01 00:33:46——静默错值**（ISO 串解析缺失，比 Fatal 危险：Laravel 会算出错误时间不报错）；modify/diff/DateTimeImmutable/DatePeriod/strtotime 全缺（strtotime 是 bool(false) 缺失） |
+| PDO | 🔴 全缺（预期 L5） | class_exists("PDO")=false |
+| mbstring/ctype/iconv/tokenizer | 🟡 部分 | mb_strlen ✓；mb_convert_encoding/mb_str_split/ctype_digit/iconv/token_get_all ✗——真实需求面待 L2 vendor 加载沿途暴露 |
+| session | 🔴 缺（预期） | session_start 不存在；headers_sent/headers_list ✓（L0 已做） |
 
-已迁移资产：M7–M24 全部语言核心与引擎修复；autoload 体系（fetch_class + spl 链 + 父类/接口/trait 链接期加载——Composer PSR-4 正好吃这套）；mysqli/MyXQL（PDO 底座）；ob_*/eval（Blade 需要）；文件流；Zend/phpt 护栏（285/697 + zend sample 12.6%）。
+**执行就绪度结论（2026-09-26）**：可以执行。L2（Composer vendor）引擎依赖实测就绪、随时可开工；L3 前置已落；L4 需把「DateTime 构造 ISO 串静默错值」升为该里程碑首修项（错值比缺功能危险）。
 
 ## L0：HTTP SAPI（**已完成**，`283950f`）
 
