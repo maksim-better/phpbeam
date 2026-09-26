@@ -1188,6 +1188,7 @@ defmodule PhpBeam.Classes.Table do
       "throwable" => native_class("Throwable", nil, []),
       "exception" => native_class("Exception", "throwable", []),
       "error" => native_class("Error", "throwable", []),
+      "assertionerror" => native_class("AssertionError", "error", []),
       "typeerror" => native_class("TypeError", "error", []),
       "argumentcounterror" => native_class("ArgumentCountError", "typeerror", []),
       "divisionbyzeroerror" => native_class("DivisionByZeroError", "arithmeticerror", []),

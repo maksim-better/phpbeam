@@ -1492,6 +1492,30 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:closure, params, uses, _by_ref?, body, arrow?}, env, interp) do
+    # php arrow functions auto-capture every outer variable their body
+    # references, BY VALUE, at definition time (compile-time analysis in
+    # php; here a body walk minus own params minus explicitly-used names)
+    uses =
+      if arrow? do
+        param_names = Enum.map(params, fn {:param, n, _, _, _, _} -> n end)
+
+        explicit =
+          Enum.map(uses, fn
+            {:ref, n} -> n
+            n -> n
+          end)
+
+        extra =
+          body
+          |> arrow_free_vars()
+          |> Enum.uniq()
+          |> Enum.reject(&(&1 in param_names or &1 in explicit))
+
+        uses ++ extra
+      else
+        uses
+      end
+
     {captures, env2, interp2} =
       Enum.reduce(uses, {%{}, env, interp}, fn
         {:ref, name}, {caps, e, it} ->
@@ -1559,6 +1583,27 @@ defmodule PhpBeam.Eval do
 
     {{:val, closure}, env2, interp2}
   end
+
+  # free-variable walk for arrow auto-capture: every {:var, name} leaf in
+  # the body (nested closure bodies included — their references force the
+  # outer capture too, as in php); static/local declarations that happen to
+  # shadow are over-captured harmlessly (by-value copy)
+  defp arrow_free_vars(body), do: arrow_vars(body, [])
+
+  defp arrow_vars({:var, name}, acc) when is_binary(name), do: [name | acc]
+  defp arrow_vars({:param, name, _, _, _, _}, acc), do: [name | acc]
+
+  defp arrow_vars(list, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &arrow_vars/2)
+
+  defp arrow_vars(node, acc) when is_tuple(node) do
+    Enum.reduce(Tuple.to_list(node), acc, fn
+      e, a when is_tuple(e) or is_list(e) -> arrow_vars(e, a)
+      _l, a -> a
+    end)
+  end
+
+  defp arrow_vars(_, acc), do: acc
 
   def eval({:method_call, obj_e, name_e, args, nullsafe?}, env, interp) do
     case eval(obj_e, env, interp) do

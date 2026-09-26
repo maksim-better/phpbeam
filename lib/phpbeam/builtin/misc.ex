@@ -60,7 +60,6 @@ defmodule PhpBeam.Builtin.MiscFns do
       "json_last_error" => &json_last_error_v/2,
       "json_last_error_msg" => &json_last_error_msg_v/2,
       "trigger_error" => &trigger_error_v/2,
-      "assert" => &assert_v/2,
       "header" => &header_v/2,
       "setcookie" => &setcookie_v/2,
       "headers_sent" => &headers_sent_v/2,
@@ -82,6 +81,7 @@ defmodule PhpBeam.Builtin.MiscFns do
     Enum.reduce(entries, fns, fn {name, fun}, acc ->
       Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []})
     end)
+    |> Map.merge(ho_entries())
     |> Map.put("is_callable", %{
       fun: fn v, i, _c -> is_callable_v(v, i) end,
       refs: [2],
@@ -897,17 +897,171 @@ defmodule PhpBeam.Builtin.MiscFns do
     end
   end
 
-  defp assert_v(vals, i) do
-    desc =
-      case val(vals, 1) do
-        {:string, d} -> d
-        _ -> "assertion failed"
-      end
+  # assert needs the RAW argument ASTs: php rebuilds the default message
+  # "assert(<source>)" from the compiled expression (zend_ast_export)
+  defp ho_entries do
+    nofun = fn _v, i, _c -> {:ok, :null, i} end
+    ho = fn fun -> %{fun: nofun, refs: [], ho: %{args: :raw, fun: fun}} end
+    %{"assert" => ho.(&ho_impl_assert/3)}
+  end
 
-    if Value.truthy?(val(vals)) do
-      {:ok, {:bool, true}, i}
-    else
-      {:unwind, {:php_throw, {:native_error, "AssertionError", desc}}, i}
+  defp ho_impl_assert(args, env, interp) do
+    case args do
+      [a1 | rest] ->
+        case PhpBeam.Eval.eval(a1, env, interp) do
+          {{:val, v}, _, i2} ->
+            if Value.truthy?(v) do
+              {{:val, {:bool, true}}, env, i2}
+            else
+              default = "assert(" <> export_expr(a1) <> ")"
+
+              case rest do
+                [desc_e | _] ->
+                  case PhpBeam.Eval.eval(desc_e, env, i2) do
+                    {{:val, {:string, s}}, _, i3} ->
+                      assertion_throw(env, i3, s, [v, {:string, s}])
+
+                    {{:val, {:object, _} = ref}, _, i3} ->
+                      {{:unwind, {:php_throw, ref}}, env, i3}
+
+                    _ ->
+                      assertion_throw(env, i2, default, [v, {:string, default}])
+                  end
+
+                [] ->
+                  assertion_throw(env, i2, default, [v, {:string, default}])
+              end
+            end
+
+          unw ->
+            unw
+        end
+
+      [] ->
+        {{:val, {:bool, true}}, env, interp}
+    end
+  end
+
+  # native errors must be MATERIALIZED before throwing (the builtin channel
+  # does this in call_resolved_builtin; ho impls must do it themselves);
+  # php's compiled form carries the auto description as arg 2, so the trace
+  # renders `assert(false, 'assert(false)')`
+  defp assertion_throw(env, interp, msg, frame_vals) do
+    {obj, i2} = PhpBeam.Eval.materialize_native({:native_error, "AssertionError", msg}, interp)
+    i3 = PhpBeam.Interp.push_frame(i2, "assert", frame_vals)
+    {{:unwind, {:php_throw, obj}}, env, i3}
+  end
+
+  # php-src Zend/zend_ast_export subset: literals are re-rendered (strings
+  # single-quoted with escapes), operators keep single spaces
+  defp export_expr({:arg, e, _, _}), do: export_expr(e)
+
+  defp export_expr({:int, n}) when n < 0, do: "-" <> Integer.to_string(-n)
+  defp export_expr({:int, n}), do: Integer.to_string(n)
+  defp export_expr({:float, f}), do: Float.to_string(f)
+
+  defp export_expr({:string, s}) do
+    escaped = s |> String.replace("\\", "\\\\") |> String.replace("'", "\\'")
+    "'" <> escaped <> "'"
+  end
+
+  defp export_expr({:bool, b}), do: if(b, do: "true", else: "false")
+  defp export_expr(:null), do: "null"
+  defp export_expr({:var, name}), do: "$" <> name
+  defp export_expr({:const, parts, _fq}), do: Enum.join(parts, "\\")
+  defp export_expr({:cname, _, parts}), do: Enum.join(parts, "\\")
+
+  # parser's uniform string representation: pure text re-quotes single
+  # (zend_ast_export); interpolated parts re-render as encapsed syntax
+  defp export_expr({:interp, [text: _] = parts}) do
+    escaped =
+      parts
+      |> Enum.map_join("", fn {:text, s} -> s end)
+      |> String.replace("\\", "\\\\")
+      |> String.replace("'", "\\'")
+
+    "'" <> escaped <> "'"
+  end
+
+  defp export_expr({:interp, parts}), do: export_interp(parts)
+  defp export_expr({:class_const, cname, name}), do: export_expr(cname) <> "::" <> name
+
+  defp export_expr({:binop, op, l, r}),
+    do: export_expr(l) <> " " <> export_op(op) <> " " <> export_expr(r)
+
+  defp export_expr({:unop, :!, e}), do: "!" <> export_expr(e)
+  defp export_expr({:unop, :-, e}), do: "-" <> export_expr(e)
+  defp export_expr({:unop, :+, e}), do: "+" <> export_expr(e)
+
+  defp export_expr({:call, {:const, parts, _} = _callee, args}),
+    do: Enum.join(parts, "\\") <> "(" <> export_args(args) <> ")"
+
+  defp export_expr({:call, callee, args}),
+    do: export_expr(callee) <> "(" <> export_args(args) <> ")"
+
+  defp export_expr({:index, arr, nil}), do: export_expr(arr) <> "[]"
+
+  defp export_expr({:index, arr, idx}),
+    do: export_expr(arr) <> "[" <> export_expr(idx) <> "]"
+
+  defp export_expr({:prop, obj, name}) when is_binary(name),
+    do: export_expr(obj) <> "->" <> name
+
+  defp export_expr({:prop, obj, name}),
+    do: export_expr(obj) <> "->" <> export_expr(name)
+
+  defp export_expr({:static_prop, cname, name}),
+    do: export_expr(cname) <> "::$" <> name
+
+  defp export_expr({:coalesce, l, r}),
+    do: export_expr(l) <> " ?? " <> export_expr(r)
+
+  defp export_expr({:paren, e}), do: "(" <> export_expr(e) <> ")"
+  defp export_expr(_), do: "expression"
+
+  defp export_args(args), do: Enum.map_join(args, ", ", &export_expr/1)
+
+  defp export_interp([]), do: ""
+
+  defp export_interp([{:text, s} | rest]),
+    do: s <> export_interp(rest)
+
+  defp export_interp([{:simple, name, _accessors} | rest]),
+    do: "$" <> name <> export_interp(rest)
+
+  defp export_interp([{:complex, ast} | rest]),
+    do: "{" <> export_expr(ast) <> "}" <> export_interp(rest)
+
+  defp export_op(op) do
+    case op do
+      :+ -> "+"
+      :- -> "-"
+      :* -> "*"
+      :/ -> "/"
+      :% -> "%"
+      :** -> "**"
+      :. -> "."
+      :== -> "=="
+      :!= -> "!="
+      :=== -> "==="
+      :!== -> "!=="
+      :< -> "<"
+      :<= -> "<="
+      :> -> ">"
+      :>= -> ">="
+      :"<=>" -> "<=>"
+      :&& -> "&&"
+      :|| -> "||"
+      :and -> "and"
+      :or -> "or"
+      :xor -> "xor"
+      :& -> "&"
+      :| -> "|"
+      :^ -> "^"
+      :shl -> "<<"
+      :shr -> ">>"
+      :instanceof -> "instanceof"
+      _ -> "?"
     end
   end
 

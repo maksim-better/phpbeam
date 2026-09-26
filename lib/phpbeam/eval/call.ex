@@ -47,6 +47,14 @@ defmodule PhpBeam.Eval.Call do
             result
         end
 
+      # php 8: any expression whose VALUE is callable is a valid call target —
+      # `$f()()`, `$arr['k']()`, `getFactory()()`
+      other when is_tuple(other) ->
+        case eval(other, env, interp) do
+          {{:val, v}, e2, i2} -> call_value(deref(v, i2), args, e2, i2)
+          unw -> unw
+        end
+
       _ ->
         {{:unwind, {:fatal, "unsupported call target"}}, env, interp}
     end
