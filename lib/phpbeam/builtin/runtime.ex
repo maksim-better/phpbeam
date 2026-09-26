@@ -44,7 +44,7 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "date_default_timezone_set" => &tz_set/2,
       "date_default_timezone_get" => &tz_get/2,
       "date" => &date_v/2,
-      "gmdate" => &date_v/2,
+      "gmdate" => &gmdate_v/2,
       "time" => &time_v/2,
       "strtotime" => &strtotime_v/2,
       "timezone_version_get" => &tz_version/2,
@@ -448,7 +448,19 @@ defmodule PhpBeam.Builtin.RuntimeFns do
     {:ok, {:int, code}, i2}
   end
 
-  defp tz_set(_vals, i), do: {:ok, {:bool, true}, i}
+  defp tz_set(vals, i) do
+    case vals do
+      [{:string, tz} | _] ->
+        if PhpBeam.DtZone.valid?(tz) do
+          {:ok, {:bool, true}, %{i | ini: Map.put(i.ini, "date.timezone", tz)}}
+        else
+          {:ok, {:bool, false}, i}
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
 
   defp tz_version(_vals, i), do: {:ok, {:string, "2024.1"}, i}
 
@@ -459,7 +471,12 @@ defmodule PhpBeam.Builtin.RuntimeFns do
     end
   end
 
-  defp tz_get(_vals, i), do: {:ok, {:string, "UTC"}, i}
+  defp tz_get(_vals, i) do
+    case Map.get(i.ini, "date.timezone", "UTC") do
+      "" -> {:ok, {:string, "UTC"}, i}
+      tz -> {:ok, {:string, tz}, i}
+    end
+  end
 
   defp time_v(_vals, i), do: {:ok, {:int, System.system_time(:second)}, i}
 
@@ -486,40 +503,30 @@ defmodule PhpBeam.Builtin.RuntimeFns do
         _ -> System.system_time(:second)
       end
 
-    {{y, mo, d}, {h, mi, s}} = calendar(ts)
+    {:ok, {:string, PhpBeam.Dt.format(%PhpBeam.Dt{utc: ts, zone: dt_zone(i)}, fmt)}, i}
+  end
 
-    out =
-      case Map.get(@date_formats, fmt) do
-        :ymd_his ->
-          cal2(y) <>
-            "-" <>
-            cal2(mo) <> "-" <> cal2(d) <> " " <> cal2(h) <> ":" <> cal2(mi) <> ":" <> cal2(s)
-
-        :ymd ->
-          cal2(y) <> "-" <> cal2(mo) <> "-" <> cal2(d)
-
-        :his ->
-          cal2(h) <> ":" <> cal2(mi) <> ":" <> cal2(s)
-
-        :y ->
-          Integer.to_string(y)
-
-        :iso8601 ->
-          cal2(y) <>
-            "-" <>
-            cal2(mo) <>
-            "-" <> cal2(d) <> "T" <> cal2(h) <> ":" <> cal2(mi) <> ":" <> cal2(s) <> "+00:00"
-
-        :epoch ->
-          Integer.to_string(ts)
-
-        _ ->
-          cal2(y) <>
-            "-" <>
-            cal2(mo) <> "-" <> cal2(d) <> " " <> cal2(h) <> ":" <> cal2(mi) <> ":" <> cal2(s)
+  defp gmdate_v(vals, i) do
+    fmt =
+      case vals do
+        [{:string, f} | _] -> f
+        _ -> "Y-m-d H:i:s"
       end
 
-    {:ok, {:string, out}, i}
+    ts =
+      case Enum.at(vals, 1) do
+        {:int, t} -> t
+        _ -> System.system_time(:second)
+      end
+
+    {:ok, {:string, PhpBeam.Dt.format(%PhpBeam.Dt{utc: ts, zone: {:utc}}, fmt)}, i}
+  end
+
+  defp dt_zone(i) do
+    case Map.get(i.ini, "date.timezone", "UTC") do
+      "" -> PhpBeam.Dt.zone_of("UTC")
+      tz -> PhpBeam.Dt.zone_of(tz)
+    end
   end
 
   defp calendar(ts) do
@@ -532,28 +539,31 @@ defmodule PhpBeam.Builtin.RuntimeFns do
   defp cal2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
 
   defp strtotime_v(vals, i) do
-    import PhpBeam.Value, only: [cast_string_unsafe: 1]
-    s = cast_string_unsafe(Enum.at(vals, 0))
+    str =
+      case vals do
+        [{:string, s} | _] -> s
+        [v | _] -> PhpBeam.Eval.php_to_string(v)
+        _ -> ""
+      end
 
-    case Regex.run(~r/\A(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})\z/, s) do
-      [_, y, mo, d, h, mi, sec] ->
-        dt = {
-          {String.to_integer(y), String.to_integer(mo), String.to_integer(d)},
-          {String.to_integer(h), String.to_integer(mi), String.to_integer(sec)}
-        }
+    base =
+      case Enum.at(vals, 1) do
+        {:int, t} -> %PhpBeam.Dt{utc: t, zone: dt_zone(i)}
+        _ -> PhpBeam.Dt.now("UTC")
+      end
 
-        {:ok, {:int, :calendar.datetime_to_gregorian_seconds(dt) - 62_167_219_200}, i}
+    res =
+      case PhpBeam.Dt.parse(str, "UTC") do
+        {:ok, _} = ok -> ok
+        :error -> PhpBeam.Dt.apply_relative(base, str)
+      end
 
-      _ ->
-        case Integer.parse(s) do
-          {n, ""} -> {:ok, {:int, n}, i}
-          _ -> {:ok, {:bool, false}, i}
-        end
+    case res do
+      {:ok, dt} -> {:ok, {:int, dt.utc}, i}
+      :error -> {:ok, {:bool, false}, i}
     end
   end
 
-  # no locale support: report the requested locale as active (non-empty),
-  # matching the common `setlocale(...) === false` guards
   defp setlocale(vals, i) do
     case Enum.drop(vals, 1) do
       [] ->

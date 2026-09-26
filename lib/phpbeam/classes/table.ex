@@ -1184,7 +1184,10 @@ defmodule PhpBeam.Classes.Table do
       "reflectionattribute" => native_reflection_attribute_class(),
       "reflectionexception" => native_class("ReflectionException", "runtimeexception", []),
       "datetime" => native_datetime_class(),
+      "datetimeimmutable" => native_datetimeimmutable_class(),
       "datetimezone" => native_datetimezone_class(),
+      "dateinterval" => native_dateinterval_class(),
+      "dateperiod" => native_dateperiod_class(),
       "throwable" => native_class("Throwable", nil, []),
       "exception" => native_class("Exception", "throwable", []),
       "error" => native_class("Error", "throwable", []),
@@ -1238,7 +1241,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimezone reflectionclass reflectionmethod reflectionparameter reflectionnamedtype) do
+      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
@@ -1261,20 +1264,637 @@ defmodule PhpBeam.Classes.Table do
         "__construct" =>
           native_fn("__construct", fn obj, args, i ->
             name = args |> Enum.at(0, {:string, "UTC"}) |> dt_s()
-            {:ok, {:null, dt_put(obj, "name", {:string, name})}, i}
+
+            valid? =
+              PhpBeam.DtZone.valid?(name) or
+                match?({:ok, _}, parse_tz_offset(name))
+
+            if valid? do
+              {:ok, {:null, dt_put(obj, "name", {:string, name})}, i}
+            else
+              {oref, i2} =
+                Eval.materialize_native(
+                  {:native_error, "Exception",
+                   "DateTimeZone::__construct(): Unknown or bad timezone (#{name})"},
+                  i
+                )
+
+              {{:unwind, {:php_throw, oref}}, i2}
+            end
           end),
         "getname" =>
           native_fn("getName", fn obj, _args, i ->
             {:ok, {Map.get(native_state(obj), "name", {:string, "UTC"}), obj}, i}
+          end),
+        "getoffset" =>
+          native_fn("getOffset", fn obj, args, i ->
+            zname = dt_s(Map.get(native_state(obj), "name", {:string, "UTC"}))
+
+            ts =
+              case args do
+                [{:object, _} = dt_ref | _] ->
+                  dt_obj = Eval.get_object(i, dt_ref)
+                  st = native_state(dt_obj)
+
+                  case Map.get(st, "dt") do
+                    %PhpBeam.Dt{utc: u} -> u
+                    _ -> System.system_time(:second)
+                  end
+
+                _ ->
+                  System.system_time(:second)
+              end
+
+            offset =
+              case parse_tz_offset(zname) do
+                {:ok, off} ->
+                  off
+
+                :error ->
+                  case PhpBeam.DtZone.resolve(zname) do
+                    {:ok, z} -> PhpBeam.DtZone.offset_at(z, ts) |> elem(0)
+                    _ -> 0
+                  end
+              end
+
+            {:ok, {{:int, offset}, obj}, i}
           end)
       },
       file: ""
     }
   end
 
+  # "+05:30" / "-0500" / "+0530" style offsets
+  defp parse_tz_offset(<<?+, rest::binary>>) do
+    tz_offset_parts(rest, 1)
+  end
+
+  defp parse_tz_offset(<<?-, rest::binary>>) do
+    tz_offset_parts(rest, -1)
+  end
+
+  defp parse_tz_offset(_), do: :error
+
+  defp tz_offset_parts(rest, sign) do
+    case String.split(rest, ":") do
+      [h, m] ->
+        with {hi, ""} <- Integer.parse(h),
+             {mi, ""} <- Integer.parse(m),
+             do: {:ok, sign * (hi * 3600 + mi * 60)},
+             else: (_ -> :error)
+
+      [<<h::binary-size(2), m::binary-size(2)>>] ->
+        {:ok, sign * (String.to_integer(h) * 3600 + String.to_integer(m) * 60)}
+
+      _ ->
+        :error
+    end
+  end
+
   defp native_datetime_class do
+    dt_base_methods("DateTime")
+  end
+
+  defp native_datetimeimmutable_class do
+    dt_base_methods("DateTimeImmutable")
+  end
+
+  # shared engine-backed surface: immutable methods return a NEW instance
+  # (php contract), DateTime mutates and returns $this
+  defp dt_base_methods(class_name) do
+    immutable? = class_name == "DateTimeImmutable"
+
+    # {return_value, interp, obj_to_write_back} — for the mutable case the
+    # return is $this; the caller writes the mutated object back
+    mut = fn obj, obj_ref, dt, i ->
+      if immutable? do
+        {oref, i2} = Eval.make_instance(i, String.downcase(class_name))
+        clone = Eval.get_object(i2, oref)
+        clone2 = native_dt_put(clone, dt)
+        {oref, i2, clone2}
+      else
+        {{:object, obj_ref}, i, native_dt_put(obj, dt)}
+      end
+    end
+
     %__MODULE__{
-      name: "DateTime",
+      name: class_name,
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{
+        {"ATOM"} => {:string, "Y-m-d\\TH:i:sP"},
+        {"COOKIE"} => {:string, "l, d-M-Y H:i:s T"},
+        {"ISO8601"} => {:string, "Y-m-d\\TH:i:sO"},
+        {"RFC822"} => {:string, "D, d M y H:i:s O"},
+        {"RFC850"} => {:string, "l, d-M-y H:i:s T"},
+        {"RFC1036"} => {:string, "D, d M y H:i:s O"},
+        {"RFC1123"} => {:string, "D, d M Y H:i:s O"},
+        {"RFC2822"} => {:string, "D, d M Y H:i:s O"},
+        {"RFC3339"} => {:string, "Y-m-d\\TH:i:sP"},
+        {"RFC3339_EXTENDED"} => {:string, "Y-m-d\\TH:i:s.vP"},
+        {"RSS"} => {:string, "D, d M Y H:i:s O"},
+        {"W3C"} => {:string, "Y-m-d\\TH:i:sP"}
+      },
+      props: [],
+      methods:
+        %{
+          "__construct" =>
+            native_fn("__construct", fn obj, args, i ->
+              time_s = args |> Enum.at(0, {:string, "now"}) |> dt_s()
+
+              tz_name =
+                case args do
+                  [_, {:object, _} = zref | _] ->
+                    zobj = Eval.get_object(i, zref)
+                    dt_s(Map.get(native_state(zobj), "name", {:string, "UTC"}))
+
+                  _ ->
+                    Map.get(i.ini, "date.timezone", "UTC")
+                    |> case do
+                      "" -> "UTC"
+                      tz -> tz
+                    end
+                end
+
+              case PhpBeam.Dt.parse(time_s, tz_name) do
+                {:ok, dt} ->
+                  dt =
+                    if String.starts_with?(time_s, "@") do
+                      # php: @epoch keeps +00:00 zone unless a zone arg follows
+                      case args do
+                        [_, {:object, _} | _] -> %{dt | zone: PhpBeam.Dt.zone_of(tz_name)}
+                        _ -> dt
+                      end
+                    else
+                      dt
+                    end
+
+                  {:ok, {:null, native_dt_put(obj, dt)}, i}
+
+                :error ->
+                  {oref, i2} =
+                    Eval.materialize_native(
+                      {:native_error, "Exception",
+                       "Failed to parse time string (#{time_s}) at position 0 (n): The timezone could not be found in the database"},
+                      i
+                    )
+
+                  {{:unwind, {:php_throw, oref}}, i2}
+              end
+            end),
+          "format" =>
+            native_fn("format", fn obj, args, i ->
+              fmt = args |> Enum.at(0, {:string, "U"}) |> dt_s()
+              dt = native_dt_get(obj)
+              {:ok, {{:string, PhpBeam.Dt.format(dt, fmt)}, obj}, i}
+            end),
+          "modify" =>
+            native_fn("modify", fn obj, args, i ->
+              mod = args |> Enum.at(0, {:string, ""}) |> dt_s()
+              dt = native_dt_get(obj)
+
+              case PhpBeam.Dt.apply_relative(dt, mod) do
+                {:ok, dt2} ->
+                  {ret, i2, obj2} = mut.(obj, obj.__ref__, dt2, i)
+
+                  if immutable? do
+                    i3 = PhpBeam.Objects.put_object(i2, ret, obj2)
+                    {:ok, {ret, obj}, i3}
+                  else
+                    {:ok, {ret, obj2}, i2}
+                  end
+
+                :error ->
+                  {oref, i2} =
+                    Eval.materialize_native(
+                      {:native_error, "Exception",
+                       "Failed to parse time string (#{mod}) at position 0 (n): The timezone could not be found in the database"},
+                      i
+                    )
+
+                  {{:unwind, {:php_throw, oref}}, i2}
+              end
+            end),
+          "gettimestamp" =>
+            native_fn("getTimestamp", fn obj, _args, i ->
+              {:ok, {{:int, native_dt_get(obj).utc}, obj}, i}
+            end),
+          "settimestamp" =>
+            native_fn("setTimestamp", fn obj, args, i ->
+              ts = args |> Enum.at(0, {:int, 0}) |> php_int()
+              dt = native_dt_get(obj)
+              {ret, i2, obj2} = mut.(obj, obj.__ref__, %{dt | utc: ts, us: 0}, i)
+              {:ok, ret, i2, obj2}
+            end),
+          "gettimezone" =>
+            native_fn("getTimezone", fn obj, _args, i ->
+              {zref, i2} = Eval.make_instance(i, "datetimezone")
+              zobj = Eval.get_object(i2, zref)
+              zname = zone_name_of(native_dt_get(obj))
+              zobj2 = dt_put(zobj, "name", {:string, zname})
+              {:ok, {zref, zobj2}, i2}
+            end),
+          "settimezone" =>
+            native_fn("setTimezone", fn obj, args, i ->
+              case args do
+                [{:object, _} = zref | _] ->
+                  zobj = Eval.get_object(i, zref)
+                  zname = dt_s(Map.get(native_state(zobj), "name", {:string, "UTC"}))
+                  dt = native_dt_get(obj)
+
+                  {ret, i2, obj2} =
+                    mut.(obj, obj.__ref__, %{dt | zone: PhpBeam.Dt.zone_of(zname)}, i)
+
+                  {:ok, ret, i2, obj2}
+
+                _ ->
+                  {:ok, :null, i}
+              end
+            end),
+          "add" =>
+            native_fn("add", fn obj, args, i ->
+              dt = native_dt_get(obj)
+
+              case dt_interval_shift(dt, args, 1, i) do
+                {:ok, dt2} ->
+                  {ret, i2, obj2} = mut.(obj, obj.__ref__, dt2, i)
+
+                  if immutable? do
+                    i3 = PhpBeam.Objects.put_object(i2, ret, obj2)
+                    {:ok, {ret, obj}, i3}
+                  else
+                    {:ok, {ret, obj2}, i2}
+                  end
+
+                _ ->
+                  {:ok, {:null, obj}, i}
+              end
+            end),
+          "sub" =>
+            native_fn("sub", fn obj, args, i ->
+              dt = native_dt_get(obj)
+
+              case dt_interval_shift(dt, args, -1, i) do
+                {:ok, dt2} ->
+                  {ret, i2, obj2} = mut.(obj, obj.__ref__, dt2, i)
+
+                  if immutable? do
+                    i3 = PhpBeam.Objects.put_object(i2, ret, obj2)
+                    {:ok, {ret, obj}, i3}
+                  else
+                    {:ok, {ret, obj2}, i2}
+                  end
+
+                _ ->
+                  {:ok, {:null, obj}, i}
+              end
+            end),
+          "diff" =>
+            native_fn("diff", fn obj, args, i ->
+              case args do
+                [{:object, _} = other_ref | _] ->
+                  other = Eval.get_object(i, other_ref)
+                  dt2 = native_dt_get(other)
+                  dt1 = native_dt_get(obj)
+                  {iref, i2} = Eval.make_instance(i, "dateinterval")
+                  iobj = Eval.get_object(i2, iref)
+                  iv = PhpBeam.Dt.diff(dt1, dt2)
+
+                  iobj2 =
+                    Enum.reduce(
+                      [
+                        {"y", {:int, iv.y}},
+                        {"m", {:int, iv.m}},
+                        {"d", {:int, iv.d}},
+                        {"h", {:int, iv.h}},
+                        {"i", {:int, iv.i}},
+                        {"s", {:int, iv.s}},
+                        {"days", {:int, iv.days}},
+                        {"invert", {:int, iv.invert}},
+                        {"f", {:float, 0.0}}
+                      ],
+                      iobj,
+                      fn {k, v}, acc ->
+                        case PArray.put(acc.props, {:string, k}, v) do
+                          {:ok, pr} -> %{acc | props: pr}
+                          _ -> acc
+                        end
+                      end
+                    )
+
+                  i3 = PhpBeam.Objects.put_object(i2, iref, iobj2)
+                  {:ok, {iref, obj}, i3}
+
+                _ ->
+                  {:ok, {:null, obj}, i}
+              end
+            end),
+          "createfromformat" =>
+            native_fn_static("createFromFormat", fn _obj, args, i ->
+              fmt = args |> Enum.at(0, {:string, ""}) |> dt_s()
+              val = args |> Enum.at(1, {:string, ""}) |> dt_s()
+              base_tz = Map.get(i.ini, "date.timezone", "UTC")
+
+              case PhpBeam.Dt.create_from_format(fmt, val, base_tz) do
+                {:ok, dt} ->
+                  {oref, i2} = Eval.make_instance(i, String.downcase(class_name))
+                  o = Eval.get_object(i2, oref)
+                  i3 = PhpBeam.Objects.put_object(i2, oref, native_dt_put(o, dt))
+                  {:ok, {oref, nil}, i3}
+
+                :error ->
+                  {:ok, {{:bool, false}, nil}, i}
+              end
+            end),
+          "createfromimmutable" =>
+            native_fn_static("createFromImmutable", fn _obj, args, i ->
+              case args do
+                [{:object, _} = src_ref | _] ->
+                  src = Eval.get_object(i, src_ref)
+                  {oref, i2} = Eval.make_instance(i, "datetime")
+                  o = Eval.get_object(i2, oref)
+                  i3 = PhpBeam.Objects.put_object(i2, oref, native_dt_put(o, native_dt_get(src)))
+                  {:ok, {oref, nil}, i3}
+
+                _ ->
+                  {:ok, {{:bool, false}, nil}, i}
+              end
+            end),
+          "getlasterrors" =>
+            native_fn_static("getLastErrors", fn _obj, _args, i ->
+              {:ok, {{:bool, false}, nil}, i}
+            end)
+        }
+        |> Map.new(fn {k, v} -> {k, v} end),
+      file: ""
+    }
+  end
+
+  defp native_dt_get(obj) do
+    case Map.get(obj, :dt_state) do
+      %{"dt" => %PhpBeam.Dt{} = dt} ->
+        dt
+
+      # legacy {ts, tz} shape — migrate on read
+      %{"ts" => {:int, ts}} ->
+        tz = Map.get(obj, :dt_state) |> Map.get("tz", {:string, "UTC"}) |> dt_s()
+        %PhpBeam.Dt{utc: ts, zone: PhpBeam.Dt.zone_of(tz)}
+
+      _ ->
+        PhpBeam.Dt.now()
+    end
+  end
+
+  defp native_dt_put(obj, %PhpBeam.Dt{} = dt) do
+    Map.put(obj, :dt_state, %{"dt" => dt})
+  end
+
+  defp native_state_put_interval(obj, iv) do
+    Map.put(obj, :dt_state, iv)
+  end
+
+  defp zone_name_of(%PhpBeam.Dt{zone: {:named, z}}), do: z.name
+  defp zone_name_of(%PhpBeam.Dt{zone: {:offset, off}}), do: PhpBeam.Dt.offset_str(off, ":")
+  defp zone_name_of(%PhpBeam.Dt{zone: {:utc}}), do: "UTC"
+
+  defp php_int({:int, n}), do: n
+  defp php_int(_), do: 0
+
+  # add()/sub() with a DateInterval argument: months via calendar carry,
+  # the rest as flat seconds (sign -1 inverts)
+  defp dt_interval_shift(dt, [{:object, _} = iref | _], sign, i) do
+    iobj = Eval.get_object(i, iref)
+
+    g = fn k ->
+      case PArray.fetch(iobj.props, {:string, k}) do
+        {:ok, {:int, n}} -> n
+        _ -> 0
+      end
+    end
+
+    months = g.("y") * 12 + g.("m")
+    secs = g.("h") * 3600 + g.("i") * 60 + g.("s")
+
+    dt2 =
+      dt
+      |> then(fn d -> if months != 0, do: PhpBeam.Dt.add_months(d, sign * months), else: d end)
+      |> then(fn d -> %{d | utc: d.utc + sign * secs + sign * g.("d") * 86_400} end)
+
+    {:ok, dt2}
+  end
+
+  defp native_dateinterval_class do
+    %__MODULE__{
+      name: "DateInterval",
+      kind: :class,
+      parent: nil,
+      interfaces: [],
+      consts: %{},
+      props: [],
+      methods: %{
+        "format" =>
+          native_fn("format", fn obj, args, i ->
+            fmt = args |> Enum.at(0, {:string, "%a"}) |> dt_s()
+
+            g = fn k, default ->
+              case PArray.fetch(obj.props, {:string, k}) do
+                {:ok, v} -> v
+                _ -> default
+              end
+            end
+
+            days = g.("days", {:bool, false})
+            invert = g.("invert", {:int, 0})
+
+            out =
+              Regex.replace(~r/%[YyMmDdaHhIiSsRr%]/, fmt, fn
+                "%Y", _ ->
+                  int_str(g.("y", {:int, 0}), 2)
+
+                "%y", _ ->
+                  int_str(g.("y", {:int, 0}), 0)
+
+                "%M", _ ->
+                  int_str(g.("m", {:int, 0}), 2)
+
+                "%m", _ ->
+                  int_str(g.("m", {:int, 0}), 0)
+
+                "%D", _ ->
+                  int_str(g.("d", {:int, 0}), 2)
+
+                "%d", _ ->
+                  int_str(g.("d", {:int, 0}), 0)
+
+                "%a", _ ->
+                  case days do
+                    {:int, n} when n >= 0 -> Integer.to_string(n)
+                    _ -> "false"
+                  end
+
+                "%H", _ ->
+                  int_str(g.("h", {:int, 0}), 2)
+
+                "%h", _ ->
+                  int_str(g.("h", {:int, 0}), 0)
+
+                "%I", _ ->
+                  int_str(g.("i", {:int, 0}), 2)
+
+                "%i", _ ->
+                  int_str(g.("i", {:int, 0}), 0)
+
+                "%S", _ ->
+                  int_str(g.("s", {:int, 0}), 2)
+
+                "%s", _ ->
+                  int_str(g.("s", {:int, 0}), 0)
+
+                "%R", _ ->
+                  if invert == {:int, 1} or invert == 1, do: "-", else: "+"
+
+                "%r", _ ->
+                  if invert == {:int, 1} or invert == 1, do: "-", else: ""
+
+                "%%", _ ->
+                  "%"
+              end)
+
+            {:ok, {{:string, out}, obj}, i}
+          end),
+        "__construct" =>
+          native_fn("__construct", fn obj, args, i ->
+            spec = args |> Enum.at(0, {:string, "P1D"}) |> dt_s()
+
+            case parse_interval(spec) do
+              {:ok, %{y: y, mo: mo, d: d, h: h, mi: mi, s: s}} ->
+                obj2 =
+                  obj
+                  |> dt_put("y", {:int, y})
+                  |> dt_put("m", {:int, mo})
+                  |> dt_put("d", {:int, d})
+                  |> dt_put("h", {:int, h})
+                  |> dt_put("i", {:int, mi})
+                  |> dt_put("s", {:int, s})
+                  |> dt_put("f", {:float, 0.0})
+                  |> dt_put("invert", {:int, 0})
+                  |> dt_put("days", {:bool, false})
+
+                # mirror into real props so ->y reads work through the
+                # standard property channel
+                obj3 =
+                  Enum.reduce(
+                    [{"y", y}, {"m", mo}, {"d", d}, {"h", h}, {"i", mi}, {"s", s}],
+                    obj2,
+                    fn {k, v}, acc ->
+                      case PArray.put(acc.props, {:string, k}, {:int, v}) do
+                        {:ok, p} -> %{acc | props: p}
+                        _ -> acc
+                      end
+                    end
+                  )
+
+                obj4 =
+                  Enum.reduce(
+                    [{"days", {:bool, false}}, {"invert", {:int, 0}}, {"f", {:float, 0.0}}],
+                    obj3,
+                    fn {k, v}, acc ->
+                      case PArray.put(acc.props, {:string, k}, v) do
+                        {:ok, p} -> %{acc | props: p}
+                        _ -> acc
+                      end
+                    end
+                  )
+
+                {:ok, {:null, obj4}, i}
+
+              :error ->
+                {oref, i2} =
+                  Eval.materialize_native(
+                    {:native_error, "Exception",
+                     "DateInterval::__construct(): Unknown or bad format (#{spec})"},
+                    i
+                  )
+
+                {{:unwind, {:php_throw, oref}}, i2}
+            end
+          end)
+      },
+      file: ""
+    }
+  end
+
+  # ISO 8601 duration: P[n]Y[n]M[n]DT[n]H[n]M[n]S (weeks W too)
+  defp parse_interval("P" <> rest),
+    do:
+      parse_interval_parts(rest, false, %{
+        "y" => 0,
+        "m" => 0,
+        "d" => 0,
+        "h" => 0,
+        "i" => 0,
+        "s" => 0
+      })
+
+  defp parse_interval("PT" <> rest),
+    do:
+      parse_interval_parts(rest, false, %{
+        "y" => 0,
+        "m" => 0,
+        "d" => 0,
+        "h" => 0,
+        "i" => 0,
+        "s" => 0
+      })
+
+  defp parse_interval(_), do: :error
+
+  defp parse_interval_parts("", _in_time, acc), do: {:ok, interval_result(acc)}
+
+  defp parse_interval_parts("T" <> rest, _in_time, acc), do: parse_interval_parts(rest, true, acc)
+
+  defp parse_interval_parts(part, in_time, acc) do
+    case Regex.run(~r{(\d+(?:\.\d+)?)([YMWDHS])}i, part) do
+      [full, num, unit] ->
+        rest = String.replace_prefix(part, full, "")
+        unit = String.downcase(unit)
+
+        # ISO 8601: "M" is months before the T, minutes after it
+        key =
+          case {unit, in_time} do
+            {"m", false} ->
+              "m"
+
+            {"m", true} ->
+              "i"
+
+            {u, _} ->
+              %{"y" => "y", "w" => "d", "d" => "d", "h" => "h", "s" => "s"}[u] || "i"
+          end
+
+        mult = if unit == "w", do: 7, else: 1
+
+        n =
+          case Integer.parse(num) do
+            {i2, ""} -> i2 * mult
+            _ -> 0
+          end
+
+        parse_interval_parts(rest, in_time, Map.update(acc, key, n, &(&1 + n)))
+
+      _ ->
+        :error
+    end
+  end
+
+  defp interval_result(acc) do
+    %{y: acc["y"], mo: acc["m"], d: acc["d"], h: acc["h"], mi: acc["i"], s: acc["s"]}
+  end
+
+  defp native_dateperiod_class do
+    %__MODULE__{
+      name: "DatePeriod",
       kind: :class,
       parent: nil,
       interfaces: [],
@@ -1282,44 +1902,8 @@ defmodule PhpBeam.Classes.Table do
       props: [],
       methods: %{
         "__construct" =>
-          native_fn("__construct", fn obj, args, i ->
-            time = args |> Enum.at(0, {:string, "now"}) |> dt_s()
-
-            ts =
-              case time do
-                "now" ->
-                  System.system_time(:second)
-
-                other ->
-                  case Integer.parse(other) do
-                    {n, _} -> n
-                    :error -> System.system_time(:second)
-                  end
-              end
-
-            tz =
-              case Enum.at(args, 1) do
-                {:object, _} = oref ->
-                  tzobj = Eval.get_object(i, oref)
-                  Map.get(native_state(tzobj), "name", {:string, "UTC"})
-
-                _ ->
-                  {:string, "UTC"}
-              end
-
-            obj2 = obj |> dt_put("ts", {:int, ts}) |> dt_put("tz", tz)
-            {:ok, {:null, obj2}, i}
-          end),
-        "format" =>
-          native_fn("format", fn obj, args, i ->
-            fmt = args |> Enum.at(0, {:string, "U"}) |> dt_s()
-            ts = native_state(obj) |> Map.get("ts", {:int, 0})
-            tz = native_state(obj) |> Map.get("tz", {:string, "UTC"})
-            {:ok, {{:string, dt_format(fmt, ts, tz)}, obj}, i}
-          end),
-        "gettimestamp" =>
-          native_fn("getTimestamp", fn obj, _args, i ->
-            {:ok, {native_state(obj) |> Map.get("ts", {:int, 0}), obj}, i}
+          native_fn("__construct", fn obj, _args, i ->
+            {:ok, {:null, obj}, i}
           end)
       },
       file: ""
@@ -1971,6 +2555,12 @@ defmodule PhpBeam.Classes.Table do
     Map.put(obj, :dt_state, Map.put(st, k, v))
   end
 
+  defp int_str({:int, n}, pad) do
+    s = Integer.to_string(abs(n))
+    s = if pad > 1, do: String.pad_leading(s, pad, "0"), else: s
+    if n < 0, do: "-" <> s, else: s
+  end
+
   defp dt_s({:string, s}), do: s
   defp dt_s(v), do: PhpBeam.Eval.php_to_string(v)
 
@@ -2437,6 +3027,10 @@ defmodule PhpBeam.Classes.Table do
           {:ok, {{:string, "exception '#{name}' with message '#{msg}'"}, obj}, interp}
         end)
     }
+  end
+
+  defp native_fn_static(name, fun) do
+    %{native_fn(name, fun) | static?: true}
   end
 
   defp native_fn(name, fun) do
