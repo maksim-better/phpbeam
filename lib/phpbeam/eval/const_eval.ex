@@ -16,6 +16,10 @@ defmodule PhpBeam.Eval.ConstEval do
 
   def eval_const_expr({:string, s}), do: {:string, s}
 
+  # pure-text interpolated literal (the parser's normal string shape)
+  def eval_const_expr({:interp, [text: s]}), do: {:string, s}
+  def eval_const_expr({:interp, _}), do: :null
+
   def eval_const_expr({:bool, b}), do: {:bool, b}
 
   def eval_const_expr(:null), do: :null
