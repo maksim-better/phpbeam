@@ -202,7 +202,7 @@ defmodule PhpBeam.Builtin.StreamFns do
   # CLI: php://input is the request body — empty outside HTTP; the HTTP
   # driver materializes it into globals later
   defp input_body(i) do
-    Map.get(i.globals, "php_input_body")
+    Map.get(i.globals, "\0input_body")
     |> case do
       {:string, b} -> b
       _ -> ""
