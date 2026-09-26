@@ -6,6 +6,7 @@ defmodule PhpBeam.Builtin.OutputFns do
   """
 
   alias PhpBeam.{PArray, Render, Value}
+  alias PhpBeam.Eval.Error
 
   # ───────────────────────── output ─────────────────────────
 
@@ -102,7 +103,10 @@ defmodule PhpBeam.Builtin.OutputFns do
 
             if Map.has_key?(it.consts, name) do
               # php keeps the original value and returns false
-              {:ok, {:bool, false}, PhpBeam.Interp.warn(it, "Constant #{name} already defined")}
+              case Error.warn(Error.stub_env(), it, "Constant #{name} already defined") do
+                {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+                {:unwind, u, _, i2} -> {:unwind, u, i2}
+              end
             else
               {:ok, {:bool, true}, %{it | consts: Map.put(it.consts, name, v)}}
             end

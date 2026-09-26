@@ -6,6 +6,7 @@ defmodule PhpBeam.Eval do
   """
 
   alias PhpBeam.{Env, Error, Interp, PArray, Pattern, Value}
+  alias PhpBeam.Eval.Error, as: EvalError
 
   @int_min -9_223_372_036_854_775_808
   @int_max 9_223_372_036_854_775_807
@@ -37,8 +38,10 @@ defmodule PhpBeam.Eval do
           {{:val, deref(Map.get(interp.statics[key], sname), interp)}, env, interp}
 
         :undefined ->
-          interp2 = warn(env, interp, "Undefined variable $#{name}")
-          {{:val, :null}, env, interp2}
+          case EvalError.warn(env, interp, "Undefined variable $#{name}") do
+            {:cont, _, i2} -> {{:val, :null}, env, i2}
+            {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
+          end
       end
     end
   end
@@ -49,8 +52,10 @@ defmodule PhpBeam.Eval do
         eval({:var, name}, env2, interp2)
 
       {{:val, _}, env2, interp2} ->
-        interp3 = warn(env2, interp2, "Undefined variable $#{name_of(e)}")
-        {{:val, :null}, env2, interp3}
+        case EvalError.warn(env2, interp2, "Undefined variable $#{name_of(e)}") do
+          {:cont, _, i3} -> {{:val, :null}, env2, i3}
+          {:unwind, u, _, i3} -> {{:unwind, u}, env2, i3}
+        end
 
       unw ->
         unw
@@ -164,8 +169,10 @@ defmodule PhpBeam.Eval do
 
     case idx do
       nil ->
-        interp3 = warn(env2, interp2, "Cannot use [] for reading")
-        {{:val, :null}, env2, interp3}
+        case EvalError.warn(env2, interp2, "Cannot use [] for reading") do
+          {:cont, _, i3} -> {{:val, :null}, env2, i3}
+          {:unwind, u, _, i3} -> {{:unwind, u}, env2, i3}
+        end
 
       idx_expr ->
         {{:val, i}, env3, interp3} = eval(idx_expr, env2, interp2)
@@ -252,19 +259,22 @@ defmodule PhpBeam.Eval do
 
       :null ->
         key = prop_name_string(name_e, env2, interp2)
-        {{:val, :null}, env2, warn(env2, interp2, "Attempt to read property \"#{key}\" on null")}
+
+        case EvalError.warn(env2, interp2, "Attempt to read property \"#{key}\" on null") do
+          {:cont, _, i3} -> {{:val, :null}, env2, i3}
+          {:unwind, u, _, i3} -> {{:unwind, u}, env2, i3}
+        end
 
       other ->
         key = prop_name_string(name_e, env2, interp2)
 
-        interp3 =
-          warn(
-            env2,
-            interp2,
-            "Attempt to read property \"#{key}\" on value of type #{PhpBeam.Value.gettype(other)}"
-          )
+        msg =
+          "Attempt to read property \"#{key}\" on value of type #{PhpBeam.Value.gettype(other)}"
 
-        {{:val, :null}, env2, interp3}
+        case EvalError.warn(env2, interp2, msg) do
+          {:cont, _, i3} -> {{:val, :null}, env2, i3}
+          {:unwind, u, _, i3} -> {{:unwind, u}, env2, i3}
+        end
     end
   end
 
@@ -1248,12 +1258,24 @@ defmodule PhpBeam.Eval do
       {{:unwind, {:fatal, "Failed opening required '#{path}' (include_path='#{ip}')"}}, env,
        interp}
     else
-      i2 = warn(env, interp, "include(#{path}): Failed to open stream: No such file or directory")
+      case EvalError.warn(
+             env,
+             interp,
+             "include(#{path}): Failed to open stream: No such file or directory"
+           ) do
+        {:cont, _, i2} ->
+          case EvalError.warn(
+                 env,
+                 i2,
+                 "include(): Failed opening '#{path}' for inclusion (include_path='#{ip}')"
+               ) do
+            {:cont, _, i3} -> {{:val, {:bool, false}}, env, i3}
+            {:unwind, u, _, i3} -> {{:unwind, u}, env, i3}
+          end
 
-      i3 =
-        warn(env, i2, "include(): Failed opening '#{path}' for inclusion (include_path='#{ip}')")
-
-      {{:val, {:bool, false}}, env, i3}
+        {:unwind, u, _, i2} ->
+          {:unwind, u, env, i2}
+      end
     end
   end
 

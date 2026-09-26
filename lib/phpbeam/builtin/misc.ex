@@ -8,6 +8,7 @@ defmodule PhpBeam.Builtin.MiscFns do
   """
 
   alias PhpBeam.{PArray, Value}
+  alias PhpBeam.Eval.Error
 
   def register(fns) do
     entries = %{
@@ -873,12 +874,18 @@ defmodule PhpBeam.Builtin.MiscFns do
 
     case level do
       256 ->
-        i2 = PhpBeam.Interp.warn_level(i, "Deprecated", @user_error_deprecated)
-        {:unwind, {:engine_fatal, msg}, i2}
+        case Error.user_warn(Error.stub_env(), i, 256, "Deprecated", @user_error_deprecated) do
+          {:cont, _, i2} -> {:unwind, {:engine_fatal, msg}, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
 
       lv when lv in [512, 1024, 16_384] ->
         prefix = %{512 => "Warning", 1024 => "Notice", 16_384 => "Deprecated"}
-        {:ok, :null, PhpBeam.Interp.warn_level(i, prefix[lv], msg)}
+
+        case Error.user_warn(Error.stub_env(), i, lv, prefix[lv], msg) do
+          {:cont, _, i2} -> {:ok, :null, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
 
       _ ->
         {:ok,
@@ -928,13 +935,14 @@ defmodule PhpBeam.Builtin.MiscFns do
 
     case i.output_origin do
       {file, line} when file != nil ->
-        i2 =
-          PhpBeam.Interp.warn(
-            i,
-            "Cannot modify header information - headers already sent by (output started at #{file}:#{line})"
-          )
-
-        {:ok, :null, i2}
+        case Error.warn(
+               Error.stub_env(),
+               i,
+               "Cannot modify header information - headers already sent by (output started at #{file}:#{line})"
+             ) do
+          {:cont, _, i2} -> {:ok, :null, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
 
       _ ->
         replace? =
@@ -979,13 +987,14 @@ defmodule PhpBeam.Builtin.MiscFns do
 
     case i.output_origin do
       {file, line} when file != nil ->
-        i2 =
-          PhpBeam.Interp.warn(
-            i,
-            "Cannot modify header information - headers already sent by (output started at #{file}:#{line})"
-          )
-
-        {:ok, {:bool, false}, i2}
+        case Error.warn(
+               Error.stub_env(),
+               i,
+               "Cannot modify header information - headers already sent by (output started at #{file}:#{line})"
+             ) do
+          {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
 
       _ ->
         val = stringify(Enum.at(rest, 0, {:string, ""}))

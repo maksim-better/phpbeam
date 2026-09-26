@@ -320,11 +320,27 @@ defmodule PhpBeam.Interp do
 
   # php-cli display format: warnings go to stdout, positioned from the
   # innermost statement's line
-  def warn(interp, msg), do: emit_error(interp, 2, "Warning", msg)
+  def warn(interp, msg),
+    do: emit_error(interp, 2, "Warning", msg, {current_file(interp), interp.cur_line})
 
   # levelled variant: Notice:/Deprecated:/Warning: prefix instead of Warning
   def warn_level(interp, level, msg),
-    do: emit_error(interp, error_type_code(level), level, msg)
+    do:
+      emit_error(
+        interp,
+        error_type_code(level),
+        level,
+        msg,
+        {current_file(interp), interp.cur_line}
+      )
+
+  # position-pinned variants: the error's file/line is snapshotted BEFORE a
+  # user handler runs (the handler's own statements must not clobber it)
+  def warn_at(interp, msg, file, line),
+    do: emit_error(interp, 2, "Warning", msg, {file, line})
+
+  def warn_level_at(interp, level, msg, file, line),
+    do: emit_error(interp, error_type_code(level), level, msg, {file, line})
 
   defp error_type_code("Warning"), do: 2
   defp error_type_code("Notice"), do: 8
@@ -334,18 +350,15 @@ defmodule PhpBeam.Interp do
   # lives at the Eval layer because it may call back into PHP): record for
   # error_get_last, then display only when the level passes error_reporting.
   # @ suppresses the diagnostic but NOT the recording (probed php 8.4).
-  defp emit_error(interp, type, prefix, msg) do
-    interp = %{
-      interp
-      | last_error: %{type: type, message: msg, file: current_file(interp), line: interp.cur_line}
-    }
+  defp emit_error(interp, type, prefix, msg, {file, line}) do
+    interp = %{interp | last_error: %{type: type, message: msg, file: file, line: line}}
 
     if interp.suppress > 0 do
       interp
     else
       if (error_reporting_int(interp) &&& type) != 0 do
         interp
-        |> display("\n#{prefix}: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
+        |> display("\n#{prefix}: #{msg} in #{file} on line #{line}\n")
         |> Map.update!(:warnings, &(&1 + 1))
       else
         interp
@@ -383,9 +396,9 @@ defmodule PhpBeam.Interp do
       "\nFatal error: #{msg} in #{file} on line #{line}\n"
   end
 
-  defp current_file(%{file_stack: [f | _]}), do: f
+  def current_file(%{file_stack: [f | _]}), do: f
 
-  defp current_file(_), do: "Command line code"
+  def current_file(_), do: "Command line code"
 
   # frame = the call site of the function currently executing; php shows
   # these in uncaught-error stack traces, innermost first

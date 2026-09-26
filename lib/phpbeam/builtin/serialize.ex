@@ -8,6 +8,7 @@ defmodule PhpBeam.Builtin.SerializeFns do
   """
 
   alias PhpBeam.{PArray}
+  alias PhpBeam.Eval.Error
 
   def register(fns) do
     entries = %{
@@ -121,13 +122,12 @@ defmodule PhpBeam.Builtin.SerializeFns do
         {:ok, v, i2 || i}
 
       {:error, off} ->
-        i2 =
-          PhpBeam.Interp.warn(
-            i,
-            "unserialize(): Error at offset #{off} of #{byte_size(s)} bytes"
-          )
+        msg = "unserialize(): Error at offset #{off} of #{byte_size(s)} bytes"
 
-        {:ok, {:bool, false}, i2}
+        case Error.warn(Error.stub_env(), i, msg) do
+          {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
     end
   end
 

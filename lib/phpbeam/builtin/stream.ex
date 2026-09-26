@@ -5,6 +5,8 @@ defmodule PhpBeam.Builtin.StreamFns do
   php-style TypeErrors ("supplied resource is not a valid stream resource").
   """
 
+  alias PhpBeam.Eval.Error
+
   def register(fns) do
     entries = %{
       "fopen" => &fopen_v/2,
@@ -174,8 +176,10 @@ defmodule PhpBeam.Builtin.StreamFns do
   defp fopen_file(path, mode, vals, i) do
     case Map.fetch(@mode_opts, mode) do
       :error ->
-        i2 = PhpBeam.Interp.warn(i, "fopen(#{path}): mode not supported")
-        {:ok, {:bool, false}, i2}
+        case Error.warn(Error.stub_env(), i, "fopen(#{path}): mode not supported") do
+          {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
 
       {:ok, opts} ->
         opts =
@@ -204,9 +208,14 @@ defmodule PhpBeam.Builtin.StreamFns do
                 "No such file or directory"
               end
 
-            i2 = PhpBeam.Interp.warn(i, "fopen(#{path}): Failed to open stream: #{reason}")
-
-            {:ok, {:bool, false}, i2}
+            case Error.warn(
+                   Error.stub_env(),
+                   i,
+                   "fopen(#{path}): Failed to open stream: #{reason}"
+                 ) do
+              {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+              {:unwind, u, _, i2} -> {:unwind, u, i2}
+            end
         end
     end
   end

@@ -324,8 +324,10 @@ defmodule PhpBeam.Builtin.PatternFns do
       end
     else
       {:error, msg} ->
-        i3 = PhpBeam.Eval.warn(env, i2, "preg_match(): #{msg}")
-        {{:val, {:bool, false}}, env, i3}
+        case PhpBeam.Eval.Error.warn(env, i2, "preg_match(): #{msg}") do
+          {:cont, _, i3} -> {{:val, {:bool, false}}, env, i3}
+          {:unwind, u, _, i3} -> {{:unwind, u}, env, i3}
+        end
 
       _ ->
         {{:val, {:bool, false}}, env, i2}
@@ -396,8 +398,10 @@ defmodule PhpBeam.Builtin.PatternFns do
       end
     else
       {:error, msg} ->
-        i3 = PhpBeam.Eval.warn(env, i2, "preg_match_all(): #{msg}")
-        {{:val, {:bool, false}}, env, i3}
+        case PhpBeam.Eval.Error.warn(env, i2, "preg_match_all(): #{msg}") do
+          {:cont, _, i3} -> {{:val, {:bool, false}}, env, i3}
+          {:unwind, u, _, i3} -> {{:unwind, u}, env, i3}
+        end
 
       _ ->
         {{:val, {:bool, false}}, env, i2}
@@ -418,8 +422,10 @@ defmodule PhpBeam.Builtin.PatternFns do
       {{:val, {:string, IO.iodata_to_binary(out)}}, env, i2}
     else
       {:error, msg} ->
-        i3 = PhpBeam.Eval.warn(env, i2, "preg_replace_callback(): #{msg}")
-        {{:val, {:bool, false}}, env, i3}
+        case PhpBeam.Eval.Error.warn(env, i2, "preg_replace_callback(): #{msg}") do
+          {:cont, _, i3} -> {{:val, {:bool, false}}, env, i3}
+          {:unwind, u, _, i3} -> {{:unwind, u}, env, i3}
+        end
 
       _ ->
         {{:val, :null}, env, i2}

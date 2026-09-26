@@ -5,6 +5,7 @@ defmodule PhpBeam.Builtin.FileFns do
   """
 
   alias PhpBeam.{PArray, Value}
+  alias PhpBeam.Eval.Error
 
   @file_append 8
 
@@ -70,11 +71,14 @@ defmodule PhpBeam.Builtin.FileFns do
             {:ok, {:string, s}, i}
 
           {:error, _} ->
-            {:ok, {:bool, false},
-             warn(
-               i,
-               "file_get_contents(#{path}): Failed to open stream: No such file or directory"
-             )}
+            case Error.warn(
+                   Error.stub_env(),
+                   i,
+                   "file_get_contents(#{path}): Failed to open stream: No such file or directory"
+                 ) do
+              {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+              {:unwind, u, _, i2} -> {:unwind, u, i2}
+            end
         end
 
       _ ->
@@ -112,11 +116,14 @@ defmodule PhpBeam.Builtin.FileFns do
             {:ok, {:int, byte_size(contents)}, i}
 
           {:error, _} ->
-            {:ok, {:bool, false},
-             warn(
-               i,
-               "file_put_contents(#{path}): Failed to open stream: No such file or directory"
-             )}
+            case Error.warn(
+                   Error.stub_env(),
+                   i,
+                   "file_put_contents(#{path}): Failed to open stream: No such file or directory"
+                 ) do
+              {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+              {:unwind, u, _, i2} -> {:unwind, u, i2}
+            end
         end
 
       _ ->
@@ -143,8 +150,14 @@ defmodule PhpBeam.Builtin.FileFns do
 
   defp filesize_v([{:string, path} | _], i) do
     case File.stat(path) do
-      {:ok, %{size: sz}} -> {:ok, {:int, sz}, i}
-      {:error, _} -> {:ok, {:bool, false}, warn(i, "filesize(): stat failed for #{path}")}
+      {:ok, %{size: sz}} ->
+        {:ok, {:int, sz}, i}
+
+      {:error, _} ->
+        case Error.warn(Error.stub_env(), i, "filesize(): stat failed for #{path}") do
+          {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
     end
   end
 
@@ -179,8 +192,14 @@ defmodule PhpBeam.Builtin.FileFns do
 
   defp unlink_v([{:string, path} | _], i) do
     case File.rm(path) do
-      :ok -> {:ok, {:bool, true}, i}
-      {:error, _} -> {:ok, {:bool, false}, warn(i, "unlink(#{path}): No such file or directory")}
+      :ok ->
+        {:ok, {:bool, true}, i}
+
+      {:error, _} ->
+        case Error.warn(Error.stub_env(), i, "unlink(#{path}): No such file or directory") do
+          {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
     end
   end
 

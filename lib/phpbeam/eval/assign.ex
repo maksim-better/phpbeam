@@ -445,8 +445,10 @@ defmodule PhpBeam.Eval.Assign do
             {{:val, Eval.deref(v, interp)}, env, interp}
 
           :error ->
-            interp2 = Eval.warn(env, interp, "Undefined array key \"#{plain_key(key)}\"")
-            {{:val, :null}, env, interp2}
+            case Eval.Error.warn(env, interp, "Undefined array key \"#{plain_key(key)}\"") do
+              {:cont, _, i2} -> {{:val, :null}, env, i2}
+              {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
+            end
         end
 
       {:string, s} ->
@@ -457,28 +459,32 @@ defmodule PhpBeam.Eval.Assign do
             if i2 >= 0 and i2 < byte_size(s) do
               {{:val, {:string, binary_part(s, i2, 1)}}, env, interp}
             else
-              interp2 = Eval.warn(env, interp, "Uninitialized string offset")
-              {{:val, {:string, ""}}, env, interp2}
+              case Eval.Error.warn(env, interp, "Uninitialized string offset") do
+                {:cont, _, i2} -> {{:val, {:string, ""}}, env, i2}
+                {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
+              end
             end
 
           _ ->
-            interp2 = Eval.warn(env, interp, "Illegal string offset")
-            {{:val, {:string, ""}}, env, interp2}
+            case Eval.Error.warn(env, interp, "Illegal string offset") do
+              {:cont, _, i2} -> {{:val, {:string, ""}}, env, i2}
+              {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
+            end
         end
 
       :null ->
-        interp2 = Eval.warn(env, interp, "Trying to access array offset on value of type null")
-        {{:val, :null}, env, interp2}
+        case Eval.Error.warn(env, interp, "Trying to access array offset on value of type null") do
+          {:cont, _, i2} -> {{:val, :null}, env, i2}
+          {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
+        end
 
       _ ->
-        interp2 =
-          Eval.warn(
-            env,
-            interp,
-            "Trying to access array offset on value of type #{Value.gettype(container)}"
-          )
+        msg = "Trying to access array offset on value of type #{Value.gettype(container)}"
 
-        {{:val, :null}, env, interp2}
+        case Eval.Error.warn(env, interp, msg) do
+          {:cont, _, i2} -> {{:val, :null}, env, i2}
+          {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
+        end
     end
   end
 
