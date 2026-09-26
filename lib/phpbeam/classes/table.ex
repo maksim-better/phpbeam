@@ -7,7 +7,7 @@ defmodule PhpBeam.Classes.Table do
   keep declaration order for construction and var_dump output.
   """
 
-  alias PhpBeam.{Eval, PArray}
+  alias PhpBeam.{Eval, Interp, PArray}
 
   defstruct name: "",
             kind: :class,
@@ -91,6 +91,7 @@ defmodule PhpBeam.Classes.Table do
         case apply_traits(class, uses, interp) do
           {:ok, class2} ->
             interp2 = %{interp | classes: Map.put(interp.classes, key, class2)}
+            interp2 = warn_magic_methods(class2, interp2)
 
             case link_checks(class2, key, interp2) do
               :ok -> {:ok, interp2}
@@ -517,7 +518,10 @@ defmodule PhpBeam.Classes.Table do
   defp link_checks(class, key, interp) do
     chain = parent_chain(interp, class.parent)
 
-    with :ok <- check_prop_overrides(class, chain, interp),
+    with :ok <- check_method_modifiers(class),
+         :ok <- check_interface_access(class),
+         :ok <- check_this_param(class),
+         :ok <- check_prop_overrides(class, chain, interp),
          :ok <- check_method_overrides(class, chain, interp),
          :ok <- check_abstract_methods(class, key, chain, interp),
          :ok <- check_readonly_props(class) do
@@ -529,6 +533,73 @@ defmodule PhpBeam.Classes.Table do
       {:error, _msg, _line} = err -> err
       {:error, msg} -> {:error, msg}
     end
+  end
+
+  # zend compile fatals: abstract+final / abstract+static modifiers, and
+  # $this as parameter name (interface methods are implicitly abstract)
+  defp check_method_modifiers(class) do
+    Enum.find_value(class.methods, fn {_k, m} ->
+      abstract? = m.abstract? or class.kind == :interface
+
+      cond do
+        abstract? and m.final? ->
+          {:error, "Cannot use the final modifier on an abstract method", m.line}
+
+        m.static? and m.name == "__construct" ->
+          {:error, "Constructor #{class.name}::__construct() cannot be static", m.line}
+
+        true ->
+          nil
+      end
+    end) || :ok
+  end
+
+  defp check_interface_access(class) do
+    if class.kind == :interface do
+      Enum.find_value(class.methods, fn {_k, m} ->
+        if m.visibility != :public,
+          do:
+            {:error, "Access type for interface method #{class.name}::#{m.name}() must be public",
+             m.line},
+          else: nil
+      end) || :ok
+    else
+      :ok
+    end
+  end
+
+  defp check_this_param(class) do
+    Enum.find_value(class.methods, fn {_k, m} ->
+      if Enum.any?(m.params || [], &match?({:param, "this", _, _, _, _}, &1)),
+        do: {:error, "Cannot use $this as parameter", m.line},
+        else: nil
+    end) || :ok
+  end
+
+  # magic-method visibility warnings (php emits these at class compile and
+  # CONTINUES); register threads the warned interp through
+  defp warn_magic_methods(class, interp) do
+    needs_public = ~w(__call __get __set __isset __unset __callstatic)
+
+    Enum.reduce(class.methods, interp, fn {_k, m}, acc ->
+      lname = String.downcase(m.name)
+
+      acc =
+        if lname in needs_public and m.visibility != :public do
+          Interp.warn(
+            acc,
+            "The magic method #{class.name}::#{m.name}() must have public visibility"
+          )
+        else
+          acc
+        end
+
+      if lname == "__callstatic" and not m.static? do
+        Interp.warn(acc, "The magic method #{class.name}::#{m.name}() must be static")
+      else
+        acc
+      end
+    end)
   end
 
   # php compile-time readonly-prop constraints (both render as bare Fatal
