@@ -72,7 +72,14 @@ defmodule PhpBeam.Builtin.RuntimeFns do
           fun: fn vals, env, interp ->
             case vals do
               [cb | rest] ->
-                PhpBeam.Eval.call_cb(cb, rest, env, interp)
+                # php names the caller in TypeError callback messages and
+                # shows it in traces — keep a frame for the duration
+                it2 = PhpBeam.Interp.push_frame(interp, "call_user_func", vals)
+
+                case PhpBeam.Eval.call_cb(cb, rest, env, it2) do
+                  {{:val, _v} = r, e, i3} -> {r, e, PhpBeam.Interp.pop_frame(i3)}
+                  other -> other
+                end
 
               _ ->
                 {{:unwind, {:fatal, "Call to undefined function call_user_func()"}}, env, interp}
@@ -88,7 +95,12 @@ defmodule PhpBeam.Builtin.RuntimeFns do
           fun: fn vals, env, interp ->
             case vals do
               [cb, {:array, arr}] ->
-                PhpBeam.Eval.call_cb(cb, PArray.values(arr), env, interp)
+                it2 = PhpBeam.Interp.push_frame(interp, "call_user_func_array", vals)
+
+                case PhpBeam.Eval.call_cb(cb, PArray.values(arr), env, it2) do
+                  {{:val, _v} = r, e, i3} -> {r, e, PhpBeam.Interp.pop_frame(i3)}
+                  other -> other
+                end
 
               _ ->
                 {{:unwind, {:fatal, "Call to undefined function call_user_func_array()"}}, env,

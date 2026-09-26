@@ -2119,6 +2119,10 @@ defmodule PhpBeam.Eval do
       {{:val, {:string, name}}, _e, i} ->
         {:ok, resolve_class_string(name, i)}
 
+      # $obj::CONST / $obj::method() — the object's class is the target
+      {{:val, {:object, id}}, _e, i} ->
+        {:ok, (get_object(i, {:object, id}) || %{class: "stdclass"}).class}
+
       _ ->
         {:error, "class name must be a string"}
     end

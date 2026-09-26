@@ -95,6 +95,7 @@ defmodule PhpBeam.Eval.ConstEval do
       "__FILE__" -> {:ok, {:string, current}}
       "__DIR__" -> {:ok, {:string, Path.dirname(current)}}
       "__FUNCTION__" -> {:ok, {:string, env.function || ""}}
+      "__LINE__" -> {:ok, {:int, interp.cur_line}}
       "__METHOD__" -> {:ok, {:string, method_name(env, interp)}}
       "__CLASS__" -> {:ok, {:string, class_name_of(env, interp)}}
       "__NAMESPACE__" -> {:ok, {:string, Enum.join(interp.ns, "\\")}}

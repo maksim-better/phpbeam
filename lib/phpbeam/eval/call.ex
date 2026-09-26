@@ -235,11 +235,30 @@ defmodule PhpBeam.Eval.Call do
   def call_cb({:array, arr}, call_args, env, interp) do
     case PArray.values(arr) do
       [{:object, _} = obj_ref, {:string, m}] ->
-        eval(
-          {:method_call, {:lit_val, obj_ref}, {:lit_name, m}, wrap_args(call_args), false},
-          env,
-          interp
-        )
+        # php: unreachable-via-call_user_func* callbacks raise a catchable
+        # TypeError naming the caller; direct $cb() keeps the plain Error
+        obj = get_object(interp, obj_ref)
+        meth = PhpBeam.Classes.find_method(interp, obj.class, m)
+        caller = call_cb_caller(interp)
+
+        if (meth && meth.visibility != :public) and
+             caller in ~w(call_user_func call_user_func_array) and
+             not cb_scope_ok?(env.scope_class, meth, obj.class, interp) do
+          native_throw(
+            "TypeError",
+            "#{caller}(): Argument #1 ($callback) must be a valid callback, cannot access " <>
+              "#{meth.visibility} method #{obj_display(interp, obj.class)}::#{meth.name}()",
+            env,
+            interp,
+            "#{caller}(Array)"
+          )
+        else
+          eval(
+            {:method_call, {:lit_val, obj_ref}, {:lit_name, m}, wrap_args(call_args), false},
+            env,
+            interp
+          )
+        end
 
       [{:string, c}, {:string, m}] ->
         eval(
@@ -1169,5 +1188,28 @@ defmodule PhpBeam.Eval.Call do
     # materialize eagerly: catch bindings and get_class() expect a real object
     {obj_ref, interp3} = materialize_native({:native_error, class, msg}, interp2)
     {{:unwind, {:php_throw, obj_ref}}, env, interp3}
+  end
+
+  # frame display names carry rendered args — the bare name is before "("
+  defp call_cb_caller(%{call_stack: [%{func: f} | _]}) when is_binary(f),
+    do: f |> String.split("(", parts: 2) |> hd() |> String.trim_trailing("(")
+
+  defp call_cb_caller(_), do: nil
+
+  defp cb_scope_ok?(nil, _meth, _cls, _interp), do: false
+
+  defp cb_scope_ok?(scope, meth, cls, interp) do
+    case meth.visibility do
+      :public -> true
+      :private -> scope == meth.class
+      :protected -> PhpBeam.Classes.is_a?(interp, scope, meth.class || cls)
+    end
+  end
+
+  defp obj_display(interp, key) do
+    case PhpBeam.Classes.get_class(interp, key) do
+      %{name: n} -> n
+      _ -> key
+    end
   end
 end
