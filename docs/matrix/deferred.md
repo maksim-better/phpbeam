@@ -23,6 +23,11 @@
 - [ ] lang/028（析构次序）、bug21600（引用赋值 Notice）、serialize_001、autoload_012/021
 - [ ] 返回引用真语义（数组共享）、default+endswitch 残角、invalid_octal/71897 措辞
 
+## B3 顺延（2026-09-26）
+
+- [ ] **array_uintersect_assoc 键-值联合匹配的 php 精确语义**：php 对 [0=>1,1=>2]∩[9,2] 保留 1=>2（键等值 + 回调值匹配的组合判定里有 slot 语义）；我们简单实现返回空——回调在同一 interp 快照下重评测（inline 箭头函数）路径疑有 stale-env，需查 call_cb_raw 的 AST 闭包重评测
+- [ ] array_multisort 完整语法（多列联动排序 + SORT_ASC/DESC/SORT_NUMERIC/STRING 标志位 + 多数组引用写回）；V1 只排序首数组并重编号
+
 ## B2 顺延（2026-09-26）
 
 - [ ] **mb_ereg\* 全家族 11 函数**（mb_ereg/eregi/ereg_replace/eregi_replace/ereg_replace_callback/split/match/search\* 7 个/regex_encoding/regex_set_options）——多字节正则引擎（Oniguruma 语义），可先桥 :re + /u 的 UTF-8 模式（PCRE UTF 模式与 Oniguruma 边缘语义差异需差分护住）
