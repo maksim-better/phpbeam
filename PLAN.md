@@ -38,7 +38,7 @@
 ### PHASE B：T1 纯逻辑扩展全量（快赢块，每模块：php-src 签名对照 → 实现 → 纳入 ext/*/tests → 门禁）
 
 - [x] **B1 date 全量（2026-09-26 完成，`7bf75e8`+`6f19f0a`）**：`DtZone` TZif v2 真 DST 转换表 + `Dt` 引擎（解析语法含溢出滚动/@epoch 偏移区/月名形态；33 说明符 format 矩阵 20 输入逐字节；相对语法 21/21；add_months/diff/createFromFormat）；DateTime/Immutable/Zone/Interval/Period 五类重建（ISO 串静默错值根除；Immutable 新注册实例；diff 属性播种+%R%a；T 位定 M 义）；date()/gmdate()/strtotime()/mktime 族（溢出滚动）/checkdate/date_create 族/timezone_open 真例/date() 去遮蔽；差分 32 + d1-d4 探针全同；顺延 deferred.md：DatePeriod foreach（find_prop 整数键）/createFromFormat 全说明符/getLastErrors 明细；phpt 356 无回归
-- [ ] B2 mbstring 57 + ctype 11 + iconv 10（78 纯函数，Erlang unicode 底座）
+- [x] **B2 mbstring+ctype+iconv（2026-09-26 完成，`ed36fe8`）**：新域模块 `MbFns` 注册 59 函数——ctype 11/11（ASCII 类 + 整型码点语义 + Deprecated 精确措辞）；iconv 10/10（UTF-8/latin1/cp1252/ASCII 转换、//IGNORE、//TRANSLIT=NFD 剥离、MIME B64+Q 编解码 76 列折叠、set_encoding=php8.4 静默 false）；mbstring 38/57（码点族、strcut 边界向下取整、宽度族东亚宽表、convert_case 真常量 UPPER=0、str_pad 右侧新鲜填充循环、list_encodings 真实序、output_handler 带 headers-sent 警告、http_input=false 全探针对齐）；差分 33 全同；825 测试 0 败；phpt 356 无回归；**顺延**：mb_ereg\* 11（Oniguruma）、convert_kana/send_mail/convert_variables、TRANSLIT 精确表、mb_parse_str ho 通道
 - [ ] B3 standard 数组族 ~40（uintersect/udiff 族、array_multisort、shuffle、array_rand、array_find…）+ 杂项（ip2long/putenv/getopt/sleep 族/forward_static_call…）
 - [ ] B4 Reflection 全量（类缺 18：Function/Parameter/Property/UnionType/Attribute/Extension…）——原 L3，Table meta API 地基已落
 - [ ] B5 SPL 类族 16（ArrayObject/ArrayIterator/堆栈队列堆/FileInfo/ObjectStorage）——Laravel collections 底座
