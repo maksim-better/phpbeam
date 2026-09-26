@@ -639,6 +639,19 @@ defmodule PhpBeam.Eval do
       {:new, _, _} ->
         {{:unwind, {:fatal, "cannot take reference of new expression"}}, env, interp}
 
+      # $a =& f() — php form for by-ref function returns; object results share
+      # their handle naturally, value results approximate into a fresh cell
+      {:call, _, _} = call ->
+        case eval(call, env, interp) do
+          {{:val, cur}, _, i2} ->
+            {id, i3} = new_ref(cur, i2)
+            {env2, i4} = assign(target, {:ref, id}, env, i3)
+            {{:val, deref({:ref, id}, i4)}, env2, i4}
+
+          {{:unwind, _} = u, env2, i2} ->
+            {u, env2, i2}
+        end
+
       _ ->
         {{:unwind, {:fatal, "cannot take reference of this expression"}}, env, interp}
     end

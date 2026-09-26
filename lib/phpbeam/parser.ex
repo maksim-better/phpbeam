@@ -1011,13 +1011,25 @@ defmodule PhpBeam.Parser do
 
   defp switch_stmt([{_, _, "switch"} | rest]) do
     {subj, rest2} = paren_expr(rest)
-    rest3 = expect_op(rest2, "{")
-    {cases, rest4} = switch_cases(rest3, [])
-    rest5 = expect_op(rest4, "}")
-    {{:switch, subj, cases}, rest5}
+
+    if at_op?(rest2, ":") do
+      # alternative syntax: switch (...): ... endswitch;
+      {cases, rest3} = switch_cases(tl(rest2), [], true)
+      {_, rest4} = take_name(rest3, "endswitch")
+      {{:switch, subj, cases}, expect_semi(rest4)}
+    else
+      rest3 = expect_op(rest2, "{")
+      {cases, rest4} = switch_cases(rest3, [])
+      rest5 = expect_op(rest4, "}")
+      {{:switch, subj, cases}, rest5}
+    end
   end
 
-  defp switch_cases(ts, acc) do
+  # alt_syntax? tracks switch (...): form — the last case's statements must
+  # stop at endswitch (statement parser would otherwise eat it as a name)
+  defp switch_cases(ts, acc, alt? \\ false)
+
+  defp switch_cases(ts, acc, alt?) do
     cond do
       at_op?(ts, "}") ->
         {Enum.reverse(acc), ts}
@@ -1026,14 +1038,16 @@ defmodule PhpBeam.Parser do
         {_, rest} = take_name(ts, "case")
         {vals, rest2} = case_values(rest, [])
         rest3 = colon_or_semi(rest2)
-        {:stop, stmts, rest4} = statements_until(rest3, ["case", "default"], [])
-        switch_cases(rest4, [{vals, stmts} | acc])
+        stops = if alt?, do: ["case", "default", "endswitch"], else: ["case", "default"]
+        {:stop, stmts, rest4} = statements_until(rest3, stops, [])
+        switch_cases(rest4, [{vals, stmts} | acc], alt?)
 
       at_name?(ts, "default") ->
         {_, rest} = take_name(ts, "default")
         rest2 = colon_or_semi(rest)
-        {:stop, stmts, rest3} = statements_until(rest2, ["case", "default"], [])
-        switch_cases(rest3, [{:default, stmts} | acc])
+        stops = if alt?, do: ["case", "default", "endswitch"], else: ["case", "default"]
+        {:stop, stmts, rest3} = statements_until(rest2, stops, [])
+        switch_cases(rest3, [{:default, stmts} | acc], alt?)
 
       true ->
         raise(ParseError, message: "unexpected token in switch body", line: peek_line(ts))
@@ -1302,6 +1316,9 @@ defmodule PhpBeam.Parser do
   # `function` at statement level: definition when a name follows, closure otherwise
   defp maybe_func_def([{_, _, "function"} | _] = ts) do
     case tl(ts) do
+      # `function &name()` — return-by-ref declaration (approximated as
+      # by-value until ref-returns land)
+      [{:op, _, "&"}, {:name, _, _} | _] -> func_def(tl(tl(ts)))
       [{:name, _, _} | _] -> func_def(tl(ts))
       _ -> expr_statement(ts)
     end
