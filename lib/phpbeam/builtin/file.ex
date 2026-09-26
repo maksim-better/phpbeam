@@ -66,18 +66,24 @@ defmodule PhpBeam.Builtin.FileFns do
   defp file_get_contents(vals, i) do
     case vals do
       [{:string, path} | _] ->
-        case File.read(path) do
-          {:ok, s} ->
+        case read_wrapper_uri(path, i) do
+          {:ok, s} when is_binary(s) ->
             {:ok, {:string, s}, i}
 
-          {:error, _} ->
-            case Error.warn(
-                   Error.stub_env(),
-                   i,
-                   "file_get_contents(#{path}): Failed to open stream: No such file or directory"
-                 ) do
-              {:cont, _, i2} -> {:ok, {:bool, false}, i2}
-              {:unwind, u, _, i2} -> {:unwind, u, i2}
+          :error ->
+            case File.read(path) do
+              {:ok, s} ->
+                {:ok, {:string, s}, i}
+
+              {:error, _} ->
+                case Error.warn(
+                       Error.stub_env(),
+                       i,
+                       "file_get_contents(#{path}): Failed to open stream: No such file or directory"
+                     ) do
+                  {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+                  {:unwind, u, _, i2} -> {:unwind, u, i2}
+                end
             end
         end
 
@@ -86,48 +92,115 @@ defmodule PhpBeam.Builtin.FileFns do
     end
   end
 
+  # wrapper dispatch for full-read builtins; :error falls back to the
+  # filesystem arm (which renders php's warning)
+  defp read_wrapper_uri(path, i) do
+    case PhpBeam.StreamWrapper.parse(path) do
+      {:data, payload} -> {:ok, payload}
+      {:memory, _} -> {:ok, ""}
+      {:input} -> {:ok, input_body(i)}
+      {:filter, rchain, _wchain, inner} -> read_filtered(rchain, inner, i)
+      _ -> :error
+    end
+  end
+
+  defp read_filtered(rchain, inner_uri, i) do
+    case read_wrapper_uri(inner_uri, i) do
+      {:ok, data} -> {:ok, PhpBeam.StreamWrapper.apply_chain(data, rchain)}
+      :error -> :error
+    end
+  end
+
+  defp input_body(i) do
+    case Map.get(i.globals, "php_input_body") do
+      {:string, b} -> b
+      _ -> ""
+    end
+  end
+
+  # php://output rides ob; php://stdout BYPASSES it (write_direct);
+  # php://memory/data write to a fresh discarded stream — php still reports
+  # the byte count
+  defp write_wrapper_uri(path) do
+    case PhpBeam.StreamWrapper.parse(path) do
+      {:output} -> :written
+      {:memory, _} -> :discarded
+      {:std, :stdout} -> :direct
+      {:std, :stderr} -> :stderr
+      {:data, _} -> {:ok, :discarded}
+      {:filter, _r, _w, _inner} -> :discarded
+      _ -> :fs
+    end
+  end
+
+  defp put_contents_str({:array, arr}),
+    do: arr |> PArray.values() |> Enum.map_join(&Value.cast_string_unsafe/1)
+
+  defp put_contents_str(other), do: Value.cast_string_unsafe(other)
+
+  defp apply_wrapper_write(path, data, i) do
+    contents = put_contents_str(data)
+
+    case write_wrapper_uri(path) do
+      :written -> PhpBeam.Interp.write(i, contents)
+      :direct -> PhpBeam.Interp.write_direct(i, contents)
+      :stderr -> IO.write(:standard_error, contents)
+      _ -> i
+    end
+  end
+
   defp file_put_contents(vals, i) do
     case vals do
       [{:string, path}, data | rest] ->
-        append? =
-          case rest do
-            [{:int, flags} | _] -> Bitwise.band(flags, @file_append) != 0
-            _ -> false
-          end
+        case write_wrapper_uri(path) do
+          kind when kind in [:written, :direct, :discarded, :stderr] ->
+            {:ok, {:int, byte_size(put_contents_str(data))}, apply_wrapper_write(path, data, i)}
 
-        contents =
-          case data do
-            {:array, arr} ->
-              arr |> PArray.values() |> Enum.map_join(&Value.cast_string_unsafe/1)
-
-            other ->
-              Value.cast_string_unsafe(other)
-          end
-
-        result =
-          if append? and File.exists?(path) do
-            File.write(path, contents, [:append])
-          else
-            File.write(path, contents)
-          end
-
-        case result do
-          :ok ->
-            {:ok, {:int, byte_size(contents)}, i}
-
-          {:error, _} ->
-            case Error.warn(
-                   Error.stub_env(),
-                   i,
-                   "file_put_contents(#{path}): Failed to open stream: No such file or directory"
-                 ) do
-              {:cont, _, i2} -> {:ok, {:bool, false}, i2}
-              {:unwind, u, _, i2} -> {:unwind, u, i2}
-            end
+          :fs ->
+            file_put_contents_fs(path, data, rest, i)
         end
 
       _ ->
         {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp file_put_contents_fs(path, data, rest, i) do
+    append? =
+      case rest do
+        [{:int, flags} | _] -> Bitwise.band(flags, @file_append) != 0
+        _ -> false
+      end
+
+    contents =
+      case data do
+        {:array, arr} ->
+          arr |> PArray.values() |> Enum.map_join(&Value.cast_string_unsafe/1)
+
+        other ->
+          Value.cast_string_unsafe(other)
+      end
+
+    result =
+      if append? and File.exists?(path) do
+        File.write(path, contents, [:append])
+      else
+        File.write(path, contents)
+      end
+
+    case result do
+      :ok ->
+        {:ok, {:int, byte_size(contents)}, i}
+
+      {:error, _} ->
+        case Error.warn(
+               Error.stub_env(),
+               i,
+               "file_put_contents(#{path}): Failed to open stream: No such file or directory"
+             ) do
+          {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
     end
   end
 

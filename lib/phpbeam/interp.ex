@@ -402,6 +402,12 @@ defmodule PhpBeam.Interp do
   # ───────────────────────── output / warnings ─────────────────────────
 
   # writes land in the innermost open output buffer when ob_start is active
+  # php://stdout bypasses output buffering (probed: appears BEFORE ob
+  # content is flushed) — always append to the real out list
+  def write_direct(interp, data) when is_binary(data) do
+    %{interp | out: [data | interp.out]}
+  end
+
   def write(interp, data) when is_binary(data) do
     interp =
       if interp.output_origin == nil and data != "" do
@@ -682,13 +688,23 @@ defmodule PhpBeam.Interp do
 
   # ───────────────────────── stream resources ─────────────────────────
 
+  # fixed-id variant (the default stream context claims slot 3)
+  def open_resource_at(interp, id, res),
+    do: {{:resource, id}, %{interp | resources: Map.put(interp.resources, id, res)}}
+
   def open_resource(interp, res) do
     id = interp.next_res
     {{:resource, id}, %{interp | resources: Map.put(interp.resources, id, res), next_res: id + 1}}
   end
 
   def get_resource(interp, {:resource, id}), do: Map.get(interp.resources, id)
+
+  # internal callers (filter layers) hold the bare registry id
+  def get_resource(interp, id) when is_integer(id), do: Map.get(interp.resources, id)
   def get_resource(_interp, _), do: nil
+
+  def put_resource(interp, id, res) when is_integer(id),
+    do: %{interp | resources: Map.put(interp.resources, id, res)}
 
   def put_resource(interp, {:resource, id}, res),
     do: %{interp | resources: Map.put(interp.resources, id, res)}
