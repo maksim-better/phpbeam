@@ -192,7 +192,18 @@ defmodule PhpBeam.Render do
     body =
       Enum.map_join(PArray.to_pairs(arr), ",\n", fn {k, v} ->
         key = if is_integer(k), do: Integer.to_string(k), else: "'#{escape_sq(k)}'"
-        "#{pad}#{key} => " <> var_export(deref(v, interp), interp, ind + 1)
+        v2 = deref(v, interp)
+
+        # php breaks the line before a nested array: 'k' => \n  array (...)
+        # with the array paren at the key's own indent column
+        val =
+          if match?({:array, _}, v2) do
+            "\n" <> pad <> var_export(v2, interp, ind + 1)
+          else
+            var_export(v2, interp, ind + 1)
+          end
+
+        "#{pad}#{key} => " <> val
       end)
 
     if body == "" do

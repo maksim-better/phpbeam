@@ -26,10 +26,36 @@ defmodule PhpBeam.HttpTest do
     """)
 
     File.write!(@docroot <> "/sub/index.php", ~S(<?php echo "sub-index";))
-    File.write!(@docroot <> "/page.html", "<html><body>static</body></html>")
 
-    redirect = "<?php\nhttp_response_code(302);\nheader(\"Location: /landing\");\n"
-    File.write!(@docroot <> "/redirect.php", redirect)
+    # A4 fixtures: nested POST dumps, multipart uploads (tmp names
+    # normalized in-script), chunked + raw input echo
+    nest =
+      "<?php\n" <>
+        "echo \"post=\"; var_export($_POST); echo \"\\n\";\n" <>
+        "echo \"input_len=\", strlen(file_get_contents(\"php://input\")), \"\\n\";\n"
+
+    File.write!(@docroot <> "/nest.php", nest)
+
+    up =
+      "<?php\n" <>
+        "function __norm($a) {\n" <>
+        "  foreach ($a as $k => $v) {\n" <>
+        "    if ($k === \"tmp_name\") { $a[$k] = is_array($v) ? array_map(function ($s) { return preg_replace(\"#/php[^/]*$#\", \"/TMP\", $s); }, $v) : preg_replace(\"#/php[^/]*$#\", \"/TMP\", $v); }\n" <>
+        "    elseif (is_array($v)) { $a[$k] = __norm($v); }\n" <>
+        "  }\n" <>
+        "  return $a;\n" <>
+        "}\n" <>
+        "$__F = __norm($_FILES);\n" <>
+        "echo \"post=\"; var_export($_POST); echo \"\\n\";\n" <>
+        "echo \"files=\"; var_export($__F); echo \"\\n\";\n" <>
+        "$k = array_key_first($__F);\n" <>
+        "if ($k && isset($__F[$k][\"tmp_name\"])) {\n" <>
+        "  $t = is_array($_FILES[$k][\"tmp_name\"]) ? $_FILES[$k][\"tmp_name\"][0] : $_FILES[$k][\"tmp_name\"];\n" <>
+        "  echo \"is_up=\", var_export(is_uploaded_file($t), true), \" content=\", file_get_contents($t), \"\\n\";\n" <>
+        "}\n"
+
+    File.write!(@docroot <> "/up.php", up)
+    File.write!(@docroot <> "/a.txt", "plain text file")
 
     beam = spawn_serve()
     php = spawn_php_s()
@@ -127,6 +153,77 @@ defmodule PhpBeam.HttpTest do
           String.starts_with?(&1, ~w(Host: Date: Connection: Content-Length: X-Powered-By:)))
     )
     |> Enum.join("\n")
+  end
+
+  # raw curl args (multipart/chunked/keep-alive can't express via curl/4)
+  defp raw(port, extra) do
+    args = Enum.map(extra, &String.replace(&1, "URL", "http://127.0.0.1:#{port}"))
+    {out, 0} = System.cmd("curl", ["-s", "--max-time", "10" | args])
+    normalize(port, out)
+  end
+
+  @tag :http
+  test "php -S parity: nested POST keys (a[b][] c[d][] dots/spaces)" do
+    q = "c[d][]=z&tags[]=x&tags[]=y&a.b c=1"
+
+    extra = ["-d", q, "URL/nest.php"]
+    assert raw(@pport, extra) == raw(@bport, extra)
+  end
+
+  @tag :http
+  test "php -S parity: multipart single file + field" do
+    extra = ["-F", "name=Gu", "-F", "f=@#{@docroot}/a.txt", "URL/up.php"]
+    assert raw(@pport, extra) == raw(@bport, extra)
+  end
+
+  @tag :http
+  test "php -S parity: multipart multi upload (up[]) + nested fields" do
+    extra = [
+      "-F",
+      "tags[]=x",
+      "-F",
+      "tags[]=y",
+      "-F",
+      "up[]=@#{@docroot}/a.txt",
+      "-F",
+      "up[]=@#{@docroot}/a.txt;type=text/x-custom",
+      "URL/up.php"
+    ]
+
+    assert raw(@pport, extra) == raw(@bport, extra)
+  end
+
+  @tag :http
+  test "php -S parity: chunked body" do
+    extra = [
+      "-H",
+      "Transfer-Encoding: chunked",
+      "--data-binary",
+      "hello chunked body",
+      "URL/nest.php"
+    ]
+
+    assert raw(@pport, extra) == raw(@bport, extra)
+  end
+
+  @tag :http
+  test "php -S parity: keep-alive two requests one connection" do
+    extra = ["URL/nest.php?r=1", "-d", "a=1", "URL/nest.php?r=2", "-d", "b=2"]
+    assert raw(@pport, extra) == raw(@bport, extra)
+  end
+
+  @tag :http
+  test "php -S parity: HTTP/1.0 request" do
+    extra = [
+      "--http1.0",
+      "-d",
+      "a=1",
+      "-w",
+      "|proto=%{http_version} code=%{response_code}",
+      "URL/nest.php"
+    ]
+
+    assert raw(@pport, extra) == raw(@bport, extra)
   end
 
   @cases [

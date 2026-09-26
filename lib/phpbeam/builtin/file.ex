@@ -13,6 +13,8 @@ defmodule PhpBeam.Builtin.FileFns do
     entries = %{
       "stream_resolve_include_path" => &resolve_include_path/2,
       "file_get_contents" => &file_get_contents/2,
+      "is_uploaded_file" => &is_uploaded_file_v/2,
+      "move_uploaded_file" => &move_uploaded_file_v/2,
       "file_put_contents" => &file_put_contents/2,
       "file_exists" => &file_exists/2,
       "is_file" => &is_file_v/2,
@@ -112,9 +114,51 @@ defmodule PhpBeam.Builtin.FileFns do
   end
 
   defp input_body(i) do
-    case Map.get(i.globals, "php_input_body") do
+    case Map.get(i.globals, "\0input_body") do
       {:string, b} -> b
       _ -> ""
+    end
+  end
+
+  # upload validation rides the request's tmp-file registry (\0uploaded_files)
+  defp is_uploaded_file_v(vals, i) do
+    case vals do
+      [{:string, path} | _] -> {:ok, {:bool, uploaded?(path, i)}, i}
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp uploaded?(path, i) do
+    case Map.get(i.globals, "\0uploaded_files") do
+      {:array, arr} ->
+        arr |> PhpBeam.PArray.values() |> Enum.any?(&match?({:string, ^path}, &1))
+
+      _ ->
+        false
+    end
+  end
+
+  defp move_uploaded_file_v(vals, i) do
+    case vals do
+      [{:string, from}, {:string, to} | _] ->
+        if uploaded?(from, i) and File.exists?(from) do
+          case File.cp(from, to) do
+            :ok -> {:ok, {:bool, true}, i}
+            _ -> {:ok, {:bool, false}, i}
+          end
+        else
+          case Error.warn(
+                 Error.stub_env(),
+                 i,
+                 "move_uploaded_file(): Argument #1 ($from) is not a valid upload"
+               ) do
+            {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+            {:unwind, u, _, i2} -> {:unwind, u, i2}
+          end
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
     end
   end
 

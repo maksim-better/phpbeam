@@ -78,6 +78,7 @@ defmodule PhpBeam.Builtin.ArrayFns do
 
     %{
       "usort" => ho.(:raw, &ho_impl_usort/3),
+      "array_walk_recursive" => ho.(:raw, &ho_impl_array_walk_recursive/3),
       "uasort" => ho.(:raw, &ho_impl_uasort/3),
       "uksort" => ho.(:raw, &ho_impl_uksort/3),
       "array_any" => ho.(:raw, &ho_impl_array_any/3),
@@ -842,6 +843,52 @@ defmodule PhpBeam.Builtin.ArrayFns do
   end
 
   # ───────────────────────── preg family ─────────────────────────
+
+  # php: callback runs on LEAVES only (arrays recurse); the by-ref value
+  # mutation contract is approximated by using the callback's RETURN value
+  # (V1 — the ref-cell passthrough lands with B3's by-ref callback work)
+  defp ho_impl_array_walk_recursive([arr_arg, cb_arg | rest], env, interp) do
+    {{:val, {:array, arr}}, _, i1} = PhpBeam.Eval.eval(arr_arg, env, interp)
+
+    extra =
+      case rest do
+        [extra_arg | _] ->
+          case PhpBeam.Eval.eval(extra_arg, env, i1) do
+            {{:val, v}, _, _} -> v
+            _ -> :null
+          end
+
+        _ ->
+          :null
+      end
+
+    walk = fn {k, v} -> {k, walk_leaf(v, k, cb_arg, extra, env, i1)} end
+    mapped = Enum.map(PArray.to_pairs(arr), walk)
+
+    {e2, i2} =
+      PhpBeam.Eval.assign(arr_arg, {:array, PArray.from_pairs(mapped)}, env, i1)
+
+    {{:val, {:bool, true}}, e2, i2}
+  end
+
+  defp walk_leaf({:array, inner}, _key, cb, extra, env, i) do
+    mapped =
+      Enum.map(PArray.to_pairs(inner), fn {k, v} -> {k, walk_leaf(v, k, cb, extra, env, i)} end)
+
+    {:array, PArray.from_pairs(mapped)}
+  end
+
+  defp walk_leaf(leaf, key, cb, extra, env, i) do
+    args = [leaf, key_to_val(key), extra]
+
+    case PhpBeam.Eval.call_cb(cb, args, env, i) do
+      {{:val, v}, _, _} -> v
+      _ -> leaf
+    end
+  end
+
+  defp key_to_val(k) when is_integer(k), do: {:int, k}
+  defp key_to_val(k) when is_binary(k), do: {:string, k}
 
   defp ho_impl_usort([arr_arg, cb_arg | _], env, interp) do
     {{:val, {:array, arr}}, _, i1} = PhpBeam.Eval.eval(arr_arg, env, interp)
