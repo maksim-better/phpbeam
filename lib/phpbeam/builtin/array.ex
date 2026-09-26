@@ -150,12 +150,18 @@ defmodule PhpBeam.Builtin.ArrayFns do
     {:ref_call, {:int, PArray.size(a2)}, [{:array, a2}], i}
   end
 
+  defp array_pop([:null | _], i), do: {:ref_call, :null, [:null], i}
+  defp array_pop([], i), do: {:ref_call, :null, [], i}
+
   defp array_pop([{:array, a} | _], i) do
     case PArray.pop(a) do
       {:ok, {_k, v}, a2} -> {:ref_call, v, [{:array, a2}], i}
       :error -> {:ref_call, :null, [{:array, a}], i}
     end
   end
+
+  defp array_shift([:null | _], i), do: {:ref_call, :null, [:null], i}
+  defp array_shift([], i), do: {:ref_call, :null, [], i}
 
   defp array_shift([{:array, a} | _], i) do
     case PArray.shift(a) do

@@ -413,10 +413,26 @@ defmodule PhpBeam.Interp do
     %{interp | call_stack: [frame | cs]}
   end
 
-  # frame with rendered arguments: php 8.4 traces show `g(10, 'x', Array)`
+  # frame with LAZY arguments: php 8.4 traces show `g(10, 'x', Array)`,
+  # but rendering on every call is pure waste — 99.99% of frames never
+  # reach a trace; expand at render time instead
   def push_frame(interp, name, arg_vals) do
-    push_frame(interp, "#{name}(#{render_frame_args(arg_vals, interp)})")
+    frame = %{
+      func: {:lazy_args, name, arg_vals},
+      file: current_file(interp),
+      line: interp.cur_line
+    }
+
+    %{interp | call_stack: [frame | interp.call_stack]}
   end
+
+  def frame_func(%{func: {:lazy_args, name, arg_vals}}, interp),
+    do: "#{name}(#{render_frame_args(arg_vals, interp)})"
+
+  def frame_func(%{func: f}, _interp) when is_binary(f), do: f
+
+  @doc "render a frame's function display (expands lazy args)"
+  def render_frame(f, interp), do: frame_func(f, interp)
 
   @doc "php 8.4 trace-argument rendering (also used by named-arg error frames)"
   def render_frame_args(arg_vals, interp) do
@@ -596,7 +612,7 @@ defmodule PhpBeam.Interp do
     frames =
       interp.call_stack
       |> Enum.with_index()
-      |> Enum.map(fn {f, i} -> "##{i} #{f.file}(#{f.line}): #{f.func}\n" end)
+      |> Enum.map(fn {f, i} -> "##{i} #{f.file}(#{f.line}): #{frame_func(f, interp)}\n" end)
 
     trace = frames ++ ["##{length(interp.call_stack)} {main}\n"]
 
@@ -625,6 +641,21 @@ defmodule PhpBeam.Interp do
   def exec_stmts([_ | _], env, interp, {:unwind, u}), do: {{:unwind, u}, env, interp}
 
   def exec_stmts([s | rest], env, interp, :ok) do
+    n =
+      case :erlang.get(:stmt_ctr) do
+        i when is_integer(i) -> i + 1
+        _ -> 1
+      end
+
+    :erlang.put(:stmt_ctr, n)
+
+    if rem(n, 100_000) == 0 do
+      IO.puts(
+        :stderr,
+        "TRACE #{current_file(interp)}:#{interp.cur_line} mem=#{div(elem(:erlang.process_info(self(), :memory), 1), 1_048_576)}MB out=#{length(interp.out)} objs=#{map_size(interp.objects)} fns=#{map_size(interp.functions)} cls=#{map_size(interp.classes)} inc=#{map_size(interp.included)}"
+      )
+    end
+
     case exec_stmt(s, env, interp) do
       {:ok, env2, interp2} ->
         exec_stmts(rest, env2, interp2, :ok)

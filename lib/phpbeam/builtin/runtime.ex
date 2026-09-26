@@ -453,7 +453,8 @@ defmodule PhpBeam.Builtin.RuntimeFns do
          PArray.from_pairs([
            {{:string, "file"}, {:string, f.file}},
            {{:string, "line"}, {:int, f.line}},
-           {{:string, "function"}, {:string, String.replace(f.func, ~r/\(.*\)/, "")}}
+           {{:string, "function"},
+            {:string, String.replace(PhpBeam.Interp.frame_func(f, i), ~r/\(.*\)/, "")}}
          ])}
       end)
 

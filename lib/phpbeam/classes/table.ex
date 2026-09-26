@@ -843,8 +843,14 @@ defmodule PhpBeam.Classes.Table do
 
     cond do
       pt_l in builtin_types or ct_l in builtin_types ->
-        # builtin spellings (int/integer, bool/boolean) normalize loosely
-        loose_builtin(pt_l) == loose_builtin(ct_l)
+        # builtin spellings (int/integer, bool/boolean) normalize loosely;
+        # the child may WIDEN (contravariance): callable -> ?callable is
+        # legal, narrowing is not
+        cond do
+          loose_builtin(pt_l) == loose_builtin(ct_l) -> true
+          ct_l == "mixed" -> true
+          true -> widen_ok?(pt_l, ct_l)
+        end
 
       true ->
         # class types resolve against their DECLARING class's aliases/ns —
@@ -903,6 +909,16 @@ defmodule PhpBeam.Classes.Table do
     end
   end
 
+  # pt (parent) "callable" vs ct (child) "?callable" — widening
+  defp widen_ok?("mixed", _ct), do: true
+
+  defp widen_ok?(pt, ct) do
+    case {pt, ct} do
+      {p, "?" <> p2} -> p == p2
+      _ -> false
+    end
+  end
+
   defp loose_builtin("integer"), do: "int"
   defp loose_builtin("boolean"), do: "bool"
   defp loose_builtin(b), do: b
@@ -935,11 +951,63 @@ defmodule PhpBeam.Classes.Table do
   def find_method(_interp, key, name) when is_nil(key) or is_nil(name), do: nil
 
   def find_method(interp, key, name) do
-    case find_up(interp, key, String.downcase(name), fn class ->
-           Map.fetch(class.methods, String.downcase(name))
-         end) do
-      {:ok, m} -> m
-      _ -> nil
+    # class maps are IMMUTABLE after registration, so a resolution cache
+    # never goes stale (positive AND negative entries; find_method misses
+    # are hot too — __call/__callStatic probes)
+    case mc_get(key, name) do
+      :miss ->
+        m =
+          case find_up(interp, key, String.downcase(name), fn class ->
+                 Map.fetch(class.methods, String.downcase(name))
+               end) do
+            {:ok, m} -> m
+            _ -> nil
+          end
+
+        mc_put(key, name, m)
+        m
+
+      cached ->
+        cached
+    end
+  end
+
+  @mc_table :phpbeam_method_cache
+
+  # ETS with graceful degradation: if the owning process died (generators!),
+  # fall through to the uncached path
+  defp mc_get(key, name) do
+    ensure_mc()
+
+    try do
+      :ets.lookup(@mc_table, {key, name})
+    rescue
+      _ -> :miss
+    else
+      [{_, v}] -> v
+      [] -> :miss
+    end
+  end
+
+  defp mc_put(key, name, v) do
+    try do
+      :ets.insert_new(@mc_table, {{key, name}, v})
+    rescue
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  defp ensure_mc do
+    if :ets.whereis(@mc_table) == :undefined do
+      try do
+        :ets.new(@mc_table, [:named, :public, :set, read_concurrency: true])
+      rescue
+        _ -> :ok
+      end
+    else
+      :ok
     end
   end
 
@@ -1442,47 +1510,18 @@ defmodule PhpBeam.Classes.Table do
               end
             end),
             native_fn("newInstance", fn obj, args, i ->
-              key = rc_state(obj) |> Map.get("key")
-              {{:object, _} = oref, i2} = Eval.make_instance(i, key)
-
-              case find_method(i2, key, "__construct") do
-                nil ->
-                  {:ok, {oref, obj}, i2}
-
-                m ->
-                  {{:val, _}, _, i3} =
-                    Eval.call_php_method(
-                      oref,
-                      m,
-                      Enum.map(args, &{:arg, {:lit_val, &1}, false, nil}),
-                      %Env{},
-                      i2
-                    )
-
-                  {:ok, {oref, obj}, i3}
-              end
+              rc_new_with_ctor(obj, rc_state(obj) |> Map.get("key"), args, i)
             end),
             native_fn("newInstanceArgs", fn obj, args, i ->
               key = rc_state(obj) |> Map.get("key")
-              vals = args |> Enum.at(0, {:array, PArray.new()}) |> PArray.values()
-              {{:object, _} = oref, i2} = Eval.make_instance(i, key)
 
-              case find_method(i2, key, "__construct") do
-                nil ->
-                  {:ok, {oref, obj}, i2}
+              vals =
+                case args |> Enum.at(0, {:array, PArray.new()}) do
+                  {:array, a} -> PArray.values(a)
+                  other -> [other]
+                end
 
-                m ->
-                  {{:val, _}, _, i3} =
-                    Eval.call_php_method(
-                      oref,
-                      m,
-                      Enum.map(vals, &{:arg, {:lit_val, &1}, false, nil}),
-                      %Env{},
-                      i2
-                    )
-
-                  {:ok, {oref, obj}, i3}
-              end
+              rc_new_with_ctor(obj, key, vals, i)
             end),
             native_fn("getMethods", fn obj, _args, i ->
               key = rc_state(obj) |> Map.get("key")
@@ -1839,6 +1878,41 @@ defmodule PhpBeam.Classes.Table do
       methods: %{},
       file: ""
     }
+  end
+
+  # shared newInstance path: run __construct under the DECLARING class's
+  # ns/uses (php binds names at compile time) — a bare %Env{} leaves ctor
+  # bodies unable to resolve their own file's use-aliases
+  defp rc_new_with_ctor(obj, key, vals, i) do
+    {{:object, _} = oref, i2} = Eval.make_instance(i, key)
+
+    case find_method(i2, key, "__construct") do
+      nil ->
+        {:ok, {oref, obj}, i2}
+
+      m ->
+        class = get_class(i2, key)
+
+        i3 =
+          %{
+            i2
+            | ns: (class && class.ns) || [],
+              uses: (class && class.uses) || %{normal: %{}, function: %{}, const: %{}}
+          }
+
+        env = %Env{function: "__construct", called_class: key, scope_class: key, this: oref}
+
+        {{:val, _}, _, i4} =
+          Eval.call_php_method(
+            oref,
+            m,
+            Enum.map(vals, &{:arg, {:lit_val, &1}, false, nil}),
+            env,
+            i3
+          )
+
+        {:ok, {oref, obj}, %{i4 | ns: i.ns, uses: i.uses}}
+    end
   end
 
   defp native_state(obj), do: Map.get(obj, :dt_state) || %{}

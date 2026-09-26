@@ -34,7 +34,8 @@ defmodule PhpBeam.Builtin.VarFns do
       "get_class" => &get_class/2,
       "get_object_vars" => &get_object_vars/2,
       "get_class_methods" => &get_class_methods/2,
-      "spl_object_id" => &spl_object_id/2
+      "spl_object_id" => &spl_object_id/2,
+      "spl_object_hash" => &spl_object_hash/2
     }
 
     Enum.reduce(entries, fns, fn {name, fun}, acc ->
@@ -178,9 +179,26 @@ defmodule PhpBeam.Builtin.VarFns do
 
   defp class_exists_v(_, i), do: {:ok, {:bool, false}, i}
 
-  defp interface_exists_v([{:string, name} | _], i) do
+  defp interface_exists_v([{:string, name} | rest], i) do
+    autoload? =
+      case rest do
+        [{:bool, false} | _] -> false
+        _ -> true
+      end
+
     key = PhpBeam.Eval.resolve_class_string(name, i)
-    {:ok, {:bool, match?(%{kind: :interface}, PhpBeam.Classes.get_class(i, key))}, i}
+
+    case PhpBeam.Classes.get_class(i, key) do
+      %{kind: :interface} ->
+        {:ok, {:bool, true}, i}
+
+      _ when autoload? ->
+        {_klass, i2} = PhpBeam.Eval.fetch_class(i, key, name)
+        {:ok, {:bool, match?(%{kind: :interface}, PhpBeam.Classes.get_class(i2, key))}, i2}
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
   end
 
   defp interface_exists_v(_, i), do: {:ok, {:bool, false}, i}
@@ -246,6 +264,17 @@ defmodule PhpBeam.Builtin.VarFns do
 
   # stub: always empty until method listing lands (php returns names)
   defp get_class_methods(_vals, i), do: {:ok, {:array, PhpBeam.PArray.new()}, i}
+
+  defp spl_object_hash(vals, i) do
+    case vals do
+      [{:object, id} | _] when is_integer(id) ->
+        hex = Integer.to_string(id, 16) |> String.pad_leading(16, "0")
+        {:ok, {:string, String.duplicate("0", 16) <> hex}, i}
+
+      _ ->
+        {:ok, {:string, String.duplicate("0", 32)}, i}
+    end
+  end
 
   defp spl_object_id(vals, i) do
     case vals do

@@ -811,11 +811,16 @@ defmodule PhpBeam.Builtin.MiscFns do
   defp callable?(_, _i), do: false
 
   defp is_a_v(vals, i) do
+    cls = down(s(vals, 1))
+
     case val(vals) do
       {:object, id} ->
         obj = Map.get(i.objects, id) || %{class: ""}
-        cls = down(s(vals, 1))
         {:ok, {:bool, down(obj.class) == cls or subclass?(obj.class, cls, i)}, i}
+
+      # runtime closures are Closure instances
+      {:closure, _, _, _, _, _, _, _} ->
+        {:ok, {:bool, cls == "closure"}, i}
 
       _ ->
         {:ok, {:bool, false}, i}

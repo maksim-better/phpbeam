@@ -443,7 +443,7 @@ defmodule PhpBeam.Eval do
               else:
                 scope_in_chain?(interp, scope, method.class || class_key) or
                   scope_in_chain?(interp, method.class || class_key, scope) or
-                  scope_in_chain?(interp, scope, class_key)
+                  scope_in_chain?(interp, scope, class_key || method.class)
 
           if visible,
             do: nil,
@@ -484,11 +484,14 @@ defmodule PhpBeam.Eval do
   end
 
   defp scope_in_chain?(_interp, nil, _target), do: false
+  defp scope_in_chain?(_interp, _key, nil), do: false
 
   defp scope_in_chain?(interp, key, target) do
     key == target or
-      (interp.classes[key] &&
-         scope_in_chain?(interp, interp.classes[key].parent, target))
+      case interp.classes[key] do
+        nil -> false
+        c -> scope_in_chain?(interp, c.parent, target)
+      end
   end
 
   # the display name keeps the source spelling (keys are lowercased)
@@ -930,6 +933,11 @@ defmodule PhpBeam.Eval do
       {{:object, _} = obj_ref, {:ok, tkey}} ->
         key = get_object(interp2, obj_ref).class
         {{:val, {:bool, PhpBeam.Classes.is_a?(interp2, key, tkey)}}, env2, interp2}
+
+      # runtime closures ARE Closure instances (the container's
+      # `instanceof Closure` checks on binding concretes)
+      {{:closure, _, _, _, _, _, _, _}, {:ok, tkey}} ->
+        {{:val, {:bool, PhpBeam.Classes.is_a?(interp2, "closure", tkey)}}, env2, interp2}
 
       {_, _} ->
         {{:val, {:bool, false}}, env2, interp2}
@@ -2107,7 +2115,11 @@ defmodule PhpBeam.Eval do
                   {{:val, _}, _, it2} ->
                     it2
 
-                  {{:unwind, _}, _, it2} ->
+                  {{:unwind, u2}, _, it2} ->
+                    if key =~ "console..kernel" do
+                      IO.puts(:stderr, "DBG-k-unwind: #{inspect(u2, printable_limit: 300)}")
+                    end
+
                     it2
                 end
 
