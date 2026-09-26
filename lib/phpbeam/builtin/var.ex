@@ -151,19 +151,28 @@ defmodule PhpBeam.Builtin.VarFns do
     end
   end
 
-  defp class_exists_v([{:string, name} | _], i) do
+  defp class_exists_v([{:string, name} | rest], i) do
+    autoload? =
+      case rest do
+        [{:bool, false} | _] -> false
+        _ -> true
+      end
+
     key = PhpBeam.Eval.resolve_class_string(name, i)
 
     case PhpBeam.Classes.get_class(i, key) do
       %{kind: :class} ->
         {:ok, {:bool, true}, i}
 
-      _ ->
-        # php triggers the spl autoload chain (second arg defaults true);
-        # autoloaders may register the class — state rides the returned interp
+      _ when autoload? ->
+        # spl autoload chain (php's default); autoloaders may register the
+        # class — state rides the returned interp
         {_klass, i2} = PhpBeam.Eval.fetch_class(i, key, name)
 
         {:ok, {:bool, match?(%{kind: :class}, PhpBeam.Classes.get_class(i2, key))}, i2}
+
+      _ ->
+        {:ok, {:bool, false}, i}
     end
   end
 

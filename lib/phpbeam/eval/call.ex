@@ -1017,8 +1017,10 @@ defmodule PhpBeam.Eval.Call do
   end
 
   def invoke_fcc(cb, args, env, interp) do
-    {vals, interp2} = arg_values(args, env, interp)
-    call_cb(cb, vals, env, interp2)
+    case arg_values(args, env, interp) do
+      {:ok, vals, interp2} -> call_cb(cb, vals, env, interp2)
+      {:unwind, _} = u -> u
+    end
   end
 
   def write_back_refs(params, args, env, fenv, interp) do

@@ -2111,6 +2111,12 @@ defmodule PhpBeam.Eval do
 
   # the CASED full name (autoloaders like composer receive cased names;
   # their PSR-4 prefix tables are case-sensitive)
+  # non-cname shapes (variable class names, object::m) fall back to the
+  # source-spelling renderer
+  def resolve_class_display(other, env, interp)
+      when not is_tuple(other) or elem(other, 0) != :cname,
+      do: class_display_via_resolve(other, env, interp)
+
   def resolve_class_display({:cname, fq, parts}, env, interp) do
     first = hd(parts)
     rest = tl(parts)
