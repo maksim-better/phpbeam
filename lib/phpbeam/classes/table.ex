@@ -1045,10 +1045,20 @@ defmodule PhpBeam.Classes.Table do
 
     members = native_throwable_methods()
 
+    # proper SPL/interface names — the class-name field drives resolution
+    # (IteratorAggregate must NOT capitalize to "Aggregate")
     ifaces =
       Map.new(
-        ~w(countable arrayaccess stringable jsonserializable iterator aggregate traversable),
-        &{&1, native_iface(String.capitalize(&1))}
+        [
+          {"countable", "Countable"},
+          {"arrayaccess", "ArrayAccess"},
+          {"stringable", "Stringable"},
+          {"jsonserializable", "JsonSerializable"},
+          {"iterator", "Iterator"},
+          {"iteratoraggregate", "IteratorAggregate"},
+          {"traversable", "Traversable"}
+        ],
+        fn {key, name} -> {key, native_iface(name)} end
       )
 
     base

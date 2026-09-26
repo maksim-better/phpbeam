@@ -841,17 +841,140 @@ defmodule PhpBeam.Interp do
       {:object, _} = obj_ref ->
         obj = Eval.get_object(interp2, obj_ref)
 
-        if obj.class == "generator" do
-          foreach_gen(obj_ref, key_t, val_t, body, env2, interp2)
-        else
-          interp3 = warn(interp2, "foreach() argument must be of type array")
-          {:ok, env2, interp3}
+        cond do
+          obj.class == "generator" ->
+            foreach_gen(obj_ref, key_t, val_t, body, env2, interp2)
+
+          PhpBeam.Classes.is_a?(interp2, obj.class, "iterator") ->
+            foreach_object(obj_ref, key_t, val_t, body, env2, interp2)
+
+          # IteratorAggregate::getIterator() yields the real iterator
+          PhpBeam.Classes.is_a?(interp2, obj.class, "iteratoraggregate") ->
+            foreach_object(obj_ref, key_t, val_t, body, env2, interp2)
+
+          true ->
+            # php: plain object iterates its visible (public) properties
+            pairs =
+              Enum.filter(PArray.to_pairs(obj.props), fn {k, _v} ->
+                PhpBeam.Classes.find_prop(interp2, obj.class, k) |> prop_public?()
+              end)
+
+            foreach_val(pairs, key_t, val_t, body, env2, interp2, false)
         end
 
       _other ->
         interp3 = warn(interp2, "foreach() argument must be of type array")
         {:ok, env2, interp3}
     end
+  end
+
+  defp interp3_from(_env, interp), do: interp
+
+  # call a protocol method on an object: {result, env, interp}
+  defp iter_call(obj_ref, name, args, env, interp) do
+    obj = Eval.get_object(interp, obj_ref)
+
+    case PhpBeam.Classes.find_method(interp, obj.class, name) do
+      nil ->
+        {{:val, :null}, env, interp}
+
+      m ->
+        Eval.call_php_method(obj_ref, m, args, env, interp)
+    end
+  end
+
+  defp prop_public?(nil), do: false
+  defp prop_public?({:ok, p}), do: p.visibility == :public
+  defp prop_public?(_), do: false
+
+  # Iterator protocol: valid → current → key → body → next (php calls next
+  # after normal completion AND continue, but not after break)
+  defp foreach_iterator(obj_ref, key_t, val_t, body, env, interp) do
+    case iter_call(obj_ref, "valid", [], env, interp) do
+      {{:val, v}, e2, i2} ->
+        if Value.truthy?(v) do
+          {{:val, cur}, e3, i3} = iter_call(obj_ref, "current", [], e2, i2)
+
+          # php skips the key() call when the foreach binds no key
+          {{:val, key}, e4, i4} =
+            if key_t == nil,
+              do: {{:val, :null}, e3, i3},
+              else: iter_call(obj_ref, "key", [], e3, i3)
+
+          {env5, i5} = iter_bind(key_t, key, val_t, cur, e4, i4)
+
+          case exec_stmts(body, env5, i5) do
+            {:ok, e6, i6} ->
+              {_r, e7, i7} = iter_call(obj_ref, "next", [], e6, i6)
+              foreach_iterator(obj_ref, key_t, val_t, body, e7, i7)
+
+            {{:unwind, {:break, 1}}, e6, i6} ->
+              {:ok, e6, i6}
+
+            {{:unwind, {:break, n}}, e6, i6} ->
+              {{:unwind, {:break, n - 1}}, e6, i6}
+
+            {{:unwind, {:continue, _}}, e6, i6} ->
+              {_r, e7, i7} = iter_call(obj_ref, "next", [], e6, i6)
+              foreach_iterator(obj_ref, key_t, val_t, body, e7, i7)
+
+            unw ->
+              unw
+          end
+        else
+          {:ok, e2, i2}
+        end
+
+      {{:unwind, _} = u, _e2, i2} ->
+        {u, env, i2}
+
+      {_r, e2, i2} ->
+        {:ok, e2, i2}
+    end
+  end
+
+  # dispatch an iterable OBJECT (re-entrant: getIterator may yield another
+  # aggregate); falls back to public-property iteration for plain objects
+  defp foreach_object(obj_ref, key_t, val_t, body, env, interp) do
+    obj = Eval.get_object(interp, obj_ref)
+
+    cond do
+      PhpBeam.Classes.is_a?(interp, obj.class, "iterator") ->
+        {_r, env2, interp2} = iter_call(obj_ref, "rewind", [], env, interp)
+        foreach_iterator(obj_ref, key_t, val_t, body, env2, interp2)
+
+      PhpBeam.Classes.is_a?(interp, obj.class, "iteratoraggregate") ->
+        case iter_call(obj_ref, "getiterator", [], env, interp) do
+          {{:val, {:object, _} = iref}, env2, interp2} ->
+            foreach_object(iref, key_t, val_t, body, env2, interp2)
+
+          {_r, env2, interp2} ->
+            {:ok, env2, interp2}
+        end
+
+      true ->
+        pairs =
+          Enum.filter(PArray.to_pairs(obj.props), fn {k, _v} ->
+            prop_public?(PhpBeam.Classes.find_prop(interp, obj.class, k))
+          end)
+
+        foreach_val(pairs, key_t, val_t, body, env, interp, false)
+    end
+  end
+
+  defp iter_bind(nil, _key, nil, _cur, env, interp), do: {env, interp}
+
+  defp iter_bind(nil, _key, val_t, cur, env, interp) do
+    Eval.assign(val_t, cur, env, interp)
+  end
+
+  defp iter_bind(key_t, key, nil, _cur, env, interp) do
+    Eval.assign(key_t, key, env, interp)
+  end
+
+  defp iter_bind(key_t, key, val_t, cur, env, interp) do
+    {env2, interp2} = Eval.assign(key_t, key, env, interp)
+    Eval.assign(val_t, cur, env2, interp2)
   end
 
   # php: iterating a Generator drives valid()/key()/current()/next(); body
