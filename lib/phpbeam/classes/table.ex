@@ -851,6 +851,30 @@ defmodule PhpBeam.Classes.Table do
     end
   end
 
+  # the CASED resolution (reflection type names / php-visible spellings —
+  # container alias tables are case-sensitive); resolve_type_fq stays
+  # lowercased for KEY comparison
+  defp resolve_type_cased(t, cls) when is_binary(t) do
+    {fq?, t2} =
+      if String.starts_with?(t, "\\"), do: {true, String.trim_leading(t, "\\")}, else: {false, t}
+
+    parts = String.split(t2, "\\")
+
+    if length(parts) == 1 and not fq? do
+      case cls.uses.normal[String.downcase(t2)] do
+        nil ->
+          if cls.ns != [],
+            do: Enum.join(cls.ns ++ [t2], "\\"),
+            else: t2
+
+        full ->
+          full
+      end
+    else
+      t2
+    end
+  end
+
   defp resolve_type_fq(t, _interp, nil), do: String.downcase(t)
 
   defp resolve_type_fq(t, _interp, cls) do
@@ -904,6 +928,8 @@ defmodule PhpBeam.Classes.Table do
   defp default_sig({:bool, false}), do: "false"
   defp default_sig(:null), do: "null"
   defp default_sig(_), do: "unknown"
+
+  def find_method(_interp, key, name) when is_nil(key) or is_nil(name), do: nil
 
   def find_method(interp, key, name) do
     case find_up(interp, key, String.downcase(name), fn class ->
@@ -1521,11 +1547,37 @@ defmodule PhpBeam.Classes.Table do
       methods:
         Map.new(
           [
+            native_fn("__construct", fn obj, args, i ->
+              case args do
+                [{:object, _} = oref, {:string, mname} | _] ->
+                  key = Eval.get_object(i, oref).class
+
+                  {:ok,
+                   {:null, obj |> rc_put("ckey", key) |> rc_put("mname", String.downcase(mname))},
+                   i}
+
+                [{:string, cname}, {:string, mname} | _] ->
+                  # dynamic string class names resolve VERBATIM
+                  key = String.downcase(cname)
+
+                  {:ok,
+                   {:null, obj |> rc_put("ckey", key) |> rc_put("mname", String.downcase(mname))},
+                   i}
+
+                _ ->
+                  {:ok, {:null, obj}, i}
+              end
+            end),
             native_fn("getName", fn obj, _args, i ->
               key = rc_state(obj) |> Map.get("ckey")
               name = rc_state(obj) |> Map.get("mname")
-              m = find_method(i, key, name)
-              {:ok, {{:string, if(m, do: m.name, else: "")}, obj}, i}
+
+              if key == nil or name == nil do
+                {:ok, {{:string, ""}, obj}, i}
+              else
+                m = find_method(i, key, name)
+                {:ok, {{:string, if(m, do: m.name, else: "")}, obj}, i}
+              end
             end),
             native_fn("getNumberOfParameters", fn obj, _args, i ->
               key = rc_state(obj) |> Map.get("ckey")
@@ -1547,16 +1599,20 @@ defmodule PhpBeam.Classes.Table do
               name = rc_state(obj) |> Map.get("mname")
               m = find_method(i, key, name)
 
-              {arr, i2} =
-                (m.params || [])
-                |> Enum.with_index()
-                |> Enum.reduce({PArray.new(), i}, fn {p, idx}, {acc, it} ->
-                  {oref, it2} = rc_make_parameter(it, key, name, p, idx)
-                  a2 = PArray.push(acc, oref)
-                  {a2, it2}
-                end)
+              if m == nil do
+                {:ok, {{:array, PArray.new()}, obj}, i}
+              else
+                {arr, i2} =
+                  (m.params || [])
+                  |> Enum.with_index()
+                  |> Enum.reduce({PArray.new(), i}, fn {p, idx}, {acc, it} ->
+                    {oref, it2} = rc_make_parameter(it, key, name, p, idx)
+                    a2 = PArray.push(acc, oref)
+                    {a2, it2}
+                  end)
 
-              {:ok, {{:array, arr}, obj}, i2}
+                {:ok, {{:array, arr}, obj}, i2}
+              end
             end),
             native_fn("isAbstract", fn obj, _args, i ->
               key = rc_state(obj) |> Map.get("ckey")
@@ -1673,7 +1729,7 @@ defmodule PhpBeam.Classes.Table do
                 resolved =
                   if builtin?,
                     do: bare,
-                    else: resolve_type_fq(bare, i, get_class(i, ckey))
+                    else: resolve_type_cased(bare, get_class(i, ckey))
 
                 {{:object, tid}, i2} = Eval.make_instance(i, "reflectionnamedtype")
                 tob = Eval.get_object(i2, {:object, tid})

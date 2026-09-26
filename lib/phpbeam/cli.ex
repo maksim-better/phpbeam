@@ -74,7 +74,9 @@ defmodule PhpBeam.CLI do
         end
       end)
 
-    case Task.yield(task, 30_000) || Task.shutdown(task, :brutal_kill) do
+    # Laravel-scale boots need minutes under the tree-walker; the hard 30s
+    # CLI guard only makes sense for runaway scripts — raise to 10 minutes
+    case Task.yield(task, 600_000) || Task.shutdown(task, :brutal_kill) do
       {:ok, {out, code, _interp}} ->
         {out, code}
 
