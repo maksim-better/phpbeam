@@ -96,6 +96,13 @@ defmodule PhpBeam.Test.Phpt do
             out = run_escript(escript, tmp, dir)
             File.rm(tmp)
 
+            # php's run-tests names the runnable copy `<name>php`, and
+            # EXPECTF patterns spell the script as `%s<base>.php`; our
+            # `.phpbeam.php` suffix breaks those literals (path may be
+            # realpath'd, so normalize on basename only)
+            stem = Path.basename(path, ".phpt")
+            out = String.replace(out, stem <> ".phpbeam.php", stem <> ".php")
+
             case verify(secs, out) do
               :ok -> {:ok, Path.basename(path)}
               {:fail, expected} -> {:fail, classify(out), failure_message(expected, out)}
