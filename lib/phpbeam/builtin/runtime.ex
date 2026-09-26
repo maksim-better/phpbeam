@@ -48,6 +48,19 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "time" => &time_v/2,
       "strtotime" => &strtotime_v/2,
       "timezone_version_get" => &tz_version/2,
+      "mktime" => &mktime_v/2,
+      "gmmktime" => &gmmktime_v/2,
+      "checkdate" => &checkdate_v/2,
+      "date_create" => &date_create_v/2,
+      "date_create_immutable" => &date_create_immutable_v/2,
+      "date_create_from_format" => &date_create_from_format_v/2,
+      "date_format" => &date_format_v/2,
+      "date_modify" => &date_modify_v/2,
+      "date_add" => &date_add_v/2,
+      "date_sub" => &date_sub_v/2,
+      "date_diff" => &date_diff_v/2,
+      "date_timestamp_get" => &date_timestamp_get_v/2,
+      "date_timestamp_set" => &date_timestamp_set_v/2,
       "timezone_open" => &tz_open/2,
       "header_remove" => &header_remove_v/2,
       "headers_list" => &headers_list_v/2,
@@ -462,12 +475,357 @@ defmodule PhpBeam.Builtin.RuntimeFns do
     end
   end
 
+  ## ───────────────────────── mktime family ─────────────────────────
+
+  # php arg order (h, i, s, m, d, y); missing parts default from local
+  # now; overflow rolls (month 13, day 30-of-Feb all normalize)
+  defp mktime_v(vals, i) do
+    {ok?, utc} = mk_parts(vals, dt_zone(i), PhpBeam.Dt.now("UTC"))
+    if ok?, do: {:ok, {:int, utc}, i}, else: {:ok, {:bool, false}, i}
+  end
+
+  defp gmmktime_v(vals, i) do
+    {ok?, utc} = mk_parts(vals, {:utc}, PhpBeam.Dt.now("UTC"))
+    if ok?, do: {:ok, {:int, utc}, i}, else: {:ok, {:bool, false}, i}
+  end
+
+  defp mk_parts(vals, zone, now_dt) do
+    now_parts = PhpBeam.Dt.local(%{now_dt | zone: zone})
+
+    {y, mo, d, h, mi, s} =
+      case vals do
+        [hh, ii, ss, mm, dd, yy | _] ->
+          {pint(yy, now_parts), pint(mm, now_parts), pint(dd, now_parts), pint(hh, now_parts),
+           pint(ii, now_parts), pint(ss, now_parts)}
+
+        [hh, ii, ss, mm, dd | _] ->
+          {elem(now_parts, 0), pint(mm, now_parts), pint(dd, now_parts), pint(hh, now_parts),
+           pint(ii, now_parts), pint(ss, now_parts)}
+
+        _ ->
+          {elem(now_parts, 0), elem(now_parts, 1), elem(now_parts, 2), elem(now_parts, 3),
+           elem(now_parts, 4), elem(now_parts, 5)}
+      end
+
+    # two-digit years: 00-68 → 20xx, 69-99 → 19xx (php rule)
+    y = if y < 100, do: if(y < 69, do: 2000 + y, else: 1900 + y), else: y
+
+    # month/day overflow rolls over gregorian-style (month 13 → Jan+1y)
+    {{ry, rmo}, rd} = month_roll(y, mo, d)
+
+    case PhpBeam.Dt.parse(
+           "#{ry}-#{pad2(rmo)}-#{pad2(rd)} #{pad2(clamp0(h))}:#{pad2(clamp0(mi))}:#{pad2(clamp0(s))}",
+           "UTC"
+         ) do
+      {:ok, %PhpBeam.Dt{utc: utc}} ->
+        # wall-clock was zone-local: shift by wall→utc in that zone
+        {true, wall_shift(utc, zone)}
+
+      :error ->
+        {false, 0}
+    end
+  end
+
+  defp pint({:int, n}, _), do: n
+  defp pint({:null, _}, parts), do: parts
+  defp pint(_, parts), do: parts
+
+  defp clamp0(n) when is_integer(n) and n >= 0, do: n
+  defp clamp0(n) when is_integer(n), do: 0
+
+  defp pad2(n), do: String.pad_leading(Integer.to_string(n), 2, "0")
+
+  defp month_roll(y, mo, d) do
+    total = y * 12 + (mo - 1)
+    {ny, nm} = {div(total, 12), rem(total, 12) + 1}
+    # day overflow rolls into the next month (Feb 30 → Mar 2)
+    nd = :calendar.date_to_gregorian_days({ny, nm, 1}) + (d - 1)
+    {{yy, mm, dd}, _} = {:calendar.gregorian_days_to_date(nd), nil}
+    {{yy, mm}, dd}
+  end
+
+  # The parse above produced UTC-interpreted seconds for a wall clock that
+  # was actually zone-local; adjust by the zone's offset at that instant.
+  defp wall_shift(utc_as_if_utc, {:utc}), do: utc_as_if_utc
+  defp wall_shift(utc_as_if_utc, {:offset, _off}), do: utc_as_if_utc
+
+  defp wall_shift(wall_as_utc, {:named, z}) do
+    # parse interpreted the wall clock as UTC; the real UTC is wall − offset
+    {off, _, _} = PhpBeam.DtZone.offset_at(z, wall_as_utc)
+    wall_as_utc - off
+  end
+
+  defp checkdate_v(vals, i) do
+    case vals do
+      [{:int, m}, {:int, d}, {:int, y} | _] ->
+        ok? =
+          m in 1..12 and y >= 1 and y <= 32767 and d >= 1 and d <= PhpBeam.Dt.days_in_month(y, m)
+
+        {:ok, {:bool, ok?}, i}
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
+  ## ───────────────────────── procedural date helpers ─────────────────────────
+
+  defp date_create_v(vals, i) do
+    make_datetime(Enum.at(vals, 0, {:string, "now"}), Enum.at(vals, 1), "datetime", i)
+  end
+
+  defp date_create_immutable_v(vals, i) do
+    make_datetime(Enum.at(vals, 0, {:string, "now"}), Enum.at(vals, 1), "datetimeimmutable", i)
+  end
+
+  defp date_create_from_format_v(vals, i) do
+    fmt = PhpBeam.Eval.php_to_string(Enum.at(vals, 0, {:string, ""}))
+
+    val =
+      case Enum.at(vals, 1) do
+        {:null, _} -> ""
+        v -> PhpBeam.Eval.php_to_string(v)
+      end
+
+    base_tz = Map.get(i.ini, "date.timezone", "UTC")
+
+    case PhpBeam.Dt.create_from_format(fmt, val, base_tz) do
+      {:ok, dt} ->
+        {oref, i2} = PhpBeam.Eval.make_instance(i, "datetime")
+        o = PhpBeam.Eval.get_object(i2, oref)
+        i3 = PhpBeam.Objects.put_object(i2, oref, dt_state_put(o, dt))
+        {:ok, oref, i3}
+
+      :error ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp make_datetime(time_v, tz_arg, class_key, i) do
+    time = PhpBeam.Eval.php_to_string(time_v)
+
+    tz_name =
+      case tz_arg do
+        {:object, _} = zref ->
+          zobj = PhpBeam.Eval.get_object(i, zref)
+
+          case Map.get(zobj, :dt_state) do
+            %{"name" => {:string, n}} -> n
+            _ -> "UTC"
+          end
+
+        _ ->
+          case Map.get(i.ini, "date.timezone", "UTC") do
+            "" -> "UTC"
+            tz -> tz
+          end
+      end
+
+    case PhpBeam.Dt.parse(time, tz_name) do
+      {:ok, dt} ->
+        {oref, i2} = PhpBeam.Eval.make_instance(i, class_key)
+        o = PhpBeam.Eval.get_object(i2, oref)
+        i3 = PhpBeam.Objects.put_object(i2, oref, dt_state_put(o, dt))
+        {:ok, oref, i3}
+
+      :error ->
+        {oref2, i4} =
+          PhpBeam.Eval.materialize_native(
+            {:native_error, "Exception",
+             "Failed to parse time string (#{time}) at position 0 (n): The timezone could not be found in the database"},
+            i
+          )
+
+        {:ok, oref2, i4}
+    end
+  end
+
+  defp dt_state_put(obj, %PhpBeam.Dt{} = dt),
+    do: Map.put(obj, :dt_state, %{"dt" => dt})
+
+  defp date_format_v(vals, i) do
+    case vals do
+      [{:object, _} = ref, {:string, fmt} | _] ->
+        o = PhpBeam.Eval.get_object(i, ref)
+
+        case dt_state_get(o) do
+          %PhpBeam.Dt{} = dt -> {:ok, {:string, PhpBeam.Dt.format(dt, fmt)}, i}
+          _ -> {:ok, {:bool, false}, i}
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp dt_state_get(o) do
+    case Map.get(o, :dt_state) do
+      %{"dt" => %PhpBeam.Dt{} = dt} -> dt
+      _ -> nil
+    end
+  end
+
+  defp date_modify_v(vals, i) do
+    case vals do
+      [{:object, _} = ref, {:string, mod} | _] ->
+        o = PhpBeam.Eval.get_object(i, ref)
+
+        case dt_state_get(o) do
+          %PhpBeam.Dt{} = dt ->
+            case PhpBeam.Dt.apply_relative(dt, mod) do
+              {:ok, dt2} ->
+                i2 = PhpBeam.Objects.put_object(i, ref, dt_state_put(o, dt2))
+                {:ok, ref, i2}
+
+              :error ->
+                {:ok, {:bool, false}, i}
+            end
+
+          _ ->
+            {:ok, {:bool, false}, i}
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp date_add_v(vals, i), do: date_shift(vals, i, 1)
+  defp date_sub_v(vals, i), do: date_shift(vals, i, -1)
+
+  defp date_shift(vals, i, sign) do
+    case vals do
+      [{:object, _} = ref, {:object, _} = iref | _] ->
+        o = PhpBeam.Eval.get_object(i, ref)
+        io = PhpBeam.Eval.get_object(i, iref)
+
+        g = fn k, obj ->
+          case PhpBeam.PArray.fetch(obj.props, {:string, k}) do
+            {:ok, {:int, n}} -> n
+            _ -> 0
+          end
+        end
+
+        months = g.("y", io) * 12 + g.("m", io)
+        secs = g.("h", io) * 3600 + g.("i", io) * 60 + g.("s", io) + g.("d", io) * 86_400
+
+        case dt_state_get(o) do
+          %PhpBeam.Dt{} = dt ->
+            dt2 =
+              dt
+              |> then(fn d ->
+                if months != 0, do: PhpBeam.Dt.add_months(d, sign * months), else: d
+              end)
+              |> then(fn d -> %{d | utc: d.utc + sign * secs} end)
+
+            i2 = PhpBeam.Objects.put_object(i, ref, dt_state_put(o, dt2))
+            {:ok, ref, i2}
+
+          _ ->
+            {:ok, {:bool, false}, i}
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp date_diff_v(vals, i) do
+    case vals do
+      [{:object, _} = a, {:object, _} = b | _] ->
+        oa = PhpBeam.Eval.get_object(i, a)
+        ob = PhpBeam.Eval.get_object(i, b)
+
+        with %PhpBeam.Dt{} = dta <- dt_state_get(oa),
+             %PhpBeam.Dt{} = dtb <- dt_state_get(ob) do
+          iv = PhpBeam.Dt.diff(dta, dtb)
+          {iref, i2} = PhpBeam.Eval.make_instance(i, "dateinterval")
+          iobj = PhpBeam.Eval.get_object(i2, iref)
+
+          iobj2 =
+            Enum.reduce(
+              [
+                {"y", {:int, iv.y}},
+                {"m", {:int, iv.m}},
+                {"d", {:int, iv.d}},
+                {"h", {:int, iv.h}},
+                {"i", {:int, iv.i}},
+                {"s", {:int, iv.s}},
+                {"days", {:int, iv.days}},
+                {"invert", {:int, iv.invert}},
+                {"f", {:float, 0.0}}
+              ],
+              iobj,
+              fn {k, v}, acc ->
+                case PhpBeam.PArray.put(acc.props, {:string, k}, v) do
+                  {:ok, pr} -> %{acc | props: pr}
+                  _ -> acc
+                end
+              end
+            )
+
+          i3 = PhpBeam.Objects.put_object(i2, iref, iobj2)
+          {:ok, iref, i3}
+        else
+          _ -> {:ok, {:bool, false}, i}
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp date_timestamp_get_v(vals, i) do
+    case vals do
+      [{:object, _} = ref | _] ->
+        o = PhpBeam.Eval.get_object(i, ref)
+
+        case dt_state_get(o) do
+          %PhpBeam.Dt{utc: u} -> {:ok, {:int, u}, i}
+          _ -> {:ok, {:bool, false}, i}
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp date_timestamp_set_v(vals, i) do
+    case vals do
+      [{:object, _} = ref, {:int, ts} | _] ->
+        o = PhpBeam.Eval.get_object(i, ref)
+
+        case dt_state_get(o) do
+          %PhpBeam.Dt{} = dt ->
+            i2 = PhpBeam.Objects.put_object(i, ref, dt_state_put(o, %{dt | utc: ts, us: 0}))
+            {:ok, ref, i2}
+
+          _ ->
+            {:ok, {:bool, false}, i}
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
   defp tz_version(_vals, i), do: {:ok, {:string, "2024.1"}, i}
 
   defp tz_open(vals, i) do
     case vals do
-      [{:string, "UTC"} | _] -> {:ok, :null, i}
-      _ -> {:ok, {:bool, false}, i}
+      [{:string, tz} | _] ->
+        if PhpBeam.DtZone.valid?(tz) do
+          {oref, i2} = PhpBeam.Eval.make_instance(i, "datetimezone")
+          o = PhpBeam.Eval.get_object(i2, oref)
+          o2 = Map.put(o, :dt_state, %{"name" => {:string, tz}})
+          i3 = PhpBeam.Objects.put_object(i2, oref, o2)
+          {:ok, oref, i3}
+        else
+          {:ok, {:bool, false}, i}
+        end
+
+      _ ->
+        {:ok, {:bool, false}, i}
     end
   end
 

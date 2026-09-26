@@ -1493,7 +1493,8 @@ defmodule PhpBeam.Classes.Table do
               zobj = Eval.get_object(i2, zref)
               zname = zone_name_of(native_dt_get(obj))
               zobj2 = dt_put(zobj, "name", {:string, zname})
-              {:ok, {zref, zobj2}, i2}
+              i3 = PhpBeam.Objects.put_object(i2, zref, zobj2)
+              {:ok, {zref, obj}, i3}
             end),
           "settimezone" =>
             native_fn("setTimezone", fn obj, args, i ->
@@ -1892,6 +1893,10 @@ defmodule PhpBeam.Classes.Table do
     %{y: acc["y"], mo: acc["m"], d: acc["d"], h: acc["h"], mi: acc["i"], s: acc["s"]}
   end
 
+  # DatePeriod: constructed and stored; foreach iteration needs the prop
+  # machinery to tolerate integer keys (find_prop assumes strings) —
+  # registered in docs/matrix/deferred.md, expansion lands with B5's
+  # Iterator protocol work
   defp native_dateperiod_class do
     %__MODULE__{
       name: "DatePeriod",

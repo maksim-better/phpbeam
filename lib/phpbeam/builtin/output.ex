@@ -153,23 +153,6 @@ defmodule PhpBeam.Builtin.OutputFns do
         end
       end)
 
-    fns =
-      put.(fns, "date", fn vals, interp, _ctx ->
-        case vals do
-          [{:string, fmt} | rest] ->
-            ts =
-              case rest do
-                [{:int, t} | _] -> t
-                _ -> System.system_time(:second)
-              end
-
-            {:ok, {:string, php_date(fmt, ts)}, interp}
-
-          _ ->
-            {:ok, {:string, ""}, interp}
-        end
-      end)
-
     fns
   end
 

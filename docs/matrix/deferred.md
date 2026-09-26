@@ -22,3 +22,10 @@
 - [ ] property_override 系（protected 属性跨类访问链）
 - [ ] lang/028（析构次序）、bug21600（引用赋值 Notice）、serialize_001、autoload_012/021
 - [ ] 返回引用真语义（数组共享）、default+endswitch 残角、invalid_octal/71897 措辞
+
+## B1 收尾顺延（2026-09-26）
+
+- [ ] **DatePeriod foreach 迭代**：展开日期为整数键属性后，find_prop（table.ex）对整数键抛 case_clause（属性机器假设字符串键）；需在 B5 Iterator 协议时统一（构造/存储已工作）
+- [ ] createFromFormat 全说明符（现支持 Y y m d H i s + 字面量；缺 a A g G n j u v U D l N w S F M e O P T + ! | # 语义）
+- [ ] DateTime::getLastErrors 明细数组（warning_count/warnings/errors）
+- [ ] timezone_abbreviations_list、date_sun_info、date_isodate_set、date_parse
