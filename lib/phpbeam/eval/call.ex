@@ -876,6 +876,10 @@ defmodule PhpBeam.Eval.Call do
       fq == true ->
         Map.get(interp.functions, name, :error)
 
+      # `use function A\B\f;` imports win over ns/global fallback (php)
+      imported = Map.get(interp.uses.function, name) ->
+        Map.get(interp.functions, String.downcase(imported), :error)
+
       interp.ns == [] ->
         Map.get(interp.functions, name, :error)
 

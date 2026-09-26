@@ -698,6 +698,14 @@ defmodule PhpBeam.Eval do
       {:ok, v} ->
         {env3, interp4} = assign(target, v, env2, interp3)
         {{:val, v}, env3, interp4}
+
+      # bare tagged value from the coalesce arm (??= with a non-null left
+      # side hands back closures/objects/arrays untouched)
+      v
+      when not is_tuple(v) or elem(v, 0) == :closure or elem(v, 0) == :object or
+             elem(v, 0) == :array ->
+        {env3, interp4} = assign(target, v, env2, interp3)
+        {{:val, v}, env3, interp4}
     end
   end
 
@@ -2081,38 +2089,6 @@ defmodule PhpBeam.Eval do
   # same resolution as resolve_class_key but PRESERVES case — php hands
   # autoloaders the fully-qualified name (aliases applied), and PSR-4
   # autoloaders build file paths from it
-  def resolve_class_display({:cname, fq, parts}, env, interp) do
-    first = hd(parts)
-    rest = tl(parts)
-
-    cond do
-      fq == true ->
-        Enum.join(parts, "\\")
-
-      first == "self" and env != nil and env.scope_class ->
-        env.scope_class
-
-      first == "static" and env != nil ->
-        env.called_class || env.scope_class
-
-      first == "parent" and env != nil and env.scope_class ->
-        parent_key(interp, env.scope_class) || Enum.join(parts, "\\")
-
-      alias_key = Map.get(interp.uses.normal, String.downcase(first)) ->
-        Enum.join([alias_key | rest], "\\")
-
-      interp.ns != [] and rest == [] ->
-        Enum.join(interp.ns ++ parts, "\\")
-
-      true ->
-        Enum.join(parts, "\\")
-    end
-  end
-
-  # the CASED full name (autoloaders like composer receive cased names;
-  # their PSR-4 prefix tables are case-sensitive)
-  # non-cname shapes (variable class names, object::m) fall back to the
-  # source-spelling renderer
   def resolve_class_display(other, env, interp)
       when not is_tuple(other) or elem(other, 0) != :cname,
       do: class_display_via_resolve(other, env, interp)
