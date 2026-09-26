@@ -37,7 +37,7 @@
 
 ### PHASE B：T1 纯逻辑扩展全量（快赢块，每模块：php-src 签名对照 → 实现 → 纳入 ext/*/tests → 门禁）
 
-- [ ] B1 date 全量（48 函数 + 14 类：DateTimeImmutable/DateInterval/DatePeriod/时区）——**DateTime 构造 ISO 串静默错值是首修项**（1970-01-01 错值比 Fatal 危险）
+- [x] **B1 date 全量（2026-09-26 完成，`7bf75e8`+`6f19f0a`）**：`DtZone` TZif v2 真 DST 转换表 + `Dt` 引擎（解析语法含溢出滚动/@epoch 偏移区/月名形态；33 说明符 format 矩阵 20 输入逐字节；相对语法 21/21；add_months/diff/createFromFormat）；DateTime/Immutable/Zone/Interval/Period 五类重建（ISO 串静默错值根除；Immutable 新注册实例；diff 属性播种+%R%a；T 位定 M 义）；date()/gmdate()/strtotime()/mktime 族（溢出滚动）/checkdate/date_create 族/timezone_open 真例/date() 去遮蔽；差分 32 + d1-d4 探针全同；顺延 deferred.md：DatePeriod foreach（find_prop 整数键）/createFromFormat 全说明符/getLastErrors 明细；phpt 356 无回归
 - [ ] B2 mbstring 57 + ctype 11 + iconv 10（78 纯函数，Erlang unicode 底座）
 - [ ] B3 standard 数组族 ~40（uintersect/udiff 族、array_multisort、shuffle、array_rand、array_find…）+ 杂项（ip2long/putenv/getopt/sleep 族/forward_static_call…）
 - [ ] B4 Reflection 全量（类缺 18：Function/Parameter/Property/UnionType/Attribute/Extension…）——原 L3，Table meta API 地基已落
