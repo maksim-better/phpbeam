@@ -50,15 +50,21 @@ L1 声称"命名参数已可用"经差分证伪（实为按位置绑定）；随
 - [x] 顺手修复：三元/短三元条件 unwind 穿透（原裸 `=` 匹配崩）；FCC 链式调用 `strlen(...)("x")`/`$o->m(...)(7)`；非静态方法 FCC 创建即抛；var_export 尾换行；heredoc 插值警告行号（part 级行标记 + 关闭行后 lexer 行号 +1 漂移）；生成器 yield 后主进程 file_stack 丢失（用生成器后所有警告/异常文件名退化为 Command line code）；原生方法抛错通道 env=nil 崩 catch 机器（generator rewind/getReturn 物化 + 帧）
 - phpt 净变化：+3 过（func/008、func/009、classes/property_override…），无回归
 
-## H0：phpt 清障——四个可治桶清零（1–2 会话，2026-09-26 插入，先于 L2）
+## H0：phpt 清障（**2026-09-26 已执行：410→368，42 例清除**；剩 ~43 顺延）
 
 2026-09-26 失败分诊（410 败 = 274 mismatch + 50 fatal + 16 undef_symbol + 9 parse_error + 10 timeout，另有 ~51 在基线内抖动边界）：mismatch 实测 **195 个独立家族**（最大家族仅 6 例）——长尾真实，"全部通过"按当前证据需 20–40 会话纯边缘语义苦工且大半与 Laravel 无关，**不设全通过目标**；四个可治桶（~85 例）全部高价值，先清：
 
-- [ ] **fatal(50)**：类声明严格性错误路径（abstract_redeclare/interface_method_final/visibility_00x/static_mix——Classes.Table.link_checks 的措辞与触发面扩展）、__call 家族、constants_basic
-- [ ] **undef_symbol(16)**：SPL 迭代器家族（iterators_00x → ArrayIterator/IteratorIterator 等 native 类）、autoload_0xx 边角、serialize_001、func/041/043/044 缺函数
-- [ ] **parse_error(9)**：语法错误消息措辞对齐 + invalid_octal/bug24396 等真实语法缺口
-- [ ] **timeout(10)**：挂起即 bug——short_tags 家族（短标签词法）、unset_properties、bug29944、timeout_variation 族
-- [ ] 门禁：`scripts/gate.sh --record` 收缩基线（预期 410→~320），顺延清单同步
+**已落地**（每批过门禁，commit b19cb23 后续 H0-a/b/c 系列）：
+- harness 文件名规范化（14 例假失败：EXPECTF 的 `%s<base>.php` 撞 `.phpbeam.php` 命名）
+- Access-level 措辞补 ` or weaker` + zend 按检查归行（access-level→子方法行，abstract→类起始行）＝13 例
+- zend 编译期检查：接口非 public 方法/abstract+final/$this 参数/静态构造器/魔术方法可见性警告（继续执行）＝5 例
+- callable 可见性 TypeError（call_user_func 家族可捕获、php 逐字措辞）、`$obj::CONST`、`__LINE__`
+- **插值字符串常量折叠**（parser 的字符串统一表示 `{:interp,[text:s]}` 此前折叠为 null——switch 字符串 case 全家复活）
+- **foreach 驱动 Iterator/IteratorAggregate 协议**（rewind→valid→current→key(按需)→body→next；嵌套 aggregate 递归；普通对象迭代 public 属性；SPL 接口名修正 IteratorAggregate）＝9 例
+- switch 备用语法 `endswitch`、`function &foo()` 解析、`$a =& f()`（近似）
+
+**顺延**（深修/需管道）：short_tags×4（--INI-- 管道）、unset_properties（__get/__set 重入死循环）、property_override 系（protected 属性跨类访问链）、lang/028（析构次序）、bug21600（引用赋值 Notice）、serialize_001、autoload_012/021、返回引用真语义（数组共享）、default+endswitch 残角、invalid_octal/71897 措辞
+- [x] 门禁：基线已收缩 `tmp/baseline_phpt_failures.txt` = 368
 
 ## H1：phpt 高价值 mismatch 子集——只做 classes/ 套件的 Laravel 相关族（2–4 会话，H0 后择机）
 
