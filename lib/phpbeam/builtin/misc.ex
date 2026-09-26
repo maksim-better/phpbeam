@@ -876,14 +876,17 @@ defmodule PhpBeam.Builtin.MiscFns do
         i2 = PhpBeam.Interp.warn_level(i, "Deprecated", @user_error_deprecated)
         {:unwind, {:engine_fatal, msg}, i2}
 
-      512 ->
-        {:ok, :null, PhpBeam.Interp.warn_level(i, "Warning", msg)}
-
-      16_384 ->
-        {:ok, :null, PhpBeam.Interp.warn_level(i, "Deprecated", msg)}
+      lv when lv in [512, 1024, 16_384] ->
+        prefix = %{512 => "Warning", 1024 => "Notice", 16_384 => "Deprecated"}
+        {:ok, :null, PhpBeam.Interp.warn_level(i, prefix[lv], msg)}
 
       _ ->
-        {:ok, :null, PhpBeam.Interp.warn_level(i, "Notice", msg)}
+        {:ok,
+         {:unwind,
+          {:php_throw,
+           {:native_error, "ValueError",
+            "trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED"}}},
+         i}
     end
   end
 

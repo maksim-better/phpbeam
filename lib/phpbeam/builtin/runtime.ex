@@ -1,14 +1,15 @@
 defmodule PhpBeam.Builtin.RuntimeFns do
   @moduledoc """
   Runtime/introspection builtins: ini settings, error reporting level,
-  error-handler/autoloader/shutdown bookkeeping.
+  error-handler/exception-handler/shutdown/autoloader bookkeeping.
 
-  These are state stores on the interpreter for now — handlers/autoloaders
-  are registered but not yet invoked (no warning dispatch, no class-not-found
-  hook yet).
+  Shutdown callbacks run at script termination (Eval.Finalize); error
+  handlers are stored as a stack with their level masks — warning dispatch
+  happens at the Eval layer (Eval.Error), which calls back into PHP.
   """
 
   alias PhpBeam.{PArray, Value}
+  import Bitwise
 
   def register(fns) do
     entries = %{
@@ -18,6 +19,8 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "error_reporting" => &error_reporting/2,
       "set_error_handler" => &set_error_handler/2,
       "restore_error_handler" => &restore_error_handler/2,
+      "set_exception_handler" => &set_exception_handler/2,
+      "restore_exception_handler" => &restore_exception_handler/2,
       "register_shutdown_function" => &register_shutdown_function/2,
       "spl_autoload_register" => &spl_autoload_register/2,
       "spl_autoload_unregister" => &spl_autoload_unregister/2,
@@ -191,12 +194,16 @@ defmodule PhpBeam.Builtin.RuntimeFns do
 
   ## ───────────────────── error reporting ─────────────────────
 
+  # while @ is active, error_reporting() reads the masked value (zend
+  # php_mask_error: only the always-fatal bits survive — probed 4437)
+  @fatal_bits 4437
+
   defp error_reporting(vals, i) do
-    cur = int_ini(i, "error_reporting", 0)
+    cur = int_ini(i, "error_reporting", 30719)
 
     case vals do
       [] ->
-        {:ok, {:int, cur}, i}
+        {:ok, {:int, masked_reporting(cur, i)}, i}
 
       [v | _] ->
         n =
@@ -209,20 +216,74 @@ defmodule PhpBeam.Builtin.RuntimeFns do
     end
   end
 
+  defp masked_reporting(cur, %{suppress: s}) when s > 0, do: cur &&& @fatal_bits
+  defp masked_reporting(cur, _), do: cur
+
   defp set_error_handler(vals, i) do
     case vals do
-      [cb | _] ->
-        {:ok, i.error_handler || :null, %{i | error_handler: cb}}
+      [cb | rest] ->
+        levels =
+          case rest do
+            [v | _] ->
+              case Value.to_int(v) do
+                {:ok, {:int, n}} -> n
+                _ -> 30719
+              end
+
+            [] ->
+              30719
+          end
+
+        prev =
+          case List.first(i.error_handlers) do
+            {nil, _} -> :null
+            {prev_cb, _} -> prev_cb
+            nil -> :null
+          end
+
+        {:ok, prev, %{i | error_handlers: [{cb, levels} | i.error_handlers]}}
 
       [] ->
         {:ok, :null, i}
     end
   end
 
-  defp restore_error_handler(_vals, i), do: {:ok, {:bool, true}, %{i | error_handler: nil}}
+  defp restore_error_handler(_vals, i),
+    do: {:ok, {:bool, true}, %{i | error_handlers: tl(i.error_handlers)}}
 
-  defp error_get_last(_vals, i), do: {:ok, :null, i}
-  defp error_clear_last(_vals, i), do: {:ok, :null, i}
+  defp set_exception_handler(vals, i) do
+    case vals do
+      [cb | _] ->
+        prev = List.first(i.exception_handlers) || :null
+        {:ok, prev, %{i | exception_handlers: [cb | i.exception_handlers]}}
+
+      [] ->
+        {:ok, :null, i}
+    end
+  end
+
+  defp restore_exception_handler(_vals, i),
+    do: {:ok, {:bool, true}, %{i | exception_handlers: tl(i.exception_handlers)}}
+
+  defp error_get_last(_vals, i) do
+    case i.last_error do
+      nil ->
+        {:ok, :null, i}
+
+      e ->
+        arr =
+          PArray.from_pairs([
+            {"type", {:int, e.type}},
+            {"message", {:string, e.message}},
+            {"file", {:string, e.file}},
+            {"line", {:int, e.line}}
+          ])
+
+        {:ok, {:array, arr}, i}
+    end
+  end
+
+  defp error_clear_last(_vals, i), do: {:ok, :null, %{i | last_error: nil}}
 
   ## ─────────────── autoload / shutdown bookkeeping ───────────────
 
@@ -252,9 +313,11 @@ defmodule PhpBeam.Builtin.RuntimeFns do
     {:ok, {:array, arr}, i}
   end
 
+  # extra args are captured at registration and passed to the callback at
+  # shutdown (Eval.Finalize consumes {cb, args} tuples FIFO)
   defp register_shutdown_function(vals, i) do
     case vals do
-      [cb | _] -> {:ok, :null, %{i | shutdown_fns: i.shutdown_fns ++ [cb]}}
+      [cb | args] -> {:ok, :null, %{i | shutdown_fns: i.shutdown_fns ++ [{cb, args}]}}
       [] -> {:ok, :null, i}
     end
   end

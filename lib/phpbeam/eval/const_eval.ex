@@ -195,7 +195,8 @@ defmodule PhpBeam.Eval.ConstEval do
          {:float, :erlang.float_to_binary(:erlang.list_to_float('1.0e308')) |> String.to_float()}}
 
       "E_ALL" ->
-        {:ok, {:int, 32767}}
+        # php 8.4: E_STRICT moved out of E_ALL (30719 = 32767 - 2048)
+        {:ok, {:int, 30_719}}
 
       "E_WARNING" ->
         {:ok, {:int, 2}}

@@ -11,6 +11,7 @@ defmodule PhpBeam.Interp do
   """
 
   alias PhpBeam.{Env, Eval, PArray, Value}
+  import Bitwise
 
   defstruct out: [],
             functions: %{},
@@ -30,7 +31,7 @@ defmodule PhpBeam.Interp do
             ini: %{
               "precision" => "14",
               "serialize_precision" => "-1",
-              "error_reporting" => "22527",
+              "error_reporting" => "30719",
               "default_charset" => "UTF-8",
               "display_errors" => "1",
               "include_path" => ".:/opt/homebrew/Cellar/php/8.4.2/share/php/pear",
@@ -38,8 +39,13 @@ defmodule PhpBeam.Interp do
               "internal_encoding" => "",
               "output_encoding" => ""
             },
-            error_handler: nil,
+            # handler stacks: newest first; entries {callable, levels_int} /
+            # plain callables; set_* returns the previous head
+            error_handlers: [],
+            exception_handlers: [],
+            # shutdown registrations: {callable, captured_args} FIFO
             shutdown_fns: [],
+            last_error: nil,
             autoload_fns: [],
             ob_stack: [],
             file_stack: [],
@@ -122,30 +128,8 @@ defmodule PhpBeam.Interp do
 
     with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
          {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
-      {res, _env, interp2} = exec_stmts(stmts, env, interp)
-
-      case res do
-        {:unwind, {:halt, code}} ->
-          finish(interp2, code)
-
-        {:unwrap, _} ->
-          finish(interp2, 0)
-
-        :ok ->
-          finish(interp2, 0)
-
-        {:unwind, {:php_throw, val}} ->
-          {render_uncaught(val, interp2), 255, interp2}
-
-        {:unwind, {:fatal, msg}} ->
-          {uncaught_out(interp2, "Error", msg), 255, interp2}
-
-        {:unwind, {:engine_fatal, msg}} ->
-          {engine_fatal_out(interp2, msg), 255, interp2}
-
-        {:unwind, {:parse_error, msg, file, line}} ->
-          {parse_error_out(interp2, "syntax error, " <> msg, file, line), 255, interp2}
-      end
+      {res, env2, interp2} = exec_stmts(stmts, env, interp)
+      PhpBeam.Eval.Finalize.finish(res, env2, interp2)
     else
       {:error, {:fatal_check, msg}, line} ->
         fname = file || "Command line code"
@@ -178,30 +162,8 @@ defmodule PhpBeam.Interp do
 
     with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
          {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
-      {res, _env, interp2} = exec_stmts(stmts, env, interp)
-
-      case res do
-        {:unwind, {:halt, _code}} ->
-          finish(interp2, 0)
-
-        {:unwrap, _} ->
-          finish(interp2, 0)
-
-        :ok ->
-          finish(interp2, 0)
-
-        {:unwind, {:php_throw, val}} ->
-          {render_uncaught(val, interp2), 255, interp2}
-
-        {:unwind, {:fatal, msg}} ->
-          {uncaught_out(interp2, "Error", msg), 255, interp2}
-
-        {:unwind, {:engine_fatal, msg}} ->
-          {engine_fatal_out(interp2, msg), 255, interp2}
-
-        {:unwind, {:parse_error, msg, f, line}} ->
-          {parse_error_out(interp2, "syntax error, " <> msg, f, line), 255, interp2}
-      end
+      {res, env2, interp2} = exec_stmts(stmts, env, interp)
+      PhpBeam.Eval.Finalize.finish(res, env2, interp2)
     else
       {:error, msg, line} ->
         {"PHP Parse error:  syntax error, #{msg}" <> maybe_line(line) <> "\n", 255,
@@ -325,19 +287,19 @@ defmodule PhpBeam.Interp do
     end
   end
 
-  defp finish(interp, code) do
+  def finish(interp, code) do
     {IO.iodata_to_binary(Enum.reverse(interp.out)), code, interp}
   end
 
-  defp render_uncaught({:native_error, class, msg}, interp),
+  def render_uncaught({:native_error, class, msg}, interp),
     do: uncaught_out(interp, class, msg)
 
-  defp render_uncaught({:object, _id} = ref, interp) do
+  def render_uncaught({:object, _id} = ref, interp) do
     {class, msg} = PhpBeam.Classes.exception_info(interp, ref)
     uncaught_out(interp, class, msg)
   end
 
-  defp render_uncaught(_, interp), do: IO.iodata_to_binary(Enum.reverse(interp.out))
+  def render_uncaught(_, interp), do: IO.iodata_to_binary(Enum.reverse(interp.out))
 
   # ───────────────────────── output / warnings ─────────────────────────
 
@@ -358,13 +320,43 @@ defmodule PhpBeam.Interp do
 
   # php-cli display format: warnings go to stdout, positioned from the
   # innermost statement's line
-  def warn(interp, msg) do
+  def warn(interp, msg), do: emit_error(interp, 2, "Warning", msg)
+
+  # levelled variant: Notice:/Deprecated:/Warning: prefix instead of Warning
+  def warn_level(interp, level, msg),
+    do: emit_error(interp, error_type_code(level), level, msg)
+
+  defp error_type_code("Warning"), do: 2
+  defp error_type_code("Notice"), do: 8
+  defp error_type_code("Deprecated"), do: 8192
+
+  # php error pipeline (zend_error_impl, minus the user-handler stage which
+  # lives at the Eval layer because it may call back into PHP): record for
+  # error_get_last, then display only when the level passes error_reporting.
+  # @ suppresses the diagnostic but NOT the recording (probed php 8.4).
+  defp emit_error(interp, type, prefix, msg) do
+    interp = %{
+      interp
+      | last_error: %{type: type, message: msg, file: current_file(interp), line: interp.cur_line}
+    }
+
     if interp.suppress > 0 do
       interp
     else
-      interp
-      |> display("\nWarning: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
-      |> Map.update!(:warnings, &(&1 + 1))
+      if (error_reporting_int(interp) &&& type) != 0 do
+        interp
+        |> display("\n#{prefix}: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
+        |> Map.update!(:warnings, &(&1 + 1))
+      else
+        interp
+      end
+    end
+  end
+
+  def error_reporting_int(interp) do
+    case Integer.parse(Map.get(interp.ini, "error_reporting", "30719")) do
+      {n, ""} -> n
+      _ -> 30719
     end
   end
 
@@ -378,28 +370,17 @@ defmodule PhpBeam.Interp do
   end
 
   # php-cli stdout display: `Parse error: syntax error, ... in file on line N`
-  defp parse_error_out(interp, msg, file, line) do
+  def parse_error_out(interp, msg, file, line) do
     out = IO.iodata_to_binary(Enum.reverse(interp.out))
     out <> "\nParse error: #{msg} in #{file} on line #{line}\n"
   end
 
-  defp engine_fatal_out(interp, msg) do
+  def engine_fatal_out(interp, msg) do
     out = IO.iodata_to_binary(Enum.reverse(interp.out))
     {file, line} = interp.throw_pos || {current_file(interp), interp.cur_line}
 
     out <>
       "\nFatal error: #{msg} in #{file} on line #{line}\n"
-  end
-
-  # levelled variant: Notice:/Deprecated:/Warning: prefix instead of Warning
-  def warn_level(interp, level, msg) do
-    if interp.suppress > 0 do
-      interp
-    else
-      interp
-      |> display("\n#{level}: #{msg} in #{current_file(interp)} on line #{interp.cur_line}\n")
-      |> Map.update!(:warnings, &(&1 + 1))
-    end
   end
 
   defp current_file(%{file_stack: [f | _]}), do: f
@@ -604,7 +585,7 @@ defmodule PhpBeam.Interp do
   def pop_frame(interp), do: interp
 
   # php 8.4 uncaught-error block; position comes from the failing statement
-  defp uncaught_out(interp, class, msg) do
+  def uncaught_out(interp, class, msg) do
     out = IO.iodata_to_binary(Enum.reverse(interp.out))
     {file, line} = interp.throw_pos || {current_file(interp), interp.cur_line}
 
