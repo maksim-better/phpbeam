@@ -8,7 +8,8 @@ defmodule PhpBeam.Builtin.RuntimeFns do
   happens at the Eval layer (Eval.Error), which calls back into PHP.
   """
 
-  alias PhpBeam.{PArray, Value}
+  alias PhpBeam.{Ini, PArray, Value}
+  alias PhpBeam.Eval.Error
   import Bitwise
 
   def register(fns) do
@@ -17,6 +18,8 @@ defmodule PhpBeam.Builtin.RuntimeFns do
       "ini_set" => &ini_set/2,
       "ini_restore" => &ini_restore/2,
       "error_reporting" => &error_reporting/2,
+      "ini_get_all" => &ini_get_all/2,
+      "ini_parse_quantity" => &ini_parse_quantity/2,
       "set_error_handler" => &set_error_handler/2,
       "restore_error_handler" => &restore_error_handler/2,
       "set_exception_handler" => &set_exception_handler/2,
@@ -149,19 +152,104 @@ defmodule PhpBeam.Builtin.RuntimeFns do
   defp ini_set(vals, i) do
     case vals do
       [{:string, k}, v | _] ->
-        old = ini_get([{:string, k}], i)
-        str = value_to_ini_string(v)
-        {:ok, elem(old, 1), %{i | ini: Map.put(i.ini, k, str)}}
+        # php: ini_set needs the USER access bit; unregistered names return
+        # false silently
+        if Ini.registered?(k) and Ini.settable_at_runtime?(k) do
+          old = ini_get([{:string, k}], i)
+          str = value_to_ini_string(v)
+          {:ok, elem(old, 1), %{i | ini: Map.put(i.ini, k, str)}}
+        else
+          {:ok, {:bool, false}, i}
+        end
 
       _ ->
         {:ok, {:bool, false}, i}
     end
   end
 
+  # restore to the startup-loaded value (php.ini/-c/-d), falling back to the
+  # registered default
   defp ini_restore(vals, i) do
     case vals do
-      [{:string, k} | _] -> {:ok, :null, %{i | ini: Map.delete(i.ini, k)}}
-      _ -> {:ok, :null, i}
+      [{:string, k} | _] ->
+        if Ini.registered?(k) do
+          restored = Map.get(i.ini_global, k, Ini.default(k))
+          {:ok, :null, %{i | ini: Map.put(i.ini, k, restored)}}
+        else
+          {:ok, :null, i}
+        end
+
+      _ ->
+        {:ok, :null, i}
+    end
+  end
+
+  # php: global_value = php.ini layer (startup-loaded or compiled default),
+  # local_value = current runtime value, access = PHP_INI_* bits; details=false
+  # collapses to name => local string. Module filter is case-insensitive.
+  defp ini_get_all(vals, i) do
+    {module_filter, details} =
+      case vals do
+        [{:string, m} | rest] -> {String.downcase(m), rest == [] or truthy?(rest)}
+        [v | rest] when v != :null -> {"", rest == [] or truthy?(rest)}
+        _ -> {"", true}
+      end
+
+    names =
+      Ini.table()
+      |> Map.keys()
+      |> Enum.sort()
+      |> Enum.filter(fn n ->
+        module_filter == "" or String.downcase(Ini.module(n)) == module_filter
+      end)
+
+    arr =
+      if details do
+        PArray.from_pairs(
+          Enum.map(names, fn n ->
+            entry =
+              PArray.from_pairs([
+                {"global_value", {:string, Map.get(i.ini_global, n, Ini.default(n))}},
+                {"local_value", {:string, Map.get(i.ini, n, Ini.default(n))}},
+                {"access", {:int, Ini.access(n)}}
+              ])
+
+            {n, {:array, entry}}
+          end)
+        )
+      else
+        PArray.from_pairs(
+          Enum.map(names, fn n -> {n, {:string, Map.get(i.ini, n, Ini.default(n))}} end)
+        )
+      end
+
+    {:ok, {:array, arr}, i}
+  end
+
+  defp truthy?([v | _]), do: Value.truthy?(v)
+  defp truthy?(_), do: true
+
+  defp ini_parse_quantity(vals, i) do
+    case vals do
+      [{:string, s} | _] ->
+        {value, warning} = Ini.parse_quantity(s)
+
+        i2 =
+          if warning,
+            do: warn_dispatch(i, warning),
+            else: i
+
+        {:ok, {:int, value}, i2}
+
+      _ ->
+        {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp warn_dispatch(i, msg) do
+    case Error.warn(Error.stub_env(), i, msg) do
+      {:cont, _, i2} -> i2
+      {:unwind, _, _, i2} -> i2
     end
   end
 

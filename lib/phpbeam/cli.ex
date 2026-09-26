@@ -7,14 +7,21 @@ defmodule PhpBeam.CLI do
   phpx — PHP on the BEAM (PHP 8 subset interpreter)
 
   Usage:
-    phpx file.php [args...]      run a script
-    phpx -r '<code>'             run inline code
-    phpx --repl                  interactive shell
-    phpx --version               version info
+    phpx [opts] file.php [args...] run a script
+    phpx [opts] -r '<code>'        run inline code
+    phpx --repl                    interactive shell
+    phpx --version                 version info
+
+  INI options (php-compatible):
+    -c <path>     load php.ini from file or directory (<dir>/php.ini)
+    -n            no php.ini
+    -d key[=val]  set INI entry (repeatable; without = sets "1")
   """
 
   def main(args) do
-    case args do
+    {ini_entries, rest} = ini_options(args)
+
+    case rest do
       ["--version"] ->
         IO.puts("phpx #{version()} (PHP 8.4 subset, BEAM/#{:erlang.system_info(:otp_release)})")
 
@@ -22,19 +29,19 @@ defmodule PhpBeam.CLI do
         IO.puts(@usage)
 
       ["-r", code | _] ->
-        run_code("<?php " <> code, "Command line code")
+        run_code("<?php " <> code, "Command line code", ini_entries)
 
       ["--repl"] ->
         PhpBeam.Repl.start()
 
-      ["serve" | rest] ->
-        {docroot, port} = serve_opts(rest)
+      ["serve" | srv_rest] ->
+        {docroot, port} = serve_opts(srv_rest)
         PhpBeam.Http.serve(docroot, port)
 
       [file | _rest] ->
         case File.read(file) do
           {:ok, src} ->
-            run_code(src, script_path(file))
+            run_code(src, script_path(file), ini_entries)
 
           {:error, _} ->
             IO.puts(:stderr, "Could not open input file: #{file}")
@@ -47,17 +54,66 @@ defmodule PhpBeam.CLI do
     end
   end
 
-  def run_code(src, file \\ nil) do
-    {out, code} = run_and_capture(src, file)
+  # php-style startup INI flags; stops at the first non-flag argument
+  defp ini_options(args), do: ini_options(args, [])
+
+  defp ini_options(["-n" | rest], _acc), do: ini_options(rest, [])
+
+  defp ini_options(["-c" | rest], acc) do
+    case rest do
+      [path | rest2] -> ini_options(rest2, ini_file_entries(path) ++ acc)
+      [] -> ini_options([], acc)
+    end
+  end
+
+  defp ini_options(["-d" | rest], acc) do
+    case rest do
+      [kv | rest2] ->
+        entry = d_entry(kv)
+        ini_options(rest2, [entry | acc])
+
+      [] ->
+        ini_options([], acc)
+    end
+  end
+
+  defp ini_options(["-c" <> path | rest], acc) when path != "",
+    do: ini_options(rest, ini_file_entries(path) ++ acc)
+
+  defp ini_options(["-d" <> kv = other | rest], acc) do
+    if other != "-d" and kv != "" do
+      ini_options(rest, [d_entry(kv) | acc])
+    else
+      {Enum.reverse(acc), [other | rest]}
+    end
+  end
+
+  defp ini_options([other | rest], acc), do: {Enum.reverse(acc), [other | rest]}
+  defp ini_options([], acc), do: {Enum.reverse(acc), []}
+
+  defp d_entry(kv) do
+    case String.split(kv, "=", parts: 2) do
+      [k, v] -> {k, v}
+      [k] -> {k, "1"}
+    end
+  end
+
+  defp ini_file_entries(path) do
+    full = if File.dir?(path), do: Path.join(path, "php.ini"), else: path
+    PhpBeam.Ini.parse_file(full)
+  end
+
+  def run_code(src, file \\ nil, ini_entries \\ []) do
+    {out, code} = run_and_capture(src, file, ini_entries)
     IO.write(out)
     if code != 0, do: System.halt(code)
   end
 
-  def run_and_capture(src, file \\ nil) do
+  def run_and_capture(src, file \\ nil, ini_entries \\ []) do
     task =
       Task.async(fn ->
         try do
-          PhpBeam.Interp.run(src, file)
+          PhpBeam.Interp.run(src, file, ini_entries)
         catch
           :exit, _ ->
             {"PHP Fatal error:  internal exit\n", 255, nil}

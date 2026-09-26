@@ -46,6 +46,9 @@ defmodule PhpBeam.Interp do
             # shutdown registrations: {callable, captured_args} FIFO
             shutdown_fns: [],
             last_error: nil,
+            # startup-loaded ini values (php.ini/-c/-d) — ini_restore target
+            # and ini_get_all's global_value layer
+            ini_global: %{},
             autoload_fns: [],
             ob_stack: [],
             file_stack: [],
@@ -117,18 +120,23 @@ defmodule PhpBeam.Interp do
   # symlink cycles: give up and append the unresolved tail
   defp resolve_r(parts, acc, _n), do: "/" <> Path.join(Enum.reverse(acc) ++ parts)
 
-  def run(src, file \\ nil) do
+  def run(src, file \\ nil, ini_entries \\ []) do
     # the caller (cli) decides the spelling: real path for files,
     # "Command line code" for -r — matching php's __FILE__
     interp =
-      register_builtins(%__MODULE__{file_stack: if(file, do: [file], else: [])})
+      %__MODULE__{
+        file_stack: if(file, do: [file], else: []),
+        ini: PhpBeam.Ini.apply_entries(%{}, ini_entries, :startup),
+        ini_global: PhpBeam.Ini.apply_entries(%{}, ini_entries, :startup)
+      }
+      |> register_builtins()
       |> seed_server(file)
 
     env = Env.global_scope(argv_info(src))
 
     with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
          {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
-      {res, env2, interp2} = exec_stmts(stmts, env, interp)
+      {res, env2, interp2} = exec_with_ini_scripts(stmts, env, interp)
       PhpBeam.Eval.Finalize.finish(res, env2, interp2)
     else
       {:error, {:fatal_check, msg}, line} ->
@@ -138,6 +146,84 @@ defmodule PhpBeam.Interp do
       {:error, msg, line} ->
         {"PHP Parse error:  syntax error, #{msg}" <> maybe_line(line) <> "\n", 255,
          interp2_stub()}
+    end
+  end
+
+  # auto_prepend_file runs BEFORE the main script (same request: shared
+  # env/interp, own __FILE__ via file_stack; probed: its unwind — exit,
+  # throw, fatal — preempts the main script). auto_append_file runs only on
+  # NORMAL termination (skipped on exit()/fatal/uncaught — probed).
+  defp exec_with_ini_scripts(stmts, env, interp) do
+    case ini_script_stmts(interp, "auto_prepend_file") do
+      nil ->
+        exec_main(stmts, env, interp)
+
+      {pre_stmts, pre_file} ->
+        # php: the prepend file joins the once-map (bug #32924) — later
+        # include_once/require_once of it are no-ops
+        interp = %{interp | included: Map.put(interp.included, pre_file, true)}
+
+        case exec_stmts(pre_stmts, env, %{interp | file_stack: [pre_file | interp.file_stack]}) do
+          {:ok, e2, i2} ->
+            [_ | rest] = i2.file_stack
+            exec_main(stmts, e2, %{i2 | file_stack: rest})
+
+          unw ->
+            unw
+        end
+    end
+  end
+
+  defp exec_main(stmts, env, interp) do
+    case exec_stmts(stmts, env, interp) do
+      {:ok, e2, i2} ->
+        case ini_script_stmts(i2, "auto_append_file") do
+          nil ->
+            {:ok, e2, i2}
+
+          {app_stmts, app_file} ->
+            exec_stmts(app_stmts, e2, %{i2 | file_stack: [app_file | i2.file_stack]})
+        end
+
+      other ->
+        other
+    end
+  end
+
+  # resolves relative ini-file paths against include_path/cwd (probed php
+  # behavior); parse failures become engine fatals like php's startup errors
+  defp ini_script_stmts(interp, key) do
+    case Map.get(interp.ini, key, "") do
+      "" ->
+        nil
+
+      path ->
+        resolved =
+          if String.starts_with?(path, "/") do
+            path
+          else
+            case PhpBeam.Eval.resolve_include_path(path, interp) do
+              nil -> path
+              found -> found
+            end
+          end
+
+        # canonical absolute identity: the once-map must unify the prepend
+        # file with main-script include_once/require_once of the same file
+        resolved = real_path(Path.expand(resolved))
+
+        case File.read(resolved) do
+          {:ok, src} ->
+            with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
+                 {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
+              {stmts, resolved}
+            else
+              _ -> nil
+            end
+
+          _ ->
+            nil
+        end
     end
   end
 
@@ -153,16 +239,28 @@ defmodule PhpBeam.Interp do
   {body, exit_code, interp} like run/2; the server reads status/headers from
   the interp's sapi area.
   """
-  def run_http(src, file, globals, sapi) do
+  def run_http(src, file, globals, sapi, ini_layer \\ []) do
+    {mode, ini_entries} =
+      case ini_layer do
+        {:perdir, entries} -> {:perdir, entries}
+        entries -> {:startup, entries}
+      end
+
     interp =
-      register_builtins(%__MODULE__{file_stack: [file], sapi: sapi})
+      %__MODULE__{
+        file_stack: [file],
+        sapi: sapi,
+        ini: PhpBeam.Ini.apply_entries(%{}, ini_entries, mode),
+        ini_global: PhpBeam.Ini.apply_entries(%{}, ini_entries, :startup)
+      }
+      |> register_builtins()
       |> Map.update!(:globals, &Map.merge(&1, globals))
 
     env = Env.global_scope([])
 
     with {:ok, toks} <- PhpBeam.Lexer.tokenize(src),
          {:ok, stmts} <- PhpBeam.Parser.parse(toks) do
-      {res, env2, interp2} = exec_stmts(stmts, env, interp)
+      {res, env2, interp2} = exec_with_ini_scripts(stmts, env, interp)
       PhpBeam.Eval.Finalize.finish(res, env2, interp2)
     else
       {:error, msg, line} ->
@@ -617,10 +715,32 @@ defmodule PhpBeam.Interp do
 
   defp register_builtins(interp) do
     interp
+    # the full php-8.4 registered-INI table seeds the value map; anything the
+    # driver pre-set (e.g. -d flags, php.ini) wins
+    |> Map.update!(:ini, &Map.merge(PhpBeam.Ini.defaults(), &1))
     |> Map.update!(:functions, fn fns -> Map.merge(fns, PhpBeam.Builtin.registry()) end)
     |> Map.update!(:classes, fn classes ->
       Map.merge(PhpBeam.Classes.native_classes(), classes)
     end)
+    |> apply_disable_functions()
+  end
+
+  # php 8: disable_functions removes the functions outright —
+  # function_exists() is false and calls die as undefined (probed semantics)
+  defp apply_disable_functions(interp) do
+    case Map.get(interp.ini, "disable_functions", "") do
+      "" ->
+        interp
+
+      list ->
+        names =
+          list
+          |> String.split(",")
+          |> Enum.map(&String.trim(String.downcase(&1)))
+          |> MapSet.new()
+
+        %{interp | functions: Map.reject(interp.functions, fn {n, _} -> n in names end)}
+    end
   end
 
   # ───────────────────────── statement execution ─────────────────────────

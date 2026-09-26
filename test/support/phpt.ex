@@ -93,7 +93,7 @@ defmodule PhpBeam.Test.Phpt do
             dir = Path.dirname(path)
             tmp = Path.join(dir, Path.basename(path, ".phpt") <> ".phpbeam.php")
             File.write!(tmp, file)
-            out = run_escript(escript, tmp, dir)
+            out = run_escript(escript, tmp, dir, ini_d_args(secs["INI"]))
             File.rm(tmp)
 
             # php's run-tests names the runnable copy `<name>php`, and
@@ -125,10 +125,29 @@ defmodule PhpBeam.Test.Phpt do
     end
   end
 
-  defp run_escript(escript, file, dir) do
+  defp run_escript(escript, file, dir, ini_args \\ "") do
     shell(
-      "cd #{q(dir)} && perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)} #{q(file)} 2>&1"
+      "cd #{q(dir)} && perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)}#{ini_args} #{q(file)} 2>&1"
     )
+  end
+
+  # run-tests.php semantics: each --INI-- line becomes a -d flag. Values pass
+  # through raw (literal numbers in practice; constant expressions like
+  # `E_ALL & ~E_NOTICE` are NOT evaluated — documented V1 limitation)
+  defp ini_d_args(nil), do: ""
+
+  defp ini_d_args(section) do
+    section
+    |> String.split(["\r\n", "\n", "\r"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == "" or String.starts_with?(&1, ";")))
+    |> Enum.map(fn line ->
+      case String.split(line, "=", parts: 2) do
+        [k, v] -> " -d " <> q(String.trim(k) <> "=" <> v)
+        [k] -> " -d " <> q(String.trim(k))
+      end
+    end)
+    |> Enum.join()
   end
 
   defp verify(secs, out) do

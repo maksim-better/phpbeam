@@ -199,17 +199,55 @@ defmodule PhpBeam.Http do
 
   defp not_found, do: {404, [{"Content-type", "text/html; charset=UTF-8"}], "Not Found"}
 
+  # php per-dir INI: .user.ini files apply from docroot down to the script's
+  # directory (later files override), PERDIR-level entries only
+  # (user_ini.filename default ".user.ini")
+  defp user_ini_entries(fs_path, docroot) do
+    doc_parts = Path.split(docroot)
+    script_parts = Path.split(Path.dirname(fs_path))
+
+    dirs =
+      if List.starts_with?(script_parts, doc_parts) do
+        depth = length(doc_parts)..(length(script_parts) - 1)
+        Enum.map(depth, &Path.join(Enum.take(script_parts, &1 + 1)))
+      else
+        [docroot]
+      end
+
+    entries =
+      Enum.flat_map(dirs, fn dir ->
+        path = Path.join(dir, ".user.ini")
+
+        if File.exists?(path) do
+          PhpBeam.Ini.parse_file(path)
+        else
+          []
+        end
+      end)
+
+    %{}
+    |> PhpBeam.Ini.apply_entries(entries, :perdir)
+    |> Map.to_list()
+  end
+
   # ── PHP execution ──
 
   defp run_php(fs_path, docroot, method, uri_path, query, headers, body) do
     src = File.read!(fs_path)
     globals = seed_globals(fs_path, docroot, method, uri_path, query, headers, body)
     sapi = %{headers: [], status: 200}
+    user_ini = user_ini_entries(fs_path, docroot)
 
     task =
       Task.async(fn ->
         try do
-          PhpBeam.Interp.run_http(src, PhpBeam.Interp.real_path(fs_path), globals, sapi)
+          PhpBeam.Interp.run_http(
+            src,
+            PhpBeam.Interp.real_path(fs_path),
+            globals,
+            sapi,
+            {:perdir, user_ini}
+          )
         catch
           kind, reason ->
             msg = (match?(%_{message: m} when true, reason) && reason.message) || inspect(reason)

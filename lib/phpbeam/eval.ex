@@ -1226,7 +1226,7 @@ defmodule PhpBeam.Eval do
 
   # php order: include_path entries (relative to cwd), then the including
   # file's directory, then cwd
-  defp resolve_include_path(path, interp) do
+  def resolve_include_path(path, interp) do
     if Path.type(path) == :absolute do
       if File.exists?(path), do: path
     else
