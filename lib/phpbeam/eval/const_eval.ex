@@ -194,6 +194,366 @@ defmodule PhpBeam.Eval.ConstEval do
         {:ok,
          {:float, :erlang.float_to_binary(:erlang.list_to_float('1.0e308')) |> String.to_float()}}
 
+      "FILTER_VALIDATE_INT" ->
+        {:ok, {:int, 257}}
+
+      "FILTER_VALIDATE_BOOL" ->
+        {:ok, {:int, 258}}
+
+      "FILTER_VALIDATE_FLOAT" ->
+        {:ok, {:int, 259}}
+
+      "FILTER_VALIDATE_URL" ->
+        {:ok, {:int, 273}}
+
+      "FILTER_VALIDATE_EMAIL" ->
+        {:ok, {:int, 274}}
+
+      "FILTER_VALIDATE_IP" ->
+        {:ok, {:int, 275}}
+
+      "FILTER_VALIDATE_DOMAIN" ->
+        {:ok, {:int, 277}}
+
+      "FILTER_VALIDATE_REGEXP" ->
+        {:ok, {:int, 272}}
+
+      "FILTER_SANITIZE_NUMBER_INT" ->
+        {:ok, {:int, 519}}
+
+      "FILTER_SANITIZE_NUMBER_FLOAT" ->
+        {:ok, {:int, 520}}
+
+      "FILTER_SANITIZE_STRING" ->
+        {:ok, {:int, 513}}
+
+      "FILTER_UNSAFE_RAW" ->
+        {:ok, {:int, 516}}
+
+      "FILTER_DEFAULT" ->
+        {:ok, {:int, 516}}
+
+      "INPUT_GET" ->
+        {:ok, {:int, 1}}
+
+      "INPUT_POST" ->
+        {:ok, {:int, 0}}
+
+      "INPUT_COOKIE" ->
+        {:ok, {:int, 2}}
+
+      "INPUT_SERVER" ->
+        {:ok, {:int, 4}}
+
+      "INPUT_ENV" ->
+        {:ok, {:int, 5}}
+
+      "PHP_SESSION_NONE" ->
+        {:ok, {:int, 1}}
+
+      "PHP_SESSION_ACTIVE" ->
+        {:ok, {:int, 2}}
+
+      "T_ABSTRACT" ->
+        {:ok, {:int, 322}}
+
+      "T_ARRAY" ->
+        {:ok, {:int, 344}}
+
+      "T_AS" ->
+        {:ok, {:int, 301}}
+
+      "T_BAD_CHARACTER" ->
+        {:ok, {:int, 409}}
+
+      "T_BOOLEAN_AND" ->
+        {:ok, {:int, 369}}
+
+      "T_BOOLEAN_OR" ->
+        {:ok, {:int, 368}}
+
+      "T_BREAK" ->
+        {:ok, {:int, 307}}
+
+      "T_CALLABLE" ->
+        {:ok, {:int, 345}}
+
+      "T_CASE" ->
+        {:ok, {:int, 304}}
+
+      "T_CATCH" ->
+        {:ok, {:int, 315}}
+
+      "T_CLASS" ->
+        {:ok, {:int, 336}}
+
+      "T_CLONE" ->
+        {:ok, {:int, 285}}
+
+      "T_CLOSE_TAG" ->
+        {:ok, {:int, 395}}
+
+      "T_COALESCE" ->
+        {:ok, {:int, 404}}
+
+      "T_COMMENT" ->
+        {:ok, {:int, 391}}
+
+      "T_CONST" ->
+        {:ok, {:int, 312}}
+
+      "T_CONSTANT_ENCAPSED_STRING" ->
+        {:ok, {:int, 269}}
+
+      "T_CONTINUE" ->
+        {:ok, {:int, 308}}
+
+      "T_CURLY_OPEN" ->
+        {:ok, {:int, 400}}
+
+      "T_DEC" ->
+        {:ok, {:int, 380}}
+
+      "T_DECLARE" ->
+        {:ok, {:int, 299}}
+
+      "T_DEFAULT" ->
+        {:ok, {:int, 305}}
+
+      "T_DNUMBER" ->
+        {:ok, {:int, 261}}
+
+      "T_DO" ->
+        {:ok, {:int, 292}}
+
+      "T_DOUBLE_ARROW" ->
+        {:ok, {:int, 390}}
+
+      "T_DOUBLE_COLON" ->
+        {:ok, {:int, 401}}
+
+      "T_ECHO" ->
+        {:ok, {:int, 291}}
+
+      "T_ELSE" ->
+        {:ok, {:int, 289}}
+
+      "T_ELSEIF" ->
+        {:ok, {:int, 288}}
+
+      "T_EMPTY" ->
+        {:ok, {:int, 334}}
+
+      "T_ENDDECLARE" ->
+        {:ok, {:int, 300}}
+
+      "T_ENDFOR" ->
+        {:ok, {:int, 296}}
+
+      "T_ENDFOREACH" ->
+        {:ok, {:int, 298}}
+
+      "T_ENDIF" ->
+        {:ok, {:int, 290}}
+
+      "T_ENDSWITCH" ->
+        {:ok, {:int, 303}}
+
+      "T_ENDWHILE" ->
+        {:ok, {:int, 294}}
+
+      "T_ENUM" ->
+        {:ok, {:int, 339}}
+
+      "T_EXTENDS" ->
+        {:ok, {:int, 340}}
+
+      "T_FINAL" ->
+        {:ok, {:int, 323}}
+
+      "T_FINALLY" ->
+        {:ok, {:int, 316}}
+
+      "T_FN" ->
+        {:ok, {:int, 311}}
+
+      "T_FOR" ->
+        {:ok, {:int, 295}}
+
+      "T_FOREACH" ->
+        {:ok, {:int, 297}}
+
+      "T_FUNCTION" ->
+        {:ok, {:int, 310}}
+
+      "T_GLOBAL" ->
+        {:ok, {:int, 320}}
+
+      "T_GOTO" ->
+        {:ok, {:int, 309}}
+
+      "T_IF" ->
+        {:ok, {:int, 287}}
+
+      "T_IMPLEMENTS" ->
+        {:ok, {:int, 341}}
+
+      "T_INC" ->
+        {:ok, {:int, 379}}
+
+      "T_INCLUDE" ->
+        {:ok, {:int, 272}}
+
+      "T_INCLUDE_ONCE" ->
+        {:ok, {:int, 273}}
+
+      "T_INLINE_HTML" ->
+        {:ok, {:int, 267}}
+
+      "T_INSTANCEOF" ->
+        {:ok, {:int, 283}}
+
+      "T_INSTEADOF" ->
+        {:ok, {:int, 319}}
+
+      "T_INTERFACE" ->
+        {:ok, {:int, 338}}
+
+      "T_ISSET" ->
+        {:ok, {:int, 333}}
+
+      "T_IS_EQUAL" ->
+        {:ok, {:int, 370}}
+
+      "T_IS_GREATER_OR_EQUAL" ->
+        {:ok, {:int, 375}}
+
+      "T_IS_IDENTICAL" ->
+        {:ok, {:int, 372}}
+
+      "T_IS_NOT_EQUAL" ->
+        {:ok, {:int, 371}}
+
+      "T_IS_NOT_IDENTICAL" ->
+        {:ok, {:int, 373}}
+
+      "T_IS_SMALLER_OR_EQUAL" ->
+        {:ok, {:int, 374}}
+
+      "T_LIST" ->
+        {:ok, {:int, 343}}
+
+      "T_LNUMBER" ->
+        {:ok, {:int, 260}}
+
+      "T_LOGICAL_AND" ->
+        {:ok, {:int, 279}}
+
+      "T_LOGICAL_OR" ->
+        {:ok, {:int, 277}}
+
+      "T_LOGICAL_XOR" ->
+        {:ok, {:int, 278}}
+
+      "T_MATCH" ->
+        {:ok, {:int, 306}}
+
+      "T_NAMESPACE" ->
+        {:ok, {:int, 342}}
+
+      "T_NEW" ->
+        {:ok, {:int, 284}}
+
+      "T_NS_SEPARATOR" ->
+        {:ok, {:int, 402}}
+
+      "T_NULLSAFE_OBJECT_OPERATOR" ->
+        {:ok, {:int, 389}}
+
+      "T_NUM_STRING" ->
+        {:ok, {:int, 271}}
+
+      "T_OBJECT_OPERATOR" ->
+        {:ok, {:int, 388}}
+
+      "T_OPEN_TAG" ->
+        {:ok, {:int, 393}}
+
+      "T_OPEN_TAG_WITH_ECHO" ->
+        {:ok, {:int, 394}}
+
+      "T_PAAMAYIM_NEKUDOTAYIM" ->
+        {:ok, {:int, 401}}
+
+      "T_PRINT" ->
+        {:ok, {:int, 280}}
+
+      "T_PRIVATE" ->
+        {:ok, {:int, 324}}
+
+      "T_PROTECTED" ->
+        {:ok, {:int, 325}}
+
+      "T_PUBLIC" ->
+        {:ok, {:int, 326}}
+
+      "T_READONLY" ->
+        {:ok, {:int, 330}}
+
+      "T_RETURN" ->
+        {:ok, {:int, 313}}
+
+      "T_SL" ->
+        {:ok, {:int, 377}}
+
+      "T_SPACESHIP" ->
+        {:ok, {:int, 376}}
+
+      "T_SR" ->
+        {:ok, {:int, 378}}
+
+      "T_STATIC" ->
+        {:ok, {:int, 321}}
+
+      "T_STRING" ->
+        {:ok, {:int, 262}}
+
+      "T_SWITCH" ->
+        {:ok, {:int, 302}}
+
+      "T_THROW" ->
+        {:ok, {:int, 317}}
+
+      "T_TRAIT" ->
+        {:ok, {:int, 337}}
+
+      "T_TRY" ->
+        {:ok, {:int, 314}}
+
+      "T_UNSET" ->
+        {:ok, {:int, 332}}
+
+      "T_USE" ->
+        {:ok, {:int, 318}}
+
+      "T_VAR" ->
+        {:ok, {:int, 331}}
+
+      "T_VARIABLE" ->
+        {:ok, {:int, 266}}
+
+      "T_WHILE" ->
+        {:ok, {:int, 293}}
+
+      "T_WHITESPACE" ->
+        {:ok, {:int, 396}}
+
+      "T_YIELD" ->
+        {:ok, {:int, 281}}
+
+      "T_YIELD_FROM" ->
+        {:ok, {:int, 282}}
+
       "E_ALL" ->
         # php 8.4: E_STRICT moved out of E_ALL (30719 = 32767 - 2048)
         {:ok, {:int, 30_719}}

@@ -143,7 +143,13 @@ defmodule PhpBeam.Classes.Spl do
         fn m -> {String.downcase(m.name), m} end
       )
 
-    shell("ArrayObject", :class, methods, ["iteratoraggregate", "arrayaccess", "countable"])
+    shell("ArrayObject", :class, methods, [
+      "iteratoraggregate",
+      "traversable",
+      "arrayaccess",
+      "serializable",
+      "countable"
+    ])
   end
 
   # shared offsetX/count/iterator methods for ArrayObject & ArrayIterator
@@ -304,7 +310,13 @@ defmodule PhpBeam.Classes.Spl do
         {String.downcase(m.name), m}
       end)
 
-    shell("ArrayIterator", :class, methods, ["iterator", "arrayaccess", "countable"])
+    shell("ArrayIterator", :class, methods, [
+      "iterator",
+      "traversable",
+      "arrayaccess",
+      "serializable",
+      "countable"
+    ])
   end
 
   ## ───────────────── DLL / Stack / Queue ─────────────────

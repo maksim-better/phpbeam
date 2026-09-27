@@ -1263,6 +1263,7 @@ defmodule PhpBeam.Classes.Table do
           {"iterator", "Iterator"},
           {"iteratoraggregate", "IteratorAggregate"},
           {"traversable", "Traversable"},
+          {"serializable", "Serializable"},
           {"datetimeinterface", "DateTimeInterface"}
         ],
         fn {key, name} -> {key, native_iface(name)} end

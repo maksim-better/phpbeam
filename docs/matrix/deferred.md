@@ -54,3 +54,11 @@
 - [ ] SplStack/SplQueue foreach 第二轮迭代中断（第一轮正确；疑 next() 写回后 iter_call 取到陈旧 obj）
 - [ ] SplFixedArray 经引擎 `$fa[0]='x'` 写丢失（直接 `->offsetSet(0,'x')` 工作正常——engine generic_index_assign 的 ArrayAccess 写路径对 native 方法结果丢弃待查）；`$fa[0]` 直读同源问题
 - [ ] SplHeap 用户 compare() 排序方向、SplPriorityQueue 全差分、SplFileInfo 相对路径/splFileObject 行读取族、SplObjectStorage serialize/var_export、ArrayObject flags(STD_PROP_LIST/ARRAY_AS_PROPS 影响)
+
+## B6 顺延（2026-09-26）
+
+- [ ] func_get_args 变参元素顺序：`function t($a, ...$r) { t(1,2,3) }` 我们返回 [1,3,2]，php [1,2,3]——call.ex 的变参展开序（engine_ho 域）
+- [ ] class_alias 后同表达式内 get_declared_interfaces() !== [] 返回 false（单独语句正常——同类逗号求值交互，疑 interp 线程化的残余；登记待查）
+- [ ] token_get_all 的 T_INLINE_HTML/T_CLOSE_TAG/T_NUM_STRING 等非关键字 token 类别按需扩；FILTER_SANITIZE_STRING 等废弃过滤器未做
+- [ ] session 全家为 CLI 桩（session_start true + $_SESSION 空）；真实会话存储（文件 save handler）待 C 阶段接 ETS/Redis 时一并
+- [ ] preg_replace_callback_array 未实现（桩返回 false）
