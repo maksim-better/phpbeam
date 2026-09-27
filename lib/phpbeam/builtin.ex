@@ -7,19 +7,23 @@ defmodule PhpBeam.Builtin do
 
   alias PhpBeam.Builtin.{
     ArrayFns,
+    BcmathFns,
     MbFns,
     ArrayStdFns,
     B6,
     CursorFns,
     FileFns,
+    GmpFns,
     MathFns,
     MiscFns,
     MysqliFns,
     ObFns,
     OutputFns,
     PatternFns,
+    ReadlineFns,
     RuntimeFns,
     SerializeFns,
+    SessionFns,
     StreamFns,
     StringFns,
     VarFns
@@ -46,6 +50,10 @@ defmodule PhpBeam.Builtin do
     |> MbFns.register()
     |> ArrayStdFns.register()
     |> B6.register()
+    |> BcmathFns.register()
+    |> GmpFns.register()
+    |> SessionFns.register()
+    |> ReadlineFns.register()
     |> put_param_names()
   end
 

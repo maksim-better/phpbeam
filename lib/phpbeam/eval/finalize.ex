@@ -14,7 +14,9 @@ defmodule PhpBeam.Eval.Finalize do
 
   @doc "returns {output, exit_code, interp}"
   def finish(res, env, interp) do
-    {out, code, interp2} = terminal(res, env, interp)
+    # php's session module writes $_SESSION at shutdown before user fns run
+    interp0 = PhpBeam.Builtin.SessionFns.shutdown_write(interp)
+    {out, code, interp2} = terminal(res, env, interp0)
     # terminal() already flattened prior output into `out`; shutdown writes
     # start from a clean buffer and are appended behind it
     {extra, override, interp3} = run_shutdown(env, %{interp2 | out: []})

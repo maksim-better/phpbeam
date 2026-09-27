@@ -78,6 +78,10 @@ defmodule PhpBeam.Interp do
             anon_sites: %{},
             # set inside a generator body process: %{driver: pid, key: int}
             gen_ctx: nil,
+            # ext/session: %{active:, id:, start_pos:} (request-scoped)
+            session: nil,
+            # ext/readline: %{history:, completion:, handler:}
+            readline: nil,
             mysqli_report: 3
 
   @type t :: %__MODULE__{}

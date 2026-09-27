@@ -60,5 +60,14 @@
 - [ ] func_get_args 变参元素顺序：`function t($a, ...$r) { t(1,2,3) }` 我们返回 [1,3,2]，php [1,2,3]——call.ex 的变参展开序（engine_ho 域）
 - [ ] class_alias 后同表达式内 get_declared_interfaces() !== [] 返回 false（单独语句正常——同类逗号求值交互，疑 interp 线程化的残余；登记待查）
 - [ ] token_get_all 的 T_INLINE_HTML/T_CLOSE_TAG/T_NUM_STRING 等非关键字 token 类别按需扩；FILTER_SANITIZE_STRING 等废弃过滤器未做
-- [ ] session 全家为 CLI 桩（session_start true + $_SESSION 空）；真实会话存储（文件 save handler）待 C 阶段接 ETS/Redis 时一并
 - [ ] preg_replace_callback_array 未实现（桩返回 false）
+## B7 顺延（2026-09-27）
+
+- [ ] **GMP 对象 id 回收**：php 的 zend 对象 freelist 会复用已销毁对象的 #N 编号（两次 catch 释放后 gmp_init 复回 #1 实测）；我们 next_obj 单调递增——仅影响 var_dump/debug_zval 里的 id 可见输出，B7 差分用例已用无 id 探针绕开
+- [ ] gmp_random_bits/range/seed 用 :rand 源（GMP 的 Mersenne randstate 流未复刻）——随机值与 php 不同，仅格式/边界可差分
+- [ ] gmp_strval/gmp_add 等内部参数收 null 时的 `Deprecated: Passing null` 警告未发（php 8.4 弃用语义）；gmp_scan 越过幅值位的返回值为 idx 而非 GMP 的 ULONG_MAX 语义
+- [ ] readline_list_history **故意不注册**（本地 php 为 libedit 构建无此函数，function_exists 差分一致优先；GNU readline 构建有）——真实 GNU 构建兼容时再补
+- [ ] readline 交互式行读取（TTY 回显/补全回调触发/completion callback 实际调用）未做——非交互 EOF 语义已差分；readline_completion_function 的回调校验消息为 libedit 特有文案
+- [ ] session 自定义 save handler（对象/闭包形）接受但不分派，恒走 files 后端；session.gc_probability 自动 GC 未建模（手动 session_gc 按 mtime 扫描工作）；session_start 的 options 数组仅实现 read_and_close
+- [ ] bcpowmod 模 0/bcsqrt 负数等 ValueError 文案按文档推断未逐一探针；bcround 的 RoundingMode 参数传入非枚举对象时的 TypeError 文案为近似
+- [ ] 未定义数组键警告的键渲染：整数键我们渲染 `"0"`（带引号），php 渲染 `0`——gmp_gcdext 探针暴露，属引擎既有键渲染差异

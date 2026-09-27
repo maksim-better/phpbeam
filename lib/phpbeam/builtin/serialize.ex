@@ -47,6 +47,17 @@ defmodule PhpBeam.Builtin.SerializeFns do
 
   defp ser({:object, id}, i) do
     case Map.get(i.objects, id) do
+      # php serializes GMP as O:3:"GMP":1:{i:0;s:N:"<num>";} (probed) —
+      # not through the props path
+      %{class: "gmp"} = obj ->
+        num =
+          case PArray.fetch(obj.props, {:string, "num"}) do
+            {:ok, {:string, n}} -> n
+            _ -> "0"
+          end
+
+        ~s(O:3:"GMP":1:{i:0;s:#{byte_size(num)}:") <> num <> ~s(";})
+
       %{class: cls} = obj ->
         %{name: cls_name} = Map.get(i.classes, cls) || %{name: cls}
 
@@ -115,6 +126,27 @@ defmodule PhpBeam.Builtin.SerializeFns do
   ## ────────────────────────── unserialize ──────────────────────────
   # offset parser; the returned interp is threaded because unserializing
   # objects registers them in interp.objects
+
+  @doc "public serializer for engine layers (session_encode, GMP, ...)"
+  def serialize_value(v, i), do: ser(v, i)
+
+  @doc "public offset parser: {:ok, v, i2} | {:error, off}"
+  def unserialize_value(s, off, i) do
+    unser(s, off, i)
+    |> case do
+      {:ok, v, _off2, i2} -> {:ok, v, i2 || i}
+      {:error, off} -> {:error, off}
+    end
+  end
+
+  @doc "offset parser that also returns the next offset (session wire format)"
+  def unserialize_value_at(s, off, i) do
+    unser(s, off, i)
+    |> case do
+      {:ok, v, off2, i2} -> {:ok, v, off2, i2 || i}
+      {:error, off} -> {:error, off}
+    end
+  end
 
   defp unserialize_v([{:string, s} | _], i) do
     case unser(s, 0, i) do
@@ -233,6 +265,7 @@ defmodule PhpBeam.Builtin.SerializeFns do
               {obj_ref, i2} = PhpBeam.Eval.make_instance(i, String.downcase(cls))
 
               {ref, i3, o5} = set_obj_props(s, off4, count, obj_ref, i2, i)
+              {ref, i3} = gmp_restore(ref, i3)
 
               if String.starts_with?(safe_part(s, o5), "}") do
                 {:ok, ref, o5 + 1, i3}
@@ -287,4 +320,24 @@ defmodule PhpBeam.Builtin.SerializeFns do
 
   defp raw_key({:int, n}), do: {:int, n}
   defp raw_key({:string, s}), do: {:string, s}
+
+  # GMP objects serialize with int key 0 -> decimal string; re-shape that
+  # into the "num" prop layout after read_object materialized the instance
+  defp gmp_restore(ref, i) do
+    case Map.get(i.objects, elem(ref, 1)) do
+      %{class: "gmp"} = obj ->
+        num =
+          case PArray.fetch(obj.props, {:int, 0}) do
+            {:ok, {:string, s}} -> s
+            _ -> "0"
+          end
+
+        props = PArray.from_pairs([{"num", {:string, num}}])
+        {ref, PhpBeam.Eval.put_object(i, ref, %{obj | props: props})}
+
+      _ ->
+        {ref, i}
+    end
+  end
+
 end

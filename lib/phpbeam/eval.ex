@@ -557,7 +557,10 @@ defmodule PhpBeam.Eval do
       if is_nil(PhpBeam.Classes.get_class(interp1, key)) do
         class_const_missing(interp1, key, cname, env)
       else
-        case PhpBeam.Classes.find_const_lazy(interp1, key, cname) do
+        # native enums materialize their case singletons on first access
+        interp2 = PhpBeam.Classes.NativeEnums.materialize_lazy(interp1, key)
+
+        case PhpBeam.Classes.find_const_lazy(interp2, key, cname) do
           {:ok, v, interp2} ->
             {{:val, v}, env, interp2}
 
@@ -752,6 +755,11 @@ defmodule PhpBeam.Eval do
         {env3, interp4} = assign(target, v, env2, interp3)
         {{:val, v}, env3, interp4}
 
+      # binop hooks that thread interp (GMP arithmetic creates objects)
+      {:ok, v, interp4} ->
+        {env3, interp5} = assign(target, v, env2, interp4)
+        {{:val, v}, env3, interp5}
+
       # bare tagged value (coalesce keeps the left side; ??= hands back
       # arrays/objects/closures untouched) and scalars
       v ->
@@ -798,7 +806,7 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:unop, :-, e}, env, interp) do
-    with_val(e, env, interp, fn v ->
+    gmp_unop(e, env, interp, fn n -> -n end, fn v ->
       case Value.negate(v) do
         {:ok, r} -> {{:val, r}, nil, nil}
         {:error, err} -> throw_error(err)
@@ -816,12 +824,27 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:unop, :bnot, e}, env, interp) do
-    with_val(e, env, interp, fn v ->
+    gmp_unop(e, env, interp, fn n -> -n - 1 end, fn v ->
       case Value.bnot(v) do
         {:ok, r} -> {{:val, r}, nil, nil}
         {:error, err} -> throw_error(err)
       end
     end)
+  end
+
+  # unary minus / ~ on GMP objects produce fresh GMP instances (probed)
+  defp gmp_unop(e, env, interp, int_f, std_f) do
+    {{:val, v}, env2, interp2} = eval(e, env, interp)
+
+    if PhpBeam.Classes.Gmp.gmp?(interp2, v) do
+      n = PhpBeam.Classes.Gmp.obj_int(interp2, v)
+      {ref, interp3} = PhpBeam.Classes.Gmp.new(interp2, int_f.(n))
+      {{:val, ref}, env2, interp3}
+    else
+      case std_f.(v) do
+        {{:val, r}, _, _} -> {{:val, r}, env2, interp2}
+      end
+    end
   end
 
   def eval({:unop, :@, e}, env, interp) do
@@ -848,13 +871,31 @@ defmodule PhpBeam.Eval do
             _ -> interp2
           end
 
-        out = Value.to_int(v) |> elem(1)
+        out =
+          if PhpBeam.Classes.Gmp.gmp?(interp2, v) do
+            {:int, PhpBeam.Classes.Gmp.obj_int(interp2, v)}
+          else
+            Value.to_int(v) |> elem(1)
+          end
+
         {{:val, out}, env2, interp3}
 
       other ->
         out =
           case other do
-            :float -> Value.to_float(v) |> elem(1)
+            :float ->
+              if PhpBeam.Classes.Gmp.gmp?(interp2, v) do
+                n = PhpBeam.Classes.Gmp.obj_int(interp2, v)
+
+                try do
+                  {:float, n * 1.0}
+                rescue
+                  _ -> {:float, :inf}
+                end
+              else
+                Value.to_float(v) |> elem(1)
+              end
+
             :bool -> {:bool, Value.truthy?(v)}
             :string -> cast_to_string(v, env, interp)
             :array -> Value.to_array(v)
@@ -1880,9 +1921,39 @@ defmodule PhpBeam.Eval do
   end
 
   # call a PHP callable value
+  # GMP-overloadable ops; the object-tag probe is inlined so the (hot) int/
+  # string paths skip the remote call entirely
+  @gmp_ops [:+, :-, :*, :/, :%, :**, :shl, :shr, :&, :|, :^, :==, :!=, :<, :<=, :>, :>=, :"<=>", :.]
+
+  def apply_binop(op, {:object, _} = lo, r, _env, interp) when op in @gmp_ops do
+    gmp_binop(op, lo, r, interp)
+  end
+
+  def apply_binop(op, l, {:object, _} = ro, _env, interp) when op in @gmp_ops do
+    gmp_binop(op, l, ro, interp)
+  end
+
   def apply_binop(op, l, r, _env, interp) do
     interp = interp || PhpBeam.Interp.new_stub()
+    apply_binop_std(op, l, r, interp)
+  end
 
+  defp gmp_binop(op, l, r, interp) do
+    case PhpBeam.Classes.Gmp.binop(interp, op, l, r) do
+      :no_gmp ->
+        interp = interp || PhpBeam.Interp.new_stub()
+        apply_binop_std(op, l, r, interp)
+
+      {:gmp, {:object_new, n}} ->
+        {ref, i2} = PhpBeam.Classes.Gmp.new(interp, n)
+        {:ok, ref, i2}
+
+      {:gmp, v} ->
+        {:ok, v}
+    end
+  end
+
+  defp apply_binop_std(op, l, r, interp) do
     case op do
       :. ->
         {:ok, {:string, php_to_string(l) <> php_to_string(r)}}
@@ -2061,16 +2132,22 @@ defmodule PhpBeam.Eval do
       {:object, _} = obj_ref ->
         obj = get_object(interp, obj_ref)
 
-        case PhpBeam.Classes.find_method(interp, obj.class, "__tostring") do
-          nil ->
-            {obj_str_default(obj), interp}
+        # GMP casts natively to its decimal (no __toString method exists on
+        # the php class — get_class_methods parity is kept)
+        if obj.class == "gmp" do
+          {Integer.to_string(PhpBeam.Classes.Gmp.prop_num(obj)), interp}
+        else
+          case PhpBeam.Classes.find_method(interp, obj.class, "__tostring") do
+            nil ->
+              {obj_str_default(obj), interp}
 
-          m ->
-            case call_php_method(obj_ref, m, [], env, interp) do
-              {{:val, {:string, sv}}, _, i2} -> {sv, i2}
-              {{:val, other}, _, i2} -> {php_to_string(other), i2}
-              _ -> {"Object", interp}
-            end
+            m ->
+              case call_php_method(obj_ref, m, [], env, interp) do
+                {{:val, {:string, sv}}, _, i2} -> {sv, i2}
+                {{:val, other}, _, i2} -> {php_to_string(other), i2}
+                _ -> {"Object", interp}
+              end
+          end
         end
 
       _ ->
@@ -2122,16 +2199,20 @@ defmodule PhpBeam.Eval do
   defp cast_to_string({:object, _} = oref, env, interp) do
     obj = PhpBeam.Objects.get_object(interp, oref)
 
-    case PhpBeam.Classes.find_method(interp, obj.class, "__tostring") do
-      nil ->
-        Value.cast_string(oref) |> string_of_cast() |> wrap_string()
+    if obj.class == "gmp" do
+      {:string, Integer.to_string(PhpBeam.Classes.Gmp.prop_num(obj))}
+    else
+      case PhpBeam.Classes.find_method(interp, obj.class, "__tostring") do
+        nil ->
+          Value.cast_string(oref) |> string_of_cast() |> wrap_string()
 
-      m ->
-        case call_php_method(oref, m, [], env, interp) do
-          {{:val, {:string, s}}, _, _} -> {:string, s}
-          {{:val, v}, _, _} -> Value.cast_string(v) |> string_of_cast() |> wrap_string()
-          {{:unwind, _} = u, _, _} -> throw(elem(u, 1))
-        end
+        m ->
+          case call_php_method(oref, m, [], env, interp) do
+            {{:val, {:string, s}}, _, _} -> {:string, s}
+            {{:val, v}, _, _} -> Value.cast_string(v) |> string_of_cast() |> wrap_string()
+            {{:unwind, _} = u, _, _} -> throw(elem(u, 1))
+          end
+      end
     end
   end
 
