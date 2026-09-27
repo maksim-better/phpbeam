@@ -856,7 +856,7 @@ defmodule PhpBeam.Eval do
           case other do
             :float -> Value.to_float(v) |> elem(1)
             :bool -> {:bool, Value.truthy?(v)}
-            :string -> Value.cast_string(v) |> string_of_cast() |> wrap_string()
+            :string -> cast_to_string(v, env, interp)
             :array -> Value.to_array(v)
             :object -> v
           end
@@ -2116,6 +2116,27 @@ defmodule PhpBeam.Eval do
       _ -> ""
     end
   end
+
+  # (string) cast: objects with __toString() render; others follow the
+  # plain cast channel (which throws the php Error for stdClass etc.)
+  defp cast_to_string({:object, _} = oref, env, interp) do
+    obj = PhpBeam.Objects.get_object(interp, oref)
+
+    case PhpBeam.Classes.find_method(interp, obj.class, "__tostring") do
+      nil ->
+        Value.cast_string(oref) |> string_of_cast() |> wrap_string()
+
+      m ->
+        case call_php_method(oref, m, [], env, interp) do
+          {{:val, {:string, s}}, _, _} -> {:string, s}
+          {{:val, v}, _, _} -> Value.cast_string(v) |> string_of_cast() |> wrap_string()
+          {{:unwind, _} = u, _, _} -> throw(elem(u, 1))
+        end
+    end
+  end
+
+  defp cast_to_string(v, _env, _interp),
+    do: Value.cast_string(v) |> string_of_cast() |> wrap_string()
 
   defp string_of_cast({:ok, s}), do: s
   defp wrap_string(s) when is_binary(s), do: {:string, s}

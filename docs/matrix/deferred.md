@@ -23,6 +23,13 @@
 - [ ] lang/028（析构次序）、bug21600（引用赋值 Notice）、serialize_001、autoload_012/021
 - [ ] 返回引用真语义（数组共享）、default+endswitch 残角、invalid_octal/71897 措辞
 
+## B4 顺延（2026-09-26）
+
+- [ ] **方法/函数返回类型的反射**（ReflectionMethod::getReturnType 有值）：parser 的 `return_hint/1` 目前丢弃返回类型（只返回剩余 token）——需给方法/函数元组加 ret 字段（parser 3 处调用点 + Table methods_map + eval 调用执法可选强化），影响面大单独做
+- [ ] ReflectionFunction 的 invoke（闭包/具名真调用）、getClosure、getFileName/getStartLine/getEndLine（需 def_site 线程化）
+- [ ] ReflectionGenerator/Fiber/Reference/Extension/ZendExtension 为空壳类（php 有方法但 Laravel 不用）
+- [ ] ReflectionEnum 的 getCases/backed case getValue 需 enum 常量物化通道
+
 ## B3 顺延（2026-09-26）
 
 - [ ] **array_uintersect_assoc 键-值联合匹配的 php 精确语义**：php 对 [0=>1,1=>2]∩[9,2] 保留 1=>2（键等值 + 回调值匹配的组合判定里有 slot 语义）；我们简单实现返回空——回调在同一 interp 快照下重评测（inline 箭头函数）路径疑有 stale-env，需查 call_cb_raw 的 AST 闭包重评测

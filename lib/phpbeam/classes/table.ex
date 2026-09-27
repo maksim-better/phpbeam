@@ -1177,12 +1177,28 @@ defmodule PhpBeam.Classes.Table do
     base = %{
       "stdclass" => native_stdclass(),
       "closure" => native_closure_class(),
-      "reflectionclass" => native_reflection_class(),
-      "reflectionmethod" => native_reflection_method_class(),
+      "reflectionclass" => patch_reflection_class(native_reflection_class()),
+      "reflectionmethod" => patch_reflection_method(native_reflection_method_class()),
       "reflectionparameter" => native_reflection_parameter_class(),
       "reflectionnamedtype" => native_reflection_named_type_class(),
       "reflectionattribute" => native_reflection_attribute_class(),
       "reflectionexception" => native_class("ReflectionException", "runtimeexception", []),
+      "reflectionfunctionabstract" =>
+        PhpBeam.Classes.Reflection2.classes()["reflectionfunctionabstract"],
+      "reflectionfunction" => PhpBeam.Classes.Reflection2.classes()["reflectionfunction"],
+      "reflectionobject" => PhpBeam.Classes.Reflection2.classes()["reflectionobject"],
+      "reflectionproperty" => PhpBeam.Classes.Reflection2.classes()["reflectionproperty"],
+      "reflectionclassconstant" =>
+        PhpBeam.Classes.Reflection2.classes()["reflectionclassconstant"],
+      "reflectionuniontype" => PhpBeam.Classes.Reflection2.classes()["reflectionuniontype"],
+      "reflectionintersectiontype" =>
+        PhpBeam.Classes.Reflection2.classes()["reflectionintersectiontype"],
+      "reflectionenum" => PhpBeam.Classes.Reflection2.classes()["reflectionenum"],
+      "reflectionenumunitcase" => PhpBeam.Classes.Reflection2.classes()["reflectionenumunitcase"],
+      "reflectionenumbackedcase" =>
+        PhpBeam.Classes.Reflection2.classes()["reflectionenumbackedcase"],
+      "reflectiongenerator" => PhpBeam.Classes.Reflection2.classes()["reflectiongenerator"],
+      "reflectionfiber" => PhpBeam.Classes.Reflection2.classes()["reflectionfiber"],
       "datetime" => native_datetime_class(),
       "datetimeimmutable" => native_datetimeimmutable_class(),
       "datetimezone" => native_datetimezone_class(),
@@ -1241,7 +1257,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute) do
+      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
@@ -2050,6 +2066,80 @@ defmodule PhpBeam.Classes.Table do
     {{:unwind, {:php_throw, obj_ref}}, obj, i2}
   end
 
+  # B4: ReflectionClass gains the property/constant surface from Reflection2
+  defp patch_reflection_class(base) do
+    %{
+      base
+      | methods: Map.merge(base.methods, PhpBeam.Classes.Reflection2.reflection_class_extras())
+    }
+  end
+
+  # B4: ReflectionMethod gains return-type/parameter-count/name surface
+  defp patch_reflection_method(base) do
+    extras =
+      Map.new(
+        [
+          native_fn("getReturnType", fn obj, _args, i ->
+            m = rm_method(obj, i)
+            rt = m && Map.get(m, :ret)
+
+            case rt do
+              nil ->
+                {:ok, {:null, obj}, i}
+
+              "" ->
+                {:ok, {:null, obj}, i}
+
+              _ ->
+                {tref, i2} = PhpBeam.Classes.Reflection2.make_type_obj(rt, i)
+                {:ok, {tref, obj}, i2}
+            end
+          end),
+          native_fn("getNumberOfParameters", fn obj, _args, i ->
+            m = rm_method(obj, i)
+            {:ok, {{:int, length((m && m.params) || [])}, obj}, i}
+          end),
+          native_fn("getNumberOfRequiredParameters", fn obj, _args, i ->
+            m = rm_method(obj, i)
+
+            n =
+              Enum.count((m && m.params) || [], fn
+                {:param, _n, _t, d, _br, _v} -> d == nil
+                _ -> false
+              end)
+
+            {:ok, {{:int, n}, obj}, i}
+          end),
+          native_fn("getName", fn obj, _args, i ->
+            m = rm_method(obj, i)
+            {:ok, {{:string, (m && m.name) || ""}, obj}, i}
+          end),
+          native_fn("getDeclaringClass", fn obj, _args, i ->
+            key = obj.dt_state["ckey"] || obj.dt_state["key"]
+
+            {cref, i2} = Eval.make_instance(i, "reflectionclass")
+            co = Eval.get_object(i2, cref)
+
+            co2 =
+              co
+              |> Map.put(:dt_state, %{"ckey" => key, "key" => key})
+
+            i3 = Eval.put_object(i2, cref, co2)
+            {:ok, {cref, obj}, i3}
+          end)
+        ],
+        fn m -> {String.downcase(m.name), m} end
+      )
+
+    %{base | methods: Map.merge(base.methods, extras)}
+  end
+
+  defp rm_method(obj, i) do
+    key = obj.dt_state["ckey"] || obj.dt_state["key"]
+    mname = obj.dt_state["mname"]
+    PhpBeam.Classes.find_method(i, key, mname)
+  end
+
   defp native_reflection_class do
     %__MODULE__{
       name: "ReflectionClass",
@@ -2484,8 +2574,8 @@ defmodule PhpBeam.Classes.Table do
             native_fn("allowsNull", fn obj, _args, i ->
               t = rc_state(obj) |> Map.get("tname")
 
-              {:ok, {:bool, (is_binary(t) and String.starts_with?(t, "?")) or t == "mixed"}, obj,
-               i}
+              {:ok,
+               {{:bool, (is_binary(t) and String.starts_with?(t, "?")) or t == "mixed"}, obj}, i}
             end)
           ],
           fn m -> {String.downcase(m.name), m} end
