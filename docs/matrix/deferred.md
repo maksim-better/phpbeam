@@ -48,3 +48,9 @@
 - [ ] createFromFormat 全说明符（现支持 Y y m d H i s + 字面量；缺 a A g G n j u v U D l N w S F M e O P T + ! | # 语义）
 - [ ] DateTime::getLastErrors 明细数组（warning_count/warnings/errors）
 - [ ] timezone_abbreviations_list、date_sun_info、date_isodate_set、date_parse
+
+## B5 顺延（2026-09-26）
+
+- [ ] SplStack/SplQueue foreach 第二轮迭代中断（第一轮正确；疑 next() 写回后 iter_call 取到陈旧 obj）
+- [ ] SplFixedArray 经引擎 `$fa[0]='x'` 写丢失（直接 `->offsetSet(0,'x')` 工作正常——engine generic_index_assign 的 ArrayAccess 写路径对 native 方法结果丢弃待查）；`$fa[0]` 直读同源问题
+- [ ] SplHeap 用户 compare() 排序方向、SplPriorityQueue 全差分、SplFileInfo 相对路径/splFileObject 行读取族、SplObjectStorage serialize/var_export、ArrayObject flags(STD_PROP_LIST/ARRAY_AS_PROPS 影响)

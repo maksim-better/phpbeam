@@ -242,6 +242,52 @@ defmodule PhpBeam.Eval.Assign do
   end
 
   def generic_index_assign(container, idx, v, env, interp) do
+    # ArrayAccess objects: evaluate the container; if it's an object with
+    # offsetSet, route the write there (php semantics for $ao[$k] = $v)
+    case Eval.eval(container, env, interp) do
+      {{:val, {:object, _} = oref}, e1, i1} ->
+        case PhpBeam.Classes.find_method(interp, Eval.get_object(i1, oref).class, "offsetset") do
+          nil ->
+            generic_index_assign_raw(container, idx, v, env, i1)
+
+          m ->
+            {{:val, key}, e2, i2} =
+              case idx do
+                nil -> {{:val, :null}, e1, i1}
+                idx_expr -> Eval.eval(idx_expr, e1, i1)
+              end
+
+            k =
+              case key do
+                {:int, _} -> key
+                {:string, _} -> key
+                _ -> :null
+              end
+
+            case Eval.call_php_method(
+                   oref,
+                   m,
+                   [
+                     {:arg, {:lit_val, k}, false, nil},
+                     {:arg, {:lit_val, v}, false, nil}
+                   ],
+                   e2,
+                   i2
+                 ) do
+              {{:val, _}, e3, i3} -> {e3, i3}
+              {{:unwind, _} = u, e3, i3} -> {{:unwind, u}, e3, i3}
+            end
+        end
+
+      {{:val, _}, _e1, _i1} ->
+        generic_index_assign_raw(container, idx, v, env, interp)
+
+      unw ->
+        unw
+    end
+  end
+
+  def generic_index_assign_raw(container, idx, v, env, interp) do
     {path, env2, interp2} = build_path(container, env, interp)
 
     case idx do
@@ -439,6 +485,26 @@ defmodule PhpBeam.Eval.Assign do
 
   def index_read(container, key, env, interp) do
     case container do
+      # ArrayAccess objects: $ao[$k] routes to offsetGet (php semantics)
+      {:object, _} = oref ->
+        case PhpBeam.Classes.find_method(interp, Eval.get_object(interp, oref).class, "offsetget") do
+          nil ->
+            msg = "Trying to access array offset on value of type #{Value.gettype(container)}"
+
+            case Eval.Error.warn(env, interp, msg) do
+              {:cont, _, i2} -> {{:val, :null}, env, i2}
+              {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
+            end
+
+          m ->
+            k = if is_tuple(key), do: key, else: {:int, 0}
+
+            case Eval.call_php_method(oref, m, [{:arg, {:lit_val, k}, false, nil}], env, interp) do
+              {{:val, v}, e2, i2} -> {{:val, v}, e2, i2}
+              {{:unwind, _} = u, e2, i2} -> {{:unwind, u}, e2, i2}
+            end
+        end
+
       {:array, arr} ->
         case PArray.fetch(arr, key) do
           {:ok, v} ->
@@ -544,6 +610,30 @@ defmodule PhpBeam.Eval.Assign do
                 {:string, s} ->
                   string_offset_isset?(s, k, env4, interp4)
 
+                # ArrayAccess objects: isset routes to offsetExists; when
+                # absent, php falls back to offsetGet() !== null
+                {:object, _} = oref ->
+                  obj = Eval.get_object(interp4, oref)
+
+                  case PhpBeam.Classes.find_method(interp4, obj.class, "offsetexists") do
+                    nil ->
+                      {false, env4, interp4}
+
+                    m ->
+                      k2 = if is_tuple(k), do: k, else: {:int, 0}
+
+                      case call_php_method(
+                             oref,
+                             m,
+                             [{:arg, {:lit_val, k2}, false, nil}],
+                             env4,
+                             interp4
+                           ) do
+                        {{:val, r}, e5, i5} -> {Value.truthy?(r), e5, i5}
+                        _ -> {false, env4, interp4}
+                      end
+                  end
+
                 _ ->
                   {false, env4, interp4}
               end
@@ -613,6 +703,29 @@ defmodule PhpBeam.Eval.Assign do
               {:ok, arr2} ->
                 path_put(path, {:array, arr2}, env3, interp3)
                 |> then(fn {e, i} -> {:ok, e, i} end)
+            end
+
+          # ArrayAccess objects: unset routes to offsetUnset
+          {:object, _} = oref ->
+            obj = Eval.get_object(interp3, oref)
+
+            case PhpBeam.Classes.find_method(interp3, obj.class, "offsetunset") do
+              nil ->
+                {:ok, env3, interp3}
+
+              m ->
+                k2 = if is_tuple(k), do: k, else: {:int, 0}
+
+                case call_php_method(
+                       oref,
+                       m,
+                       [{:arg, {:lit_val, k2}, false, nil}],
+                       env3,
+                       interp3
+                     ) do
+                  {{:val, _}, e4, i4} -> {:ok, e4, i4}
+                  _ -> {:ok, env3, interp3}
+                end
             end
 
           _ ->

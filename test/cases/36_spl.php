@@ -1,0 +1,47 @@
+<?php
+// PHASE B5: SPL family — ArrayObject/Iterator, Stack/Queue, FixedArray,
+// ObjectStorage, Heap, FileInfo
+$ao = new ArrayObject(['a' => 1, 'b' => 2]);
+$ao['c'] = 3;
+var_dump($ao['a'], isset($ao['b']), isset($ao['z']));
+unset($ao['b']);
+var_dump(count($ao), $ao->getArrayCopy());
+foreach ($ao as $k => $v) echo "$k=$v ";
+echo "\n";
+$ao->append('app');
+var_dump($ao->count());
+$ao->exchangeArray(['x' => 10]);
+var_dump($ao['x']);
+$ao->offsetSet('y', 20);
+var_dump($ao->offsetGet('y'), $ao->offsetExists('y'));
+$ai = new ArrayIterator(['p' => 1, 'q' => 2]);
+foreach ($ai as $k => $v) echo "$k$v "; echo "\n";
+var_dump(count($ai), $ai->getArrayCopy()['q']);
+$st = new SplStack();
+$st->push(1); $st->push(2); $st->push(3);
+var_dump($st->count(), $st->pop(), $st->top(), count($st));
+$st2 = new SplStack();
+$st2->push(4); $st2->push(5);
+echo $st2->pop();
+echo "\n";
+$q = new SplQueue();
+$q->enqueue('a'); $q->enqueue('b');
+var_dump($q->dequeue(), $q->bottom(), $q->count());
+$h = new SplMinHeap();
+$h->insert(5); $h->insert(1); $h->insert(3);
+var_dump($h->count(), $h->top(), $h->extract(), $h->extract());
+$mh = new SplMaxHeap();
+$mh->insert(5); $mh->insert(9);
+var_dump($mh->extract());
+$os = new SplObjectStorage();
+$o1 = new stdClass(); $o2 = new stdClass();
+$os->attach($o1, "data1"); $os->attach($o2);
+var_dump($os->count(), $os->contains($o1), $os->contains(new stdClass()));
+var_dump($os[$o1]);
+$os->detach($o1);
+var_dump($os->count());
+$fi = new SplFileInfo('/tmp/probe_spl_file.txt');
+var_dump($fi->getFilename(), $fi->getPath(), $fi->getExtension(), $fi->getBasename('.txt'));
+var_dump($fi->isFile());
+var_dump(interface_exists('SplObserver'), interface_exists('SplSubject'), class_exists('SplDoublyLinkedList'));
+echo "done\n";
