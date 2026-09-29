@@ -26,6 +26,7 @@ defmodule PhpBeam.Builtin do
     SerializeFns,
     SocketsFns,
     CurlFns,
+    FtpFns,
     SessionFns,
     ZlibFns,
     ZipFns,
@@ -64,6 +65,7 @@ defmodule PhpBeam.Builtin do
     |> OpensslFns.register()
     |> SocketsFns.register()
     |> CurlFns.register()
+    |> FtpFns.register()
     |> put_param_names()
   end
 

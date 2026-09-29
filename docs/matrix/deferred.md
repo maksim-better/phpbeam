@@ -113,3 +113,9 @@
 - [ ] CURLOPT_FILE/INFILE（流写读）、CURLOPT_RETURNTRANSFER=false 的直写已做但 file:// + http 混合边界未差分；curl_share 的真共享（cookie/dns）
 - [ ] CURLOPT_SSL_VERIFYPEER=true 的 CA bundle（:public_key.cacerts_load 接入——与 https:// 包装器同一债）
 - [ ] curl_version 的 features 位与 ares 版本等跟随本机 libcurl 硬编码（跨机器差分需再探针）
+## C5 顺延（2026-09-30 ftp）
+
+- [ ] ftp:// 与 ftps:// 流包装器（read_wrapper_uri 接 :ftp 会话生命周期——与 phar:// 同形扩展）
+- [ ] ftp_size/mdtm（:ftp 无 stat 协议命令映射——现恒 -1）；ftp_mlsd 的 MLST facts 全集（type/size/modify/perm/unique/unix.*）；rawlist 的 LIST 格式差异
+- [ ] ftp_nb_* 的真异步（现同步执行返 FINISHED=1）；ftp_exec/site/chmod 的 SITE 命令（:ftp.send_cmd 透传待真服务器验证）；ssl_connect 的 TLS（:ftp ssl 选项）
+- [ ] 真实 FTP 服务器差分（本机无 server——proftpd/vsftpd 起桩后补 get/put/rawlist 往返用例）

@@ -1207,6 +1207,7 @@ defmodule PhpBeam.Classes.Table do
       "pharfileinfo" => PhpBeam.Classes.PharArchive.classes()["pharfileinfo"],
       "pharexception" => PhpBeam.Classes.PharArchive.classes()["pharexception"],
       "socket" => PhpBeam.Builtin.SocketsFns.classes()["socket"],
+      "ftpconnection" => PhpBeam.Builtin.FtpFns.classes()["ftpconnection"],
       "curlhandle" => PhpBeam.Builtin.CurlFns.classes()["curlhandle"],
       "curlmultihandle" => PhpBeam.Builtin.CurlFns.classes()["curlmultihandle"],
       "curlsharehandle" => PhpBeam.Builtin.CurlFns.classes()["curlsharehandle"],
@@ -1292,7 +1293,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
+      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
