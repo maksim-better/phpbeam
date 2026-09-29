@@ -105,3 +105,11 @@
 - [ ] set_block/nonblock 桩恒 true（gen_tcp 无 per-call 非阻塞；select 模型需 active once）
 - [ ] socket_write 的 MSG_OOB/DONTROUTE flags 第二参；SO_LINGER setopt（gen_tcp 关闭语义近似）
 - [ ] socket_last_error 恒 0（无 per-socket errno 追踪——errno 在各失败分支吞掉未记录）
+## C4 顺延（2026-09-30 curl）
+
+- [ ] http(s) 请求面：FOLLOWLOCATION/重定向链、PUT/DELETE（CURLOPT_CUSTOMREQUEST）、HTTPHEADER 精确大小写回传、CURLOPT_USERPWD/BASIC 认证、CURLOPT_WRITEHEADER/HEADER 回调、COOKIEJAR（composer 需要——C 相后续）
+- [ ] curl_getinfo 的 30+ 信息键（现 URL/HTTP_CODE/EFFECTIVE_URL）；CURLINFO_* 数组形态（无参 getinfo 返回全表）
+- [ ] multi 族的真并发（现为顺序执行——独立请求输出等价；共享句柄状态/PIPELINING 无）、multi_select 的 select 语义、multi_info_read 队列
+- [ ] CURLOPT_FILE/INFILE（流写读）、CURLOPT_RETURNTRANSFER=false 的直写已做但 file:// + http 混合边界未差分；curl_share 的真共享（cookie/dns）
+- [ ] CURLOPT_SSL_VERIFYPEER=true 的 CA bundle（:public_key.cacerts_load 接入——与 https:// 包装器同一债）
+- [ ] curl_version 的 features 位与 ares 版本等跟随本机 libcurl 硬编码（跨机器差分需再探针）

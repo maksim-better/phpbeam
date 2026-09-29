@@ -1513,7 +1513,10 @@ defmodule PhpBeam.Eval.ConstEval do
         {:ok, {:int, 0}}
 
       _ ->
-        :error
+        case PhpBeam.Builtin.CurlConsts.lookup(name) do
+          nil -> :error
+          v -> {:ok, v}
+        end
     end
   end
 
