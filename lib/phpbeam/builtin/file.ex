@@ -94,6 +94,9 @@ defmodule PhpBeam.Builtin.FileFns do
     end
   end
 
+  # public gateway for sibling builtins (md5_file & co.)
+  def read_wrapper_public(path, i), do: read_wrapper_uri(path, i)
+
   # wrapper dispatch for full-read builtins; :error falls back to the
   # filesystem arm (which renders php's warning)
   defp read_wrapper_uri(path, i) do
@@ -102,6 +105,67 @@ defmodule PhpBeam.Builtin.FileFns do
       {:memory, _} -> {:ok, ""}
       {:input} -> {:ok, input_body(i)}
       {:filter, rchain, _wchain, inner} -> read_filtered(rchain, inner, i)
+      {:phar_file, phar, entry} -> read_phar_entry(phar, entry)
+      {:zlib_file, file} -> read_zlib_file(file)
+      {:zip_file, zip, entry} -> read_zip_entry(zip, entry)
+      _ -> :error
+    end
+  end
+
+  defp read_phar_entry(phar, entry) do
+    with {:ok, bin} <- File.read(phar),
+         {:ok, parsed, _} <- PhpBeam.Classes.PharFormat.parse(bin),
+         e when e != nil <- Enum.find(parsed.entries, &(&1.name == entry)) do
+      {:ok, PhpBeam.Classes.PharFormat.entry_data(bin, e)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp read_zlib_file(file) do
+    with {:ok, bin} <- File.read(file) do
+      z = :zlib.open()
+      :ok = :zlib.inflateInit(z, 31)
+
+      out =
+        try do
+          IO.iodata_to_binary(:zlib.inflate(z, bin))
+        catch
+          _, _ -> ""
+        after
+          :zlib.close(z)
+        end
+
+      {:ok, out}
+    else
+      _ -> :error
+    end
+  end
+
+  defp read_zip_entry(zip, entry) do
+    with {:ok, listing} <- :zip.list_dir(String.to_charlist(zip)) do
+      names =
+        listing
+        |> Enum.filter(&is_tuple(&1) and elem(&1, 0) == :zip_file)
+        |> Enum.map(fn t -> List.to_string(elem(t, 1)) end)
+
+      if entry == "" do
+        # bare zip:// lists nothing readable; php needs the #entry part
+        :error
+      else
+        with {:ok, bins} <-
+               :zip.extract(String.to_charlist(zip),
+                 [:memory, {:file_list, [String.to_charlist(entry)]}]
+               ) do
+          case bins do
+            [{_, data}] -> {:ok, data}
+            _ -> :error
+          end
+        else
+          _ -> :error
+        end
+      end
+    else
       _ -> :error
     end
   end
@@ -266,6 +330,17 @@ defmodule PhpBeam.Builtin.FileFns do
   defp is_writable(_, i), do: {:ok, {:bool, false}, i}
 
   defp filesize_v([{:string, path} | _], i) do
+    # wrapper targets (phar:// etc.) measure the wrapper content
+    case read_wrapper_uri(path, i) do
+      {:ok, data} when is_binary(data) ->
+        {:ok, {:int, byte_size(data)}, i}
+
+      :error ->
+        filesize_plain(path, i)
+    end
+  end
+
+  defp filesize_plain(path, i) do
     case File.stat(path) do
       {:ok, %{size: sz}} ->
         {:ok, {:int, sz}, i}

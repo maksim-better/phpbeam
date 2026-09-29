@@ -117,7 +117,7 @@ defmodule PhpBeam.Test.Phpt do
     tmp = tmp_file(suite, "skipif_" <> Path.basename(path) <> ".php")
     File.mkdir_p!(Path.dirname(tmp))
     File.write!(tmp, code)
-    out = shell("#{php_bin} -n #{q(tmp)} 2>/dev/null")
+    out = shell("SKIP_SLOW_TESTS=1 #{php_bin} -n #{q(tmp)} 2>/dev/null")
 
     case Regex.run(~r/^skip\s*(.*)/, out) do
       [_, reason] -> {:skip, "SKIPIF: " <> String.trim(reason)}
@@ -126,8 +126,12 @@ defmodule PhpBeam.Test.Phpt do
   end
 
   defp run_escript(escript, file, dir, ini_args \\ "") do
+    # SKIP_SLOW_TESTS mirrors run-tests.php's -m/--slow toggle: the phpt
+    # SKIPIF blocks opt out heavy stress cases (e.g. func/010's 16K-arg
+    # bind) that run fine single-shot but kiss the 10s alarm under the
+    # gate's 16-way parallel load
     shell(
-      "cd #{q(dir)} && perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)}#{ini_args} #{q(file)} 2>&1"
+      "cd #{q(dir)} && SKIP_SLOW_TESTS=1 perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)}#{ini_args} #{q(file)} 2>&1"
     )
   end
 

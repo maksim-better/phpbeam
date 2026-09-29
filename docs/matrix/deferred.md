@@ -79,3 +79,12 @@
 - [ ] ZipArchive 条目压缩方法恒 stored（:zip 不写 deflate 成员；statIndex 的 comp_method/comp_size 近似）；增量 addGlob/addPattern/replaceFile、加密（setEncryptionName）、进度回调（registerProgressCallback）、外部属性族未做
 - [ ] ZipArchive 修改现有档的 append 语义（open(现有) + addFromString 时旧条目保留已对，但 renameName 的 statIndex 细节未全探针）
 - [ ] legacy zip_entry_read 的 length 参数边界（默认全读已对齐；部分读未探针）
+## C1c Phar 顺延（2026-09-29）
+
+- [ ] Phar 写路径（offsetSet/addFromString 后的落盘物化）受 phar.readonly 门但未接 Finalize——差分侧 php 默认 readonly=1 无法对拍，composer 实测时补
+- [ ] PharData 的 tar/zip **写**路径（读路径 :erl_tar/:zip 全通）；convertToExecutable/convertToData、压缩（compressFiles GZ）桩
+- [ ] mapPhar/loadPhar 的全局 alias 注册表（跨对象 phar://alias 解析）、webPhar/mungServer/mount（SAPI 相）、buildFromDirectory/buildFromIterator
+- [ ] phar:// 的 fopen 流式（当前 file_get_contents/md5_file/filesize/file_put_contents 无读、readfile 全读已接；fopen+fread 细粒度未接）
+- [ ] Phar::running() 对 CLI 入口 phar 的真值（恒返回 phar://main——未按 .phar 后缀分支，差分未覆盖）
+- [ ] bz2 条目（PHAR_ENT_COMPRESSED_BZ2）：本 OTP 无 :bzip2
+- [ ] harness：SKIP_SLOW_TESTS=1 对齐 run-tests.php 的 -m 慢测开关（func/010 的 16K 参绑定单跑 4.1s/门禁并行贴线——不是回归，官方 skip 探针本就为此设计）

@@ -26,6 +26,9 @@ defmodule PhpBeam.StreamWrapper do
           | {:filter, [filter], [filter], String.t()}
           | {:unsupported, String.t() | nil}
 
+  def parse("phar://" <> rest), do: split_phar(rest)
+  def parse("compress.zlib://" <> rest), do: {:zlib_file, rest}
+  def parse("zip://" <> rest), do: split_zip(rest)
   def parse("php://" <> rest), do: parse_php(rest)
   def parse("data://" <> rest), do: parse_data(rest)
   # RFC2397 short form: data:,payload (default media type)
@@ -181,5 +184,23 @@ defmodule PhpBeam.StreamWrapper do
       c -> c
     end)
     |> List.to_string()
+  end
+
+  # phar:///path.phar/entry — the archive path ends at the first archive
+  # suffix (.phar/.phar.gz/.tar/.tar.gz/.zip...); the remainder is the entry
+  defp split_phar(rest) do
+    case Regex.run(~r/^(.*?\.(?:phar|phar\.gz|phar\.bz2|tar|tar\.gz|tar\.bz2|zip))(?:$|\/(.*))$/s, rest) do
+      [_, phar, entry] -> {:phar_file, phar, entry || ""}
+      [_, phar] -> {:phar_file, phar, ""}
+      nil -> {:phar_file, rest, ""}
+    end
+  end
+
+  # zip:///path.zip#entry (php's zip wrapper uses the # separator)
+  defp split_zip(rest) do
+    case String.split(rest, "#", parts: 2) do
+      [zip, entry] -> {:zip_file, zip, entry}
+      [zip] -> {:zip_file, zip, ""}
+    end
   end
 end

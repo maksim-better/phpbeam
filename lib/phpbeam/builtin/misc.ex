@@ -43,6 +43,8 @@ defmodule PhpBeam.Builtin.MiscFns do
       "parse_url" => &parse_url_v/2,
       "md5" => &md5_v/2,
       "sha1" => &sha1_v/2,
+      "md5_file" => &md5_file_v/2,
+      "sha1_file" => &sha1_file_v/2,
       "crc32" => &crc32_v/2,
       "crc32b" => &crc32b_v/2,
       "hash" => &hash_v/2,
@@ -1471,4 +1473,44 @@ defmodule PhpBeam.Builtin.MiscFns do
   end
 
   defp hash_equals_v(_, i), do: {:ok, {:bool, false}, i}
+defp md5_file_v(vals, i), do: digest_file(:md5, vals, i)
+  defp sha1_file_v(vals, i), do: digest_file(:sha, vals, i)
+
+  defp digest_file(algo, [{:string, path} | _] = vals, i) do
+    data =
+      case PhpBeam.Builtin.FileFns.read_wrapper_public(path, i) do
+        {:ok, bin} ->
+          bin
+
+        :error ->
+          case File.read(path) do
+            {:ok, bin} -> bin
+            _ -> nil
+          end
+      end
+
+    raw? =
+      case vals do
+        [_, {:bool, true} | _] -> true
+        _ -> false
+      end
+
+    case data do
+      nil ->
+        case Error.warn(Error.stub_env(), i, "#{algo}_file(): failed to open stream") do
+          {:cont, _, i2} -> {:ok, {:bool, false}, i2}
+          {:unwind, u, _, i2} -> {:unwind, u, i2}
+        end
+
+      bin ->
+        d = :crypto.hash(algo, bin)
+
+        out =
+          if raw?,
+            do: d,
+            else: Base.encode16(d, case: :lower)
+
+        {:ok, {:string, out}, i}
+    end
+  end
 end
