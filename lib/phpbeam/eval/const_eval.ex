@@ -332,6 +332,61 @@ defmodule PhpBeam.Eval.ConstEval do
       "T_DOUBLE_COLON" ->
         {:ok, {:int, 401}}
 
+
+      "FORCE_GZIP" ->
+        {:ok, {:int, 31}}
+
+      "FORCE_DEFLATE" ->
+        {:ok, {:int, 15}}
+
+      "ZLIB_ENCODING_RAW" ->
+        {:ok, {:int, -15}}
+
+      "ZLIB_ENCODING_GZIP" ->
+        {:ok, {:int, 31}}
+
+      "ZLIB_ENCODING_DEFLATE" ->
+        {:ok, {:int, 15}}
+
+      "ZLIB_NO_FLUSH" ->
+        {:ok, {:int, 0}}
+
+      "ZLIB_PARTIAL_FLUSH" ->
+        {:ok, {:int, 1}}
+
+      "ZLIB_SYNC_FLUSH" ->
+        {:ok, {:int, 2}}
+
+      "ZLIB_FULL_FLUSH" ->
+        {:ok, {:int, 3}}
+
+      "ZLIB_BLOCK" ->
+        {:ok, {:int, 5}}
+
+      "ZLIB_FINISH" ->
+        {:ok, {:int, 4}}
+
+      "ZLIB_FILTERED" ->
+        {:ok, {:int, 1}}
+
+      "ZLIB_HUFFMAN_ONLY" ->
+        {:ok, {:int, 2}}
+
+      "ZLIB_RLE" ->
+        {:ok, {:int, 3}}
+
+      "ZLIB_FIXED" ->
+        {:ok, {:int, 4}}
+
+      "ZLIB_DEFAULT_STRATEGY" ->
+        {:ok, {:int, 0}}
+
+      "ZLIB_VERNUM" ->
+        {:ok, {:int, 4800}}
+
+      "ZLIB_VERSION" ->
+        {:ok, {:string, "1.2.12"}}
+
       "T_ECHO" ->
         {:ok, {:int, 291}}
 

@@ -1201,6 +1201,9 @@ defmodule PhpBeam.Classes.Table do
       "arrayobject" => PhpBeam.Classes.Spl.classes()["arrayobject"],
       "gmp" => PhpBeam.Classes.Gmp.classes()["gmp"],
       "roundingmode" => PhpBeam.Classes.NativeEnums.classes()["roundingmode"],
+      "ziparchive" => PhpBeam.Classes.Zip.classes()["ziparchive"],
+      "deflatecontext" => PhpBeam.Builtin.ZlibFns.classes()["deflatecontext"],
+      "inflatecontext" => PhpBeam.Builtin.ZlibFns.classes()["inflatecontext"],
       "arrayiterator" => PhpBeam.Classes.Spl.classes()["arrayiterator"],
       "spldoublylinkedlist" => PhpBeam.Classes.Spl.classes()["spldoublylinkedlist"],
       "splstack" => PhpBeam.Classes.Spl.classes()["splstack"],
@@ -1276,7 +1279,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode sessionhandler sessionhandlerinterface) do
+      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive sessionhandler sessionhandlerinterface) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)

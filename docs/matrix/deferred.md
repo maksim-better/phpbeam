@@ -71,3 +71,11 @@
 - [ ] session 自定义 save handler（对象/闭包形）接受但不分派，恒走 files 后端；session.gc_probability 自动 GC 未建模（手动 session_gc 按 mtime 扫描工作）；session_start 的 options 数组仅实现 read_and_close
 - [ ] bcpowmod 模 0/bcsqrt 负数等 ValueError 文案按文档推断未逐一探针；bcround 的 RoundingMode 参数传入非枚举对象时的 TypeError 文案为近似
 - [ ] 未定义数组键警告的键渲染：整数键我们渲染 `"0"`（带引号），php 渲染 `0`——gmp_gcdext 探针暴露，属引擎既有键渲染差异
+## C1 顺延（2026-09-29 zlib+zip 首批）
+
+- [ ] gz 文件族的 gzpassthru 写模式下行为（读模式差分已对齐；php 写模式下 passthru 未探针）
+- [ ] deflate_add 在 finished 上下文上再调用（php 警告文案已按探针对齐，但同上下文重复 add 的警告序未差分）
+- [ ] gzopen 模式串的 h（hex）/f（filter）修饰与 use_include_path 第三参
+- [ ] ZipArchive 条目压缩方法恒 stored（:zip 不写 deflate 成员；statIndex 的 comp_method/comp_size 近似）；增量 addGlob/addPattern/replaceFile、加密（setEncryptionName）、进度回调（registerProgressCallback）、外部属性族未做
+- [ ] ZipArchive 修改现有档的 append 语义（open(现有) + addFromString 时旧条目保留已对，但 renameName 的 statIndex 细节未全探针）
+- [ ] legacy zip_entry_read 的 length 参数边界（默认全读已对齐；部分读未探针）
