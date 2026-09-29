@@ -88,3 +88,12 @@
 - [ ] Phar::running() 对 CLI 入口 phar 的真值（恒返回 phar://main——未按 .phar 后缀分支，差分未覆盖）
 - [ ] bz2 条目（PHAR_ENT_COMPRESSED_BZ2）：本 OTP 无 :bzip2
 - [ ] harness：SKIP_SLOW_TESTS=1 对齐 run-tests.php 的 -m 慢测开关（func/010 的 16K 参绑定单跑 4.1s/门禁并行贴线——不是回归，官方 skip 探针本就为此设计）
+## C2 顺延（2026-09-29/30 openssl + https）
+
+- [ ] openssl_seal/open 的 &$sealdata/&$envkeys/&$decryptedkeys 数组 by-ref 输出（ho 通道待接）；当前 seal 返回密文不写回
+- [ ] CSR 族（openssl_csr_new/sign/export）与 PKCS7/CMS/PKCS12/SPOP（SPKI）桩；openssl_dh_compute_key/pkey_derive 未做
+- [ ] X509：purposes 数组为恒真近似（php 随证书/CA 状态变）；signatureTypeNID 恒 65；serialNumber 大数 hex 形态；x509_checkpurpose 桩
+- [ ] openssl_pkey_new 密钥参数（bits/type/config 数组）与 export 的 passphrase 加密（:public_key 无 PKCS 加密 PEM——需 :crypto 手写）；pkey_get_details 的 dmp1/dmq1（OTP record 有 dp/dq ✓ 但 qinv=coefficient 映射未差分）
+- [ ] https:// 包装器：verify_none（php 默认 verify peer——CA bundle 校验待 C 相接 public_key:cacerts_load）；仅 file_get_contents 全读（fopen 流式/headers/POST 未接，归 C4 curl 时统一）
+- [ ] openssl_get_cipher_methods 名单为子集（php 200+；核心 aes 家族齐）；md_methods 别名表子集
+- [ ] openssl_error_string 恒 false（无错误队列模型）；openssl_random_pseudo_bytes 的 &$strong_result 未写回

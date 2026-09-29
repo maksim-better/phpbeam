@@ -105,6 +105,7 @@ defmodule PhpBeam.Builtin.FileFns do
       {:memory, _} -> {:ok, ""}
       {:input} -> {:ok, input_body(i)}
       {:filter, rchain, _wchain, inner} -> read_filtered(rchain, inner, i)
+      {:http, url} -> read_http(url)
       {:phar_file, phar, entry} -> read_phar_entry(phar, entry)
       {:zlib_file, file} -> read_zlib_file(file)
       {:zip_file, zip, entry} -> read_zip_entry(zip, entry)
@@ -464,4 +465,33 @@ defmodule PhpBeam.Builtin.FileFns do
   defp tempnam(_, i), do: {:ok, {:bool, false}, i}
 
   defp warn(i, msg), do: PhpBeam.Interp.warn(i, msg)
+  # http(s):// full-read through OTP :httpc/:ssl (verify_none — php's
+  # default peer verification is a deferred deviation)
+  defp read_http(url) do
+    :ssl.start()
+    :inets.start()
+
+    request = {String.to_charlist(url), []}
+
+    opts = [
+      ssl: [
+        verify: :verify_none,
+        depth: 3
+      ]
+    ]
+
+    case :httpc.request(:get, request, opts, body_format: :binary) do
+      {:ok, {{_, 200, _}, _headers, body}} ->
+        {:ok, IO.iodata_to_binary(body)}
+
+      {:ok, {{_, code, _}, _headers, body}} ->
+        _ = code
+        {:ok, IO.iodata_to_binary(body)}
+
+      {:error, _} ->
+        :error
+    end
+  catch
+    _, _ -> :error
+  end
 end

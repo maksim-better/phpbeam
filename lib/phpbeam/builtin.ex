@@ -9,6 +9,7 @@ defmodule PhpBeam.Builtin do
     ArrayFns,
     BcmathFns,
     MbFns,
+    OpensslFns,
     ArrayStdFns,
     B6,
     CursorFns,
@@ -58,6 +59,7 @@ defmodule PhpBeam.Builtin do
     |> ReadlineFns.register()
     |> ZlibFns.register()
     |> ZipFns.register()
+    |> OpensslFns.register()
     |> put_param_names()
   end
 

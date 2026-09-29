@@ -384,6 +384,67 @@ defmodule PhpBeam.Eval.ConstEval do
       "ZLIB_VERNUM" ->
         {:ok, {:int, 4800}}
 
+
+      "OPENSSL_RAW_DATA" ->
+        {:ok, {:int, 1}}
+
+      "OPENSSL_ZERO_PADDING" ->
+        {:ok, {:int, 2}}
+
+      "OPENSSL_DONT_ZERO_PAD_KEY" ->
+        {:ok, {:int, 4}}
+
+      "OPENSSL_PKCS1_PADDING" ->
+        {:ok, {:int, 1}}
+
+      "OPENSSL_NO_PADDING" ->
+        {:ok, {:int, 3}}
+
+      "OPENSSL_PKCS1_OAEP_PADDING" ->
+        {:ok, {:int, 4}}
+
+      "OPENSSL_KEYTYPE_RSA" ->
+        {:ok, {:int, 0}}
+
+      "OPENSSL_KEYTYPE_DSA" ->
+        {:ok, {:int, 1}}
+
+      "OPENSSL_KEYTYPE_DH" ->
+        {:ok, {:int, 2}}
+
+      "OPENSSL_KEYTYPE_EC" ->
+        {:ok, {:int, 3}}
+
+      "OPENSSL_ALGO_SHA1" ->
+        {:ok, {:int, 1}}
+
+      "OPENSSL_ALGO_MD5" ->
+        {:ok, {:int, 2}}
+
+      "OPENSSL_ALGO_MD4" ->
+        {:ok, {:int, 3}}
+
+      "OPENSSL_ALGO_SHA224" ->
+        {:ok, {:int, 6}}
+
+      "OPENSSL_ALGO_SHA256" ->
+        {:ok, {:int, 7}}
+
+      "OPENSSL_ALGO_SHA384" ->
+        {:ok, {:int, 8}}
+
+      "OPENSSL_ALGO_SHA512" ->
+        {:ok, {:int, 9}}
+
+      "OPENSSL_ALGO_RMD160" ->
+        {:ok, {:int, 10}}
+
+      "OPENSSL_ENCODING_DER" ->
+        {:ok, {:int, 0}}
+
+      "OPENSSL_ENCODING_PEM" ->
+        {:ok, {:int, 2}}
+
       "ZLIB_VERSION" ->
         {:ok, {:string, "1.2.12"}}
 

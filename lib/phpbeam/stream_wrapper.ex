@@ -26,6 +26,8 @@ defmodule PhpBeam.StreamWrapper do
           | {:filter, [filter], [filter], String.t()}
           | {:unsupported, String.t() | nil}
 
+  def parse("https://" <> _rest = url), do: {:http, url}
+  def parse("http://" <> _rest = url), do: {:http, url}
   def parse("phar://" <> rest), do: split_phar(rest)
   def parse("compress.zlib://" <> rest), do: {:zlib_file, rest}
   def parse("zip://" <> rest), do: split_zip(rest)

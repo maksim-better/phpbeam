@@ -1206,6 +1206,9 @@ defmodule PhpBeam.Classes.Table do
       "phardata" => PhpBeam.Classes.PharArchive.classes()["phardata"],
       "pharfileinfo" => PhpBeam.Classes.PharArchive.classes()["pharfileinfo"],
       "pharexception" => PhpBeam.Classes.PharArchive.classes()["pharexception"],
+      "opensslassymmetrickey" => PhpBeam.Builtin.OpensslFns.classes()["opensslassymmetrickey"],
+      "opensslcertificate" => PhpBeam.Builtin.OpensslFns.classes()["opensslcertificate"],
+      "opensslcertificatesigningrequest" => PhpBeam.Builtin.OpensslFns.classes()["opensslcertificatesigningrequest"],
       "deflatecontext" => PhpBeam.Builtin.ZlibFns.classes()["deflatecontext"],
       "inflatecontext" => PhpBeam.Builtin.ZlibFns.classes()["inflatecontext"],
       "arrayiterator" => PhpBeam.Classes.Spl.classes()["arrayiterator"],
@@ -1283,7 +1286,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception sessionhandler sessionhandlerinterface) do
+      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
