@@ -48,7 +48,7 @@
 
 ### PHASE C：T2 BEAM 原生等价
 
-- [ ] C1 zlib(:zlib) + zip(:zip) + Phar——composer phar 分发在此解锁；`compress.zlib://`/`zip://` 包装器
+- [x] **C1 zlib+zip+Phar（2026-09-29 完成，`2649564`+`497faf8`）**：`ZlibFns` 30——encoding 参数=zlib windowBits 直通（-15/15/31），一次性编解码与 php **字节级一致**（hex 差分钉死）；增量上下文（deflate_init/add、inflate_init/add）持真 :zlib 端口，safeInflate 的 complete=php Z_STREAM_END；gz 文件族全内存游标；**写路径真增量流**——gzwrite NO_FLUSH 累积、gzclose SYNC+FINISH（php 的 00 00 FF FF+final 块尾迹 cmp 一致）；`ZipArchive`（open 错误码 ER_NOENT=9/CREATE/EXCL、tombstone delete——numFiles 不变槽访问 false、close 压实（探针钉死）、props 经 {:string,小写} 槽形同步）+ 旧 zip_* 10（全函数 Deprecated 警告精确文案）+ libzip 1.11.2 常量表；`PharFormat`——按 php-src phar.c 逐字段解析（manifest/entry/SHA-256 GBMB 签名校验/gz 条目）+ `PharArchive` 四类读路径 + **phar:// compress.zlib:// zip:// 三包装器**（file_get_contents/filesize/md5_file/sha1_file 新增并接包装器）；:zip 互操作 charlist + :zip_file 元数无关匹配；差分 39/40 全同；825 测试 0 败；phpt 348<基线363（harness 接 SKIP_SLOW_TESTS=1 对齐 run-tests.php -m，func/010 慢测按其自带 SKIPIF 显式跳过）；**顺延**（deferred.md C1/C1c）：Phar 写路径物化、PharData tar/zip 写、alias 全局注册表、fopen 流式 phar://、bz2 条目
 - [ ] C2 openssl 64（:crypto/:public_key：X509 解析/签名验签/加密族/pkey）+ `https://` 流包装器（OTP :ssl）
 - [ ] C3 sockets 37（gen_tcp/gen_udp/socket 直映射）
 - [ ] C4 curl 33（httpc 映射；CURLOPT 有效集分层）
