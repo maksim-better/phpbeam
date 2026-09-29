@@ -17,7 +17,7 @@ defmodule PhpBeam.MixProject do
   defp elixirc_paths(_), do: ["lib"]
 
   def application do
-    [extra_applications: [:logger]]
+    [extra_applications: [:logger, :xmerl, :inets, :ssl, :ftp]]
   end
 
   # hex registry unreachable from this network (Erlang TLS vs intercepting

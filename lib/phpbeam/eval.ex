@@ -897,7 +897,7 @@ defmodule PhpBeam.Eval do
               end
 
             :bool -> {:bool, Value.truthy?(v)}
-            :string -> cast_to_string(v, env, interp)
+            :string -> cast_to_string(v, env2, interp2)
             :array -> Value.to_array(v)
             :object -> v
           end

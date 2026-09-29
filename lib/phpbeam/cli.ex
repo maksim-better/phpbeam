@@ -115,14 +115,14 @@ defmodule PhpBeam.CLI do
         try do
           PhpBeam.Interp.run(src, file, ini_entries)
         catch
-          :exit, _ ->
-            {"PHP Fatal error:  internal exit\n", 255, nil}
+          :exit, r ->
+            {"PHP Fatal error:  internal exit " <> inspect(r, limit: 6) <> "\n", 255, nil}
 
           kind, reason ->
             msg =
               case reason do
                 %_{message: m} -> m
-                _ -> inspect(reason)
+                _ -> inspect(reason, limit: 4) <> " ST " <> (__STACKTRACE__ |> Enum.take(4) |> Enum.map(fn {mm, ff, _, _} -> "#{mm}.#{ff}" end) |> Enum.join(","))
               end
 
             IO.write(:stderr, "phpx internal error (#{kind}): #{msg}\n")

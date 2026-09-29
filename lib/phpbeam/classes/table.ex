@@ -1207,6 +1207,17 @@ defmodule PhpBeam.Classes.Table do
       "pharfileinfo" => PhpBeam.Classes.PharArchive.classes()["pharfileinfo"],
       "pharexception" => PhpBeam.Classes.PharArchive.classes()["pharexception"],
       "socket" => PhpBeam.Builtin.SocketsFns.classes()["socket"],
+      "simplexmlelement" => PhpBeam.Classes.SimpleXml.classes()["simplexmlelement"],
+      "domdocument" => PhpBeam.Classes.Dom.classes()["domdocument"],
+      "domelement" => PhpBeam.Classes.Dom.classes()["domelement"],
+      "domnode" => PhpBeam.Classes.Dom.classes()["domnode"],
+      "domtext" => PhpBeam.Classes.Dom.classes()["domtext"],
+      "domattr" => PhpBeam.Classes.Dom.classes()["domattr"],
+      "domnodelist" => PhpBeam.Classes.Dom.classes()["domnodelist"],
+      "domxpath" => PhpBeam.Classes.Dom.classes()["domxpath"],
+      "domexception" => PhpBeam.Classes.Dom.classes()["domexception"],
+      "domdocumentfragment" => PhpBeam.Classes.Dom.classes()["domdocumentfragment"],
+      "xmlparser" => PhpBeam.Builtin.XmlFns.classes()["xmlparser"],
       "ftpconnection" => PhpBeam.Builtin.FtpFns.classes()["ftpconnection"],
       "curlhandle" => PhpBeam.Builtin.CurlFns.classes()["curlhandle"],
       "curlmultihandle" => PhpBeam.Builtin.CurlFns.classes()["curlmultihandle"],
@@ -1293,7 +1304,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
+      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection simplexmlelement domdocument domelement domnode domtext domattr domnodelist domxpath domexception domdocumentfragment xmlparser curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)

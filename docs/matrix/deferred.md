@@ -124,3 +124,12 @@
 - [ ] posix_setuid/setgid/setsid/setpgid/initgroups 桩（BEAM 无进程身份切换——web 运行时相接 worker 权限时设计）
 - [ ] posix_times 的 utime/stime（:erlang.statistics 的 job statistics 映射粗糙）；getrlimit 全键（硬编码 macOS 默认）；sysconf/pathconf/fpathconf/mknod 近似值
 - [ ] pwuid 的 gecos 字段（dscl RealName）；getgrgid 的 members 列表（dscl GroupMembership）；ttyname/isatty 的真 TTY 检测（CLI 恒 false——管道下 php 同 false）
+## C6 顺延（2026-09-30 xml 族）
+
+- [ ] XMLWriter 42（memory 流式写——xmerl 导出侧）与 XMLReader（流式读）未实现（本轮交付 xml_parse/SimpleXML/DOM 核心；writer/reader 依需追加）
+- [ ] DOM 变异穿透仅 appendChild→document（removeChild/replaceChild/insertBefore/setAttribute 的 doc 回写同模式待补）；parentNode/nextSibling 恒 null；getElementById/DOMSchema
+- [ ] xpath 子集（//tag、/root/tag、[@attr]）——谓词全集（[@attr='v']、轴、text()、count）与 SimpleXML xpath 结果类型差异；DOMXPath::evaluate
+- [ ] CDATA/注释/命名空间/PI 节点（strip_ws 只留 xmlElement/xmlText）；DOMText/DOMComment 拆分；实体引用解码（&amp; 等 xmerl 默认解）
+- [ ] xml_parse 的分块回调（handler 族 noop）；XMLParser 的编码选项；xml_error_string 全表
+- [ ] simplexml 的 addChild/addAttribute 的 asXML 回写（写 wrapper 未透 root——与 DOM append 同型）
+- [ ] DOMDocument::save 的 HTML 序列化形态；formatOutput/pretty print
