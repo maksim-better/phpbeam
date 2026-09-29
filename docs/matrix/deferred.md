@@ -97,3 +97,11 @@
 - [ ] https:// 包装器：verify_none（php 默认 verify peer——CA bundle 校验待 C 相接 public_key:cacerts_load）；仅 file_get_contents 全读（fopen 流式/headers/POST 未接，归 C4 curl 时统一）
 - [ ] openssl_get_cipher_methods 名单为子集（php 200+；核心 aes 家族齐）；md_methods 别名表子集
 - [ ] openssl_error_string 恒 false（无错误队列模型）；openssl_random_pseudo_bytes 的 &$strong_result 未写回
+## C3 顺延（2026-09-30 sockets）
+
+- [ ] socket_select 三数组 by-ref（tv_sec/tv_usec 微秒语义）；recvfrom 的 &$name/&$port 精确写回（当前部分写回）；recv 的 flags（MSG_PEEK/WAITALL 位）
+- [ ] socket_create 的第 3 参 protocol 校验与 AF_INET6（:inet6 未接）；SOCK_RAW/RDM/SEQPACKET（gen_tcp 仅 stream）
+- [ ] socket_import/export_stream（与 php:// 流互转）；addrinfo_* 族（:inet.getaddrinfo 映射）；cmsg/sendmsg/recvmsg（控制消息）；atmark
+- [ ] set_block/nonblock 桩恒 true（gen_tcp 无 per-call 非阻塞；select 模型需 active once）
+- [ ] socket_write 的 MSG_OOB/DONTROUTE flags 第二参；SO_LINGER setopt（gen_tcp 关闭语义近似）
+- [ ] socket_last_error 恒 0（无 per-socket errno 追踪——errno 在各失败分支吞掉未记录）

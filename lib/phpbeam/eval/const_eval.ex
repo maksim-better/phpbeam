@@ -385,6 +385,469 @@ defmodule PhpBeam.Eval.ConstEval do
         {:ok, {:int, 4800}}
 
 
+
+      "AF_UNIX" ->
+        {:ok, {:int, 1}}
+
+      "AF_INET" ->
+        {:ok, {:int, 2}}
+
+      "AF_INET6" ->
+        {:ok, {:int, 30}}
+
+      "SOCK_STREAM" ->
+        {:ok, {:int, 1}}
+
+      "SOCK_DGRAM" ->
+        {:ok, {:int, 2}}
+
+      "SOCK_RAW" ->
+        {:ok, {:int, 3}}
+
+      "SOCK_SEQPACKET" ->
+        {:ok, {:int, 5}}
+
+      "SOCK_RDM" ->
+        {:ok, {:int, 4}}
+
+      "MSG_OOB" ->
+        {:ok, {:int, 1}}
+
+      "MSG_WAITALL" ->
+        {:ok, {:int, 64}}
+
+      "MSG_CTRUNC" ->
+        {:ok, {:int, 32}}
+
+      "MSG_TRUNC" ->
+        {:ok, {:int, 16}}
+
+      "MSG_PEEK" ->
+        {:ok, {:int, 2}}
+
+      "MSG_DONTROUTE" ->
+        {:ok, {:int, 4}}
+
+      "MSG_EOR" ->
+        {:ok, {:int, 8}}
+
+      "MSG_EOF" ->
+        {:ok, {:int, 256}}
+
+      "MSG_NOSIGNAL" ->
+        {:ok, {:int, 524288}}
+
+      "MSG_DONTWAIT" ->
+        {:ok, {:int, 128}}
+
+      "SO_DEBUG" ->
+        {:ok, {:int, 1}}
+
+      "SO_REUSEADDR" ->
+        {:ok, {:int, 4}}
+
+      "SO_REUSEPORT" ->
+        {:ok, {:int, 512}}
+
+      "SO_KEEPALIVE" ->
+        {:ok, {:int, 8}}
+
+      "SO_DONTROUTE" ->
+        {:ok, {:int, 16}}
+
+      "SO_LINGER" ->
+        {:ok, {:int, 128}}
+
+      "SO_LINGER_SEC" ->
+        {:ok, {:int, 4224}}
+
+      "SO_BROADCAST" ->
+        {:ok, {:int, 32}}
+
+      "SO_OOBINLINE" ->
+        {:ok, {:int, 256}}
+
+      "SO_SNDBUF" ->
+        {:ok, {:int, 4097}}
+
+      "SO_RCVBUF" ->
+        {:ok, {:int, 4098}}
+
+      "SO_SNDLOWAT" ->
+        {:ok, {:int, 4099}}
+
+      "SO_RCVLOWAT" ->
+        {:ok, {:int, 4100}}
+
+      "SO_SNDTIMEO" ->
+        {:ok, {:int, 4101}}
+
+      "SO_RCVTIMEO" ->
+        {:ok, {:int, 4102}}
+
+      "SO_TYPE" ->
+        {:ok, {:int, 4104}}
+
+      "SO_ERROR" ->
+        {:ok, {:int, 4103}}
+
+      "SO_BINDTODEVICE" ->
+        {:ok, {:int, 4404}}
+
+      "SO_DONTTRUNC" ->
+        {:ok, {:int, 8192}}
+
+      "SO_WANTMORE" ->
+        {:ok, {:int, 16384}}
+
+      "SOL_SOCKET" ->
+        {:ok, {:int, 65535}}
+
+      "SOMAXCONN" ->
+        {:ok, {:int, 128}}
+
+      "TCP_NODELAY" ->
+        {:ok, {:int, 1}}
+
+      "TCP_NOTSENT_LOWAT" ->
+        {:ok, {:int, 513}}
+
+      "TCP_KEEPALIVE" ->
+        {:ok, {:int, 16}}
+
+      "PHP_NORMAL_READ" ->
+        {:ok, {:int, 1}}
+
+      "PHP_BINARY_READ" ->
+        {:ok, {:int, 2}}
+
+      "MCAST_JOIN_GROUP" ->
+        {:ok, {:int, 12}}
+
+      "MCAST_LEAVE_GROUP" ->
+        {:ok, {:int, 13}}
+
+      "IP_MULTICAST_IF" ->
+        {:ok, {:int, 9}}
+
+      "IP_MULTICAST_TTL" ->
+        {:ok, {:int, 10}}
+
+      "IP_MULTICAST_LOOP" ->
+        {:ok, {:int, 11}}
+
+      "IPV6_MULTICAST_IF" ->
+        {:ok, {:int, 9}}
+
+      "IPV6_MULTICAST_HOPS" ->
+        {:ok, {:int, 10}}
+
+      "IPV6_MULTICAST_LOOP" ->
+        {:ok, {:int, 11}}
+
+      "IPV6_V6ONLY" ->
+        {:ok, {:int, 27}}
+
+      "IP_PORTRANGE" ->
+        {:ok, {:int, 19}}
+
+      "IP_PORTRANGE_DEFAULT" ->
+        {:ok, {:int, 0}}
+
+      "IP_PORTRANGE_HIGH" ->
+        {:ok, {:int, 1}}
+
+      "IP_PORTRANGE_LOW" ->
+        {:ok, {:int, 2}}
+
+      "SOCKET_EPERM" ->
+        {:ok, {:int, 1}}
+
+      "SOCKET_ENOENT" ->
+        {:ok, {:int, 2}}
+
+      "SOCKET_EINTR" ->
+        {:ok, {:int, 4}}
+
+      "SOCKET_EIO" ->
+        {:ok, {:int, 5}}
+
+      "SOCKET_ENXIO" ->
+        {:ok, {:int, 6}}
+
+      "SOCKET_E2BIG" ->
+        {:ok, {:int, 7}}
+
+      "SOCKET_EBADF" ->
+        {:ok, {:int, 9}}
+
+      "SOCKET_EAGAIN" ->
+        {:ok, {:int, 35}}
+
+      "SOCKET_ENOMEM" ->
+        {:ok, {:int, 12}}
+
+      "SOCKET_EACCES" ->
+        {:ok, {:int, 13}}
+
+      "SOCKET_EFAULT" ->
+        {:ok, {:int, 14}}
+
+      "SOCKET_ENOTBLK" ->
+        {:ok, {:int, 15}}
+
+      "SOCKET_EBUSY" ->
+        {:ok, {:int, 16}}
+
+      "SOCKET_EEXIST" ->
+        {:ok, {:int, 17}}
+
+      "SOCKET_EXDEV" ->
+        {:ok, {:int, 18}}
+
+      "SOCKET_ENODEV" ->
+        {:ok, {:int, 19}}
+
+      "SOCKET_ENOTDIR" ->
+        {:ok, {:int, 20}}
+
+      "SOCKET_EISDIR" ->
+        {:ok, {:int, 21}}
+
+      "SOCKET_EINVAL" ->
+        {:ok, {:int, 22}}
+
+      "SOCKET_ENFILE" ->
+        {:ok, {:int, 23}}
+
+      "SOCKET_EMFILE" ->
+        {:ok, {:int, 24}}
+
+      "SOCKET_ENOTTY" ->
+        {:ok, {:int, 25}}
+
+      "SOCKET_ENOSPC" ->
+        {:ok, {:int, 28}}
+
+      "SOCKET_ESPIPE" ->
+        {:ok, {:int, 29}}
+
+      "SOCKET_EROFS" ->
+        {:ok, {:int, 30}}
+
+      "SOCKET_EMLINK" ->
+        {:ok, {:int, 31}}
+
+      "SOCKET_EPIPE" ->
+        {:ok, {:int, 32}}
+
+      "SOCKET_ENAMETOOLONG" ->
+        {:ok, {:int, 63}}
+
+      "SOCKET_ENOLCK" ->
+        {:ok, {:int, 77}}
+
+      "SOCKET_ENOSYS" ->
+        {:ok, {:int, 78}}
+
+      "SOCKET_ENOTEMPTY" ->
+        {:ok, {:int, 66}}
+
+      "SOCKET_ELOOP" ->
+        {:ok, {:int, 62}}
+
+      "SOCKET_EWOULDBLOCK" ->
+        {:ok, {:int, 35}}
+
+      "SOCKET_ENOMSG" ->
+        {:ok, {:int, 91}}
+
+      "SOCKET_EIDRM" ->
+        {:ok, {:int, 90}}
+
+      "SOCKET_ENOSTR" ->
+        {:ok, {:int, 99}}
+
+      "SOCKET_ENODATA" ->
+        {:ok, {:int, 96}}
+
+      "SOCKET_ETIME" ->
+        {:ok, {:int, 101}}
+
+      "SOCKET_ENOSR" ->
+        {:ok, {:int, 98}}
+
+      "SOCKET_EREMOTE" ->
+        {:ok, {:int, 71}}
+
+      "SOCKET_ENOLINK" ->
+        {:ok, {:int, 97}}
+
+      "SOCKET_EPROTO" ->
+        {:ok, {:int, 100}}
+
+      "SOCKET_EMULTIHOP" ->
+        {:ok, {:int, 95}}
+
+      "SOCKET_EBADMSG" ->
+        {:ok, {:int, 94}}
+
+      "SOCKET_EUSERS" ->
+        {:ok, {:int, 68}}
+
+      "SOCKET_ENOTSOCK" ->
+        {:ok, {:int, 38}}
+
+      "SOCKET_EDESTADDRREQ" ->
+        {:ok, {:int, 39}}
+
+      "SOCKET_EMSGSIZE" ->
+        {:ok, {:int, 40}}
+
+      "SOCKET_EPROTOTYPE" ->
+        {:ok, {:int, 41}}
+
+      "SOCKET_ENOPROTOOPT" ->
+        {:ok, {:int, 42}}
+
+      "SOCKET_EPROTONOSUPPORT" ->
+        {:ok, {:int, 43}}
+
+      "SOCKET_ESOCKTNOSUPPORT" ->
+        {:ok, {:int, 44}}
+
+      "SOCKET_EOPNOTSUPP" ->
+        {:ok, {:int, 102}}
+
+      "SOCKET_EPFNOSUPPORT" ->
+        {:ok, {:int, 46}}
+
+      "SOCKET_EAFNOSUPPORT" ->
+        {:ok, {:int, 47}}
+
+      "SOCKET_EADDRINUSE" ->
+        {:ok, {:int, 48}}
+
+      "SOCKET_EADDRNOTAVAIL" ->
+        {:ok, {:int, 49}}
+
+      "SOCKET_ENETDOWN" ->
+        {:ok, {:int, 50}}
+
+      "SOCKET_ENETUNREACH" ->
+        {:ok, {:int, 51}}
+
+      "SOCKET_ENETRESET" ->
+        {:ok, {:int, 52}}
+
+      "SOCKET_ECONNABORTED" ->
+        {:ok, {:int, 53}}
+
+      "SOCKET_ECONNRESET" ->
+        {:ok, {:int, 54}}
+
+      "SOCKET_ENOBUFS" ->
+        {:ok, {:int, 55}}
+
+      "SOCKET_EISCONN" ->
+        {:ok, {:int, 56}}
+
+      "SOCKET_ENOTCONN" ->
+        {:ok, {:int, 57}}
+
+      "SOCKET_ESHUTDOWN" ->
+        {:ok, {:int, 58}}
+
+      "SOCKET_ETOOMANYREFS" ->
+        {:ok, {:int, 59}}
+
+      "SOCKET_ETIMEDOUT" ->
+        {:ok, {:int, 60}}
+
+      "SOCKET_ECONNREFUSED" ->
+        {:ok, {:int, 61}}
+
+      "SOCKET_EHOSTDOWN" ->
+        {:ok, {:int, 64}}
+
+      "SOCKET_EHOSTUNREACH" ->
+        {:ok, {:int, 65}}
+
+      "SOCKET_EALREADY" ->
+        {:ok, {:int, 37}}
+
+      "SOCKET_EINPROGRESS" ->
+        {:ok, {:int, 36}}
+
+      "SOCKET_EDQUOT" ->
+        {:ok, {:int, 69}}
+
+      "IPPROTO_IP" ->
+        {:ok, {:int, 0}}
+
+      "IPPROTO_IPV6" ->
+        {:ok, {:int, 41}}
+
+      "SOL_TCP" ->
+        {:ok, {:int, 6}}
+
+      "SOL_UDP" ->
+        {:ok, {:int, 17}}
+
+      "IPV6_UNICAST_HOPS" ->
+        {:ok, {:int, 4}}
+
+      "AI_PASSIVE" ->
+        {:ok, {:int, 1}}
+
+      "AI_CANONNAME" ->
+        {:ok, {:int, 2}}
+
+      "AI_NUMERICHOST" ->
+        {:ok, {:int, 4}}
+
+      "AI_V4MAPPED" ->
+        {:ok, {:int, 2048}}
+
+      "AI_ALL" ->
+        {:ok, {:int, 256}}
+
+      "AI_ADDRCONFIG" ->
+        {:ok, {:int, 1024}}
+
+      "AI_NUMERICSERV" ->
+        {:ok, {:int, 4096}}
+
+      "SOL_LOCAL" ->
+        {:ok, {:int, 0}}
+
+      "IPV6_RECVPKTINFO" ->
+        {:ok, {:int, 61}}
+
+      "IPV6_PKTINFO" ->
+        {:ok, {:int, 46}}
+
+      "IPV6_RECVHOPLIMIT" ->
+        {:ok, {:int, 37}}
+
+      "IPV6_HOPLIMIT" ->
+        {:ok, {:int, 47}}
+
+      "IPV6_RECVTCLASS" ->
+        {:ok, {:int, 35}}
+
+      "IPV6_TCLASS" ->
+        {:ok, {:int, 36}}
+
+      "SCM_RIGHTS" ->
+        {:ok, {:int, 1}}
+
+      "SO_NOSIGPIPE" ->
+        {:ok, {:int, 4130}}
+
+      "IP_DONTFRAG" ->
+        {:ok, {:int, 28}}
+
       "OPENSSL_RAW_DATA" ->
         {:ok, {:int, 1}}
 
