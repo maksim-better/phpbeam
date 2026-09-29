@@ -119,3 +119,8 @@
 - [ ] ftp_size/mdtm（:ftp 无 stat 协议命令映射——现恒 -1）；ftp_mlsd 的 MLST facts 全集（type/size/modify/perm/unique/unix.*）；rawlist 的 LIST 格式差异
 - [ ] ftp_nb_* 的真异步（现同步执行返 FINISHED=1）；ftp_exec/site/chmod 的 SITE 命令（:ftp.send_cmd 透传待真服务器验证）；ssl_connect 的 TLS（:ftp ssl 选项）
 - [ ] 真实 FTP 服务器差分（本机无 server——proftpd/vsftpd 起桩后补 get/put/rawlist 往返用例）
+## C7 顺延（2026-09-30 posix）
+
+- [ ] posix_setuid/setgid/setsid/setpgid/initgroups 桩（BEAM 无进程身份切换——web 运行时相接 worker 权限时设计）
+- [ ] posix_times 的 utime/stime（:erlang.statistics 的 job statistics 映射粗糙）；getrlimit 全键（硬编码 macOS 默认）；sysconf/pathconf/fpathconf/mknod 近似值
+- [ ] pwuid 的 gecos 字段（dscl RealName）；getgrgid 的 members 列表（dscl GroupMembership）；ttyname/isatty 的真 TTY 检测（CLI 恒 false——管道下 php 同 false）
