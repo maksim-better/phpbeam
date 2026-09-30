@@ -1207,6 +1207,9 @@ defmodule PhpBeam.Classes.Table do
       "pharfileinfo" => PhpBeam.Classes.PharArchive.classes()["pharfileinfo"],
       "pharexception" => PhpBeam.Classes.PharArchive.classes()["pharexception"],
       "socket" => PhpBeam.Builtin.SocketsFns.classes()["socket"],
+      "pdo" => PhpBeam.Classes.Pdo.classes()["pdo"],
+      "pdostatement" => PhpBeam.Classes.Pdo.classes()["pdostatement"],
+      "pdoexception" => PhpBeam.Classes.Pdo.classes()["pdoexception"],
       "simplexmlelement" => PhpBeam.Classes.SimpleXml.classes()["simplexmlelement"],
       "domdocument" => PhpBeam.Classes.Dom.classes()["domdocument"],
       "domelement" => PhpBeam.Classes.Dom.classes()["domelement"],
@@ -1304,7 +1307,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection simplexmlelement domdocument domelement domnode domtext domattr domnodelist domxpath domexception domdocumentfragment xmlparser curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
+      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection pdo pdostatement pdoexception simplexmlelement domdocument domelement domnode domtext domattr domnodelist domxpath domexception domdocumentfragment xmlparser curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)

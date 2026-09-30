@@ -133,3 +133,11 @@
 - [ ] xml_parse 的分块回调（handler 族 noop）；XMLParser 的编码选项；xml_error_string 全表
 - [ ] simplexml 的 addChild/addAttribute 的 asXML 回写（写 wrapper 未透 root——与 DOM append 同型）
 - [ ] DOMDocument::save 的 HTML 序列化形态；formatOutput/pretty print
+## D1 顺延（2026-09-30 PDO+pdo_mysql）
+
+- [ ] FETCH_OBJ/FETCH_CLASS/FETCH_LAZY/FETCH_KEY_PAIR/FETCH_UNIQUE/FETCH_GROUP/FETCH_FUNC；setFetchMode 与类的 o construct 回调；fetchObject
+- [ ] PDO::ATTR_ERRMODE 切换（默认异常模式已对齐；SILENT/WARNING 分支待需）；getAttribute 其余键（CLIENT_VERSION/SERVER_INFO/DRIVER_NAME）
+- [ ] bindParam 的 by-ref 执行期绑定（bindValue 桩恒 true）；debugDumpParams 输出；columnCount 的 SHOW 形态
+- [ ] DSN 形态（unix socket/charset/ssl）；持久连接（ATTR_PERSISTENT）；连接错误码细描（1045 之外的 2002/2054 等）
+- [ ] PDOStatement::nextRowset/getColumnMeta/errorInfo；事务嵌套与 SAVEPOINT；MySQL 8 的 cursor 常量族
+- [ ] 差分用例对 DB 的破坏性：phpbeam_test 库重建（两侧同跑安全——差分 harness 里 php 先跑 php 侧重建 ✓ 保留）
