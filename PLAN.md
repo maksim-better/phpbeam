@@ -59,7 +59,7 @@
 
 ### PHASE D：T3 外部客户端
 
-- [ ] D1 PDO 抽象层 + pdo_mysql（MyXQL）——原 L5；prepare/execute/fetch 族/bindValue/errorInfo/setAttribute
+- [x] **D1 PDO+pdo_mysql（2026-09-30 完成，`82791e1`）**：新模块 `Classes.Pdo`（PDO/PDOStatement/PDOException）——MyXQL 连接（unlink 存活）；prepare/query/exec、命名参数→`?` 改写+顺序表（**php 全部绑定值字符串化**——int 1 传 "1"）；fetch 族（ASSOC/NUM/BOTH 交错序）、rowCount（SELECT=缓冲行数、UPDATE 走 nil-columns Result 的 num_rows 臂）、lastInsertId 字符串、事务、quote 反斜杠转义；**MyXQL 协议坑一次排清**（query/prepare 2 元组 vs execute {:ok,Query,Result}——Result 感知 unwrap；DDL/USE 被二进制协议拒→query_opts 走 text 协议且 options 在**第 4 参**）；PDOException 带 php SQLSTATE 标题（1146→Base table or view not found:）；差分 47 对 **docker 真 MySQL 8.0.46 字节级一致**（版本/双参型 prepare/DML+lastInsertId/事务可见性/UPDATE rowCount/quote/缺表异常文案）；825 测试 0 败；phpt 348<基线363 门禁 PASS；**顺延**（deferred.md D1）：FETCH_OBJ 族、ERRMODE 切换、by-ref bindParam、DSN 变体、持久连接
 - [ ] D2 sqlite3 + pdo_sqlite（exqlite，git 依赖——hex 被 TLS 挡）
 - [ ] D3 pgsql 122 + pdo_pgsql（epgsql，git 依赖）
 - [ ] D4 mysqli 补全（106 中余 ~48）
