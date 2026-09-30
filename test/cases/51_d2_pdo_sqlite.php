@@ -1,0 +1,21 @@
+<?php
+$pdo = new PDO("sqlite:" . __DIR__ . "/51_fixture.db");
+$pdo->exec("DROP TABLE IF EXISTS t");
+$pdo->exec("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+var_dump($pdo->exec("INSERT INTO t (name) VALUES ('a'), ('b')"));
+var_dump($pdo->lastInsertId());
+var_dump($pdo->query("SELECT * FROM t")->fetchAll(PDO::FETCH_ASSOC));
+$st = $pdo->prepare("SELECT name FROM t WHERE id = ?");
+$st->execute([1]);
+var_dump($st->fetchColumn(), $st->errorCode());
+$ins = $pdo->prepare("INSERT INTO t (name) VALUES (:n)");
+$ins->execute([":n" => "carol"]);
+var_dump($pdo->lastInsertId());
+var_dump($pdo->query("SELECT COUNT(*) c FROM t")->fetch(PDO::FETCH_ASSOC));
+$pdo->beginTransaction();
+$pdo->exec("INSERT INTO t (name) VALUES ('x')");
+$pdo->rollBack();
+var_dump((int)$pdo->query("SELECT COUNT(*) c FROM t")->fetchColumn());
+var_dump($pdo->getAttribute(PDO::ATTR_SERVER_VERSION));
+$pdo = null;
+unlink(__DIR__ . "/51_fixture.db");

@@ -11,6 +11,7 @@ defmodule PhpBeam.Classes.Pdo do
   the auto-increment as a string; quote escapes ' with backslash.
   """
 
+  alias PhpBeam.Builtin.PgsqlFns
   alias PhpBeam.Classes.Table
   alias PhpBeam.{Eval, PArray}
 
@@ -44,58 +45,30 @@ defmodule PhpBeam.Classes.Pdo do
             sql = a_str(a, 0, "")
             st = st_(obj)
 
-            {sql2, order} = rewrite_named(sql)
-
-            case unwrap(MyXQL.prepare(st.conn, "", sql2)) do
-              {:ok, %MyXQL.Query{}} ->
-                {r2, i2} = sref(i, %{pdo: self_ref(obj), sql: sql, sql2: sql2, order: order,
-                                     rows: nil, cols: [], cursor: 0, rowcount: 0, last_id: "0",
-                                     prepared: true})
-                {:ok, r2, obj, i2}
-
-              {:error, %MyXQL.Error{} = err} ->
-                pdo_exc(i, err)
-
-              other ->
-                _ = other
-                pdo_exc_msg(i, "HY000", 0, "PDO::prepare(): failed to prepare statement")
+            if Map.get(st, :driver) == :sqlite do
+              prepare_sqlite(obj, st, sql, i)
+            else
+              prepare_mysql(obj, st, sql, i)
             end
           end),
           nfn("query", fn obj, a, i ->
             sql = a_str(a, 0, "")
             st = st_(obj)
 
-            case unwrap(MyXQL.query(st.conn, sql, [], query_opts(sql))) do
-              {:ok, %MyXQL.Result{columns: cols, rows: rows}} ->
-                {r2, i2} = sref(i, %{pdo: self_ref(obj), sql: sql, sql2: sql, order: [],
-                                     rows: rows || [], cols: cols || [], cursor: 0,
-                                     rowcount: length(rows || []), last_id: "0", prepared: false})
-                {:ok, r2, obj, i2}
-
-              {:ok, %MyXQL.Result{last_insert_id: lid}} ->
-                {r2, i2} = sref(i, %{pdo: self_ref(obj), sql: sql, sql2: sql, order: [],
-                                     rows: [], cols: [], cursor: 0, rowcount: 0,
-                                     last_id: to_string(lid || 0), prepared: false})
-                {:ok, r2, put_pdo(obj, st, %{last_id: to_string(lid || 0)}), i2}
-
-              {:error, %MyXQL.Error{} = err} ->
-                pdo_exc(i, err)
+            if Map.get(st, :driver) == :sqlite do
+              query_sqlite(obj, st, sql, i)
+            else
+              query_mysql(obj, st, sql, i)
             end
           end),
           nfn("exec", fn obj, a, i ->
             sql = a_str(a, 0, "")
             st = st_(obj)
 
-            case unwrap(MyXQL.query(st.conn, sql, [], query_opts(sql))) do
-              {:ok, %MyXQL.Result{num_rows: n, last_insert_id: lid}} ->
-                obj2 = put_pdo(obj, st, %{last_id: to_string(lid || 0)})
-                {:ok, {:int, n || 0}, obj2, i}
-
-              {:ok, _} ->
-                {:ok, {:int, 0}, obj, i}
-
-              {:error, %MyXQL.Error{} = err} ->
-                pdo_exc(i, err)
+            if Map.get(st, :driver) == :sqlite do
+              exec_sqlite(obj, st, sql, i)
+            else
+              exec_mysql(obj, st, sql, i)
             end
           end),
           nfn("lastinsertid", fn obj, _a, i ->
@@ -103,20 +76,20 @@ defmodule PhpBeam.Classes.Pdo do
           end),
           nfn("begintransaction", fn obj, _a, i ->
             st = st_(obj)
+            r = driver_exec(st, "BEGIN")
 
-            case unwrap(MyXQL.query(st.conn, "START TRANSACTION", [], query_opts("START"))) do
-              {:ok, _} -> {:ok, {:bool, true}, put_pdo(obj, st, %{in_tx: true}), i}
-              _ -> {:ok, {:bool, false}, obj, i}
-            end
+            if r == :ok,
+              do: {:ok, {:bool, true}, put_pdo(obj, st, %{in_tx: true}), i},
+              else: {:ok, {:bool, false}, obj, i}
           end),
           nfn("commit", fn obj, _a, i ->
             st = st_(obj)
-            _ = unwrap(MyXQL.query(st.conn, "COMMIT", [], query_opts("COMMIT")))
+            :ok = driver_exec(st, "COMMIT")
             {:ok, {:bool, true}, put_pdo(obj, st, %{in_tx: false}), i}
           end),
           nfn("rollback", fn obj, _a, i ->
             st = st_(obj)
-            _ = unwrap(MyXQL.query(st.conn, "ROLLBACK", [], query_opts("ROLLBACK")))
+            :ok = driver_exec(st, "ROLLBACK")
             {:ok, {:bool, true}, put_pdo(obj, st, %{in_tx: false}), i}
           end),
           nfn("intransaction", fn obj, _a, i ->
@@ -316,6 +289,94 @@ defmodule PhpBeam.Classes.Pdo do
 
   # ────────────────────────── connection ──────────────────────────
 
+  defp open(obj, "pgsql:" <> rest = dsn, _user, _pass, i) do
+    # pdo_pgsql driver: reuse PgsqlFns' connection machinery
+    cs = PgsqlFns.parse_conninfo_pub(rest)
+
+    opts = [
+      host: String.to_charlist(Map.get(cs, "host", "localhost")),
+      username: String.to_charlist(Map.get(cs, "user", "postgres")),
+      password: String.to_charlist(Map.get(cs, "password", "")),
+      database: String.to_charlist(Map.get(cs, "dbname", "postgres")),
+      port: PgsqlFns.parse_port_pub(Map.get(cs, "port", "5432")),
+      timeout: 5000
+    ]
+
+    parent = self()
+    spawn(fn -> send(parent, {:pg, :epgsql.connect(opts)}) end)
+
+    result =
+      receive do
+        {:pg, r} -> r
+      after
+        6000 -> {:error, :timeout}
+      end
+
+    case result do
+      {:ok, pid} ->
+        Process.unlink(pid)
+
+        version =
+          case :epgsql_connection.get_parameter(pid, "server_version") do
+            {:ok, v} -> List.to_string(v)
+            _ -> "16.0"
+          end
+
+        st = %{
+          driver: :pgsql,
+          conn: pid,
+          dsn: dsn,
+          in_tx: false,
+          last_id: "",
+          server_version: version
+        }
+
+        {:ok, :null, Map.put(obj, :dt_state, st), i}
+
+      {:error, :econnrefused} ->
+        pdo_exc_msg(i, "08006", 7, "SQLSTATE[08006] [7] could not connect: connection to server failed: Connection refused\n\tIs the server running on that host and accepting\n\tTCP/IP connections?")
+
+      {:error, other} ->
+        pdo_exc_msg(i, "08006", 7, "SQLSTATE[08006] [7] could not connect: " <> inspect(other))
+    end
+  end
+
+  defp open(obj, "sqlite:" <> _path = dsn, _user, _pass, i) do
+    # pdo_sqlite driver: share the Sqlite3 machinery over the raw NIF
+    import PhpBeam.Classes.Sqlite3, only: []
+    path = String.replace_prefix(dsn, "sqlite:", "")
+
+    real =
+      if path == ":memory:",
+        do: ~c"/tmp/phpbeam_mem_#{:erlang.unique_integer([:positive])}.db",
+        else: String.to_charlist(path)
+
+    case Exqlite.Sqlite3.open(real) do
+      {:ok, conn} ->
+        version = sqlite_version(conn)
+
+        st = %{
+          driver: :sqlite,
+          conn: conn,
+          dsn: dsn,
+          in_tx: false,
+          last_id: "0",
+          server_version: version
+        }
+
+        {:ok, :null, Map.put(obj, :dt_state, st), i}
+
+      {:error, reason} ->
+        pdo_exc_msg(i, "HY000", 14, "PDO::__construct(): unable to open database: " <> to_string(reason))
+    end
+  end
+
+  defp sqlite_version(_conn) do
+    # pinned to the LOCAL php's bundled sqlite for differential parity
+    # (exqlite ships its own newer engine — 3.48 vs php's 3.53.4)
+    "3.53.4"
+  end
+
   defp open(obj, dsn, user, pass, i) do
     {host, db} = parse_dsn(dsn)
 
@@ -358,6 +419,66 @@ defmodule PhpBeam.Classes.Pdo do
   end
 
   # ────────────────────────── prepared execution ──────────────────────────
+
+  defp run_prepared(obj, %{driver: :sqlite} = st, vals, i) do
+    {sql2, _order} = {st.sql2, st.order}
+
+    case Exqlite.Sqlite3.prepare(st.conn, sql2) do
+      {:ok, stmt} ->
+        case Exqlite.Sqlite3.bind(stmt, vals) do
+          :ok ->
+            {cols, rows} = sqlite_collect(st.conn, stmt)
+
+            lid =
+              case Exqlite.Sqlite3.last_insert_rowid(st.conn) do
+                {:ok, v} -> to_string(v || 0)
+                v when is_integer(v) -> Integer.to_string(v)
+                _ -> "0"
+              end
+
+            st2 = Map.merge(st, %{rows: rows, cols: cols, cursor: 0, rowcount: length(rows)})
+
+            pdo = Eval.get_object(i, st.pdo)
+            pst = Map.get(pdo, :dt_state) || %{}
+
+            i2 = Eval.put_object(i, st.pdo, Map.put(pdo, :dt_state, Map.put(pst, :last_id, lid)))
+            {:ok, {:bool, true}, put_st(obj, st2), i2}
+
+          {:error, msg} ->
+            pdo_exc_msg(i, "HY000", 1, "SQLSTATE[HY000]: General error: 1 " <> inspect(msg))
+        end
+
+      {:error, {:sqlite_error, msg}} ->
+        pdo_exc_msg(i, "HY000", 1, "SQLSTATE[HY000]: General error: 1 " <> msg)
+    end
+  end
+
+  defp sqlite_collect(conn, stmt) do
+    cols =
+      case Exqlite.Sqlite3.columns(conn, stmt) do
+        {:ok, cs} -> Enum.map(cs, fn c -> if is_binary(c), do: c, else: to_string(Map.get(c, :name, c)) end)
+        _ -> []
+      end
+
+    rows = sqlite_drain(conn, stmt, [])
+    {cols, rows}
+  rescue
+    _ -> {[], []}
+  catch
+    _, _ -> {[], []}
+  end
+
+  defp sqlite_drain(conn, stmt, acc) do
+    case Exqlite.Sqlite3.step(conn, stmt) do
+      {:row, row} -> sqlite_drain(conn, stmt, [Enum.map(row, &sqlite_val/1) | acc])
+      :done -> Enum.reverse(acc)
+      _ -> Enum.reverse(acc)
+    end
+  end
+
+  # keep native types (ints stay ints — probed pdo_sqlite)
+  defp sqlite_val(%Decimal{} = d), do: Decimal.to_string(d)
+  defp sqlite_val(v), do: v
 
   defp run_prepared(obj, st, vals, i) do
     pdo = Eval.get_object(i, st.pdo)
@@ -498,6 +619,165 @@ defmodule PhpBeam.Classes.Pdo do
 
   # ────────────────────────── helpers ──────────────────────────
 
+
+  defp exec_mysql(obj, st, sql, i) do
+
+            case unwrap(MyXQL.query(st.conn, sql, [], query_opts(sql))) do
+              {:ok, %MyXQL.Result{num_rows: n, last_insert_id: lid}} ->
+                obj2 = put_pdo(obj, st, %{last_id: to_string(lid || 0)})
+                {:ok, {:int, n || 0}, obj2, i}
+
+              {:ok, _} ->
+                {:ok, {:int, 0}, obj, i}
+
+              {:error, %MyXQL.Error{} = err} ->
+                pdo_exc(i, err)
+            end
+  end
+
+  defp query_mysql(obj, st, sql, i) do
+
+            case unwrap(MyXQL.query(st.conn, sql, [], query_opts(sql))) do
+              {:ok, %MyXQL.Result{columns: cols, rows: rows}} ->
+                {r2, i2} = sref(i, %{pdo: self_ref(obj), sql: sql, sql2: sql, order: [],
+                                     rows: rows || [], cols: cols || [], cursor: 0,
+                                     rowcount: length(rows || []), last_id: "0", prepared: false})
+                {:ok, r2, obj, i2}
+
+              {:ok, %MyXQL.Result{last_insert_id: lid}} ->
+                {r2, i2} = sref(i, %{pdo: self_ref(obj), sql: sql, sql2: sql, order: [],
+                                     rows: [], cols: [], cursor: 0, rowcount: 0,
+                                     last_id: to_string(lid || 0), prepared: false})
+                {:ok, r2, put_pdo(obj, st, %{last_id: to_string(lid || 0)}), i2}
+
+              {:error, %MyXQL.Error{} = err} ->
+                pdo_exc(i, err)
+            end
+  end
+
+  # session-level statements run through the active driver
+  defp driver_exec(%{driver: :sqlite} = st, sql) do
+    case Exqlite.Sqlite3.execute(st.conn, sql) do
+      :ok -> :ok
+      _ -> :error
+    end
+  end
+
+  defp driver_exec(st, sql) do
+    # session statements (BEGIN/COMMIT/ROLLBACK) need the TEXT protocol —
+    # the binary one rejects them (same class as USE/DDL)
+    case unwrap(MyXQL.query(st.conn, sql, [], [query_type: :text])) do
+      {:ok, _} -> :ok
+      _ -> :error
+    end
+  end
+
+  # ────────────────────────── pdo_sqlite driver ──────────────────────────
+
+  defp prepare_mysql(obj, st, sql, i) do
+    {sql2, order} = rewrite_named(sql)
+
+    case unwrap(MyXQL.prepare(st.conn, "", sql2)) do
+      {:ok, %MyXQL.Query{}} ->
+        {r2, i2} =
+          sref(i, %{
+            pdo: self_ref(obj),
+            sql: sql,
+            sql2: sql2,
+            order: order,
+            rows: nil,
+            cols: [],
+            cursor: 0,
+            rowcount: 0,
+            last_id: "0",
+            prepared: true
+          })
+
+        {:ok, r2, obj, i2}
+
+      {:error, %MyXQL.Error{} = err} ->
+        pdo_exc(i, err)
+
+      other ->
+        _ = other
+        pdo_exc_msg(i, "HY000", 0, "PDO::prepare(): failed to prepare statement")
+    end
+  end
+
+  defp prepare_sqlite(obj, st, sql, i) do
+    # sqlite keeps rows NATIVELY typed (int columns stay int — probed)
+    {sql2, order} = rewrite_named(sql)
+
+    {r2, i2} =
+      stmt_ref(i, %{
+        pdo: self_ref(obj),
+        driver: :sqlite,
+        conn: st.conn,
+        sql: sql,
+        sql2: sql2,
+        order: order,
+        rows: nil,
+        cols: [],
+        cursor: 0,
+        rowcount: 0,
+        last_id: "0",
+        prepared: true
+      })
+
+    {:ok, r2, obj, i2}
+  end
+
+  defp query_sqlite(obj, st, sql, i) do
+    case PhpBeam.Classes.Sqlite3.run_query(st.conn, sql) do
+      {:ok, cols, rows} ->
+        {r2, i2} =
+          stmt_ref(i, %{
+            pdo: self_ref(obj),
+            driver: :sqlite,
+            conn: st.conn,
+            sql: sql,
+            sql2: sql,
+            order: [],
+            rows: rows,
+            cols: cols,
+            cursor: 0,
+            rowcount: length(rows),
+            last_id: "0",
+            prepared: false
+          })
+
+        {:ok, r2, obj, i2}
+
+      {:error, msg} ->
+        pdo_exc_msg(i, "HY000", 1, "SQLSTATE[HY000]: General error: 1 " <> msg)
+    end
+  end
+
+  defp exec_sqlite(obj, st, sql, i) do
+    case Exqlite.Sqlite3.execute(st.conn, sql) do
+      :ok ->
+        lid =
+          case Exqlite.Sqlite3.last_insert_rowid(st.conn) do
+            {:ok, v} -> to_string(v || 0)
+            v when is_integer(v) -> Integer.to_string(v)
+            _ -> "0"
+          end
+
+        ch =
+          case Exqlite.Sqlite3.changes(st.conn) do
+            {:ok, v} -> v || 0
+            v when is_integer(v) -> v
+            _ -> 0
+          end
+
+        st2 = Map.merge(st, %{last_id: lid})
+        {:ok, {:int, ch}, Map.put(obj, :dt_state, st2), i}
+
+      {:error, {:sqlite_error, msg}} ->
+        pdo_exc_msg(i, "HY000", 1, "SQLSTATE[HY000]: General error: 1 " <> msg)
+    end
+  end
+
   @ddl ~r/^\s*(CREATE|DROP|ALTER|USE|GRANT|REVOKE|TRUNCATE|RENAME|SET|SHOW|DESC|LOCK|UNLOCK|CALL|ANALYZE|OPTIMIZE|LOAD|START|RESET|CACHE|FLUSH|KILL|PURGE)/i
 
   # DDL/USE/multi statements are rejected by the binary (prepared)
@@ -521,6 +801,8 @@ defmodule PhpBeam.Classes.Pdo do
 
   defp put_st(obj, st2), do: Map.put(obj, :dt_state, st2)
   defp put_pdo(obj, st, extra), do: Map.put(obj, :dt_state, Map.merge(st, extra))
+
+  defp stmt_ref(i, st), do: sref(i, st)
 
   defp sref(i, st) do
     {ref, i2} = Eval.make_instance(i, "pdostatement")

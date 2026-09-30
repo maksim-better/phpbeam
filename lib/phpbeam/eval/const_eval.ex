@@ -389,6 +389,43 @@ defmodule PhpBeam.Eval.ConstEval do
       "AF_UNIX" ->
         {:ok, {:int, 1}}
 
+
+      "SQLITE3_OK" ->
+        {:ok, {:int, 0}}
+
+      "SQLITE3_ASSOC" ->
+        {:ok, {:int, 1}}
+
+      "SQLITE3_NUM" ->
+        {:ok, {:int, 2}}
+
+      "SQLITE3_BOTH" ->
+        {:ok, {:int, 4}}
+
+      "SQLITE3_INTEGER" ->
+        {:ok, {:int, 1}}
+
+      "SQLITE3_FLOAT" ->
+        {:ok, {:int, 2}}
+
+      "SQLITE3_TEXT" ->
+        {:ok, {:int, 3}}
+
+      "SQLITE3_BLOB" ->
+        {:ok, {:int, 4}}
+
+      "SQLITE3_NULL" ->
+        {:ok, {:int, 5}}
+
+      "SQLITE3_OPEN_READONLY" ->
+        {:ok, {:int, 1}}
+
+      "SQLITE3_OPEN_READWRITE" ->
+        {:ok, {:int, 2}}
+
+      "SQLITE3_OPEN_CREATE" ->
+        {:ok, {:int, 4}}
+
       "AF_INET" ->
         {:ok, {:int, 2}}
 

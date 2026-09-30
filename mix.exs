@@ -25,6 +25,15 @@ defmodule PhpBeam.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
+      {:exqlite,
+       git: "https://github.com/elixir-sqlite/exqlite.git", tag: "v0.29.0", override: true},
+      {:elixir_make,
+       git: "https://github.com/elixir-lang/elixir_make.git", tag: "v0.9.0",
+       runtime: false, override: true},
+      {:cc_precompiler,
+       git: "https://github.com/cocoa-xu/cc_precompiler.git", tag: "v0.1.9",
+       runtime: false, override: true},
+      {:epgsql, git: "https://github.com/epgsql/epgsql.git", tag: "4.8.0", override: true},
       {:myxql, git: "https://github.com/elixir-ecto/myxql.git", tag: "v0.7.1"},
       {:db_connection,
        git: "https://github.com/elixir-ecto/db_connection.git", tag: "v2.10.1", override: true},
@@ -35,6 +44,13 @@ defmodule PhpBeam.MixProject do
   end
 
   defp escript do
-    [main_module: PhpBeam.CLI, name: "phpx", path: "phpx"]
+    # -pa keeps the local deps on the code path so NIF-backed deps
+    # (exqlite) resolve :code.priv_dir to the real priv dir — escripts
+    # cannot embed .so files, and this phpx is a same-host dev tool
+    dep_ebins =
+      Path.wildcard(Path.join(File.cwd!(), "_build/dev/lib/*/ebin"))
+      |> Enum.join(" ")
+
+    [main_module: PhpBeam.CLI, name: "phpx", path: "phpx", emu_args: "-pa " <> dep_ebins]
   end
 end

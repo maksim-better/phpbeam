@@ -155,3 +155,19 @@
 - [ ] stmt_fetch 的 by-ref 行写回（out_vars 已记录 var AST——需引擎 vars 写回通道）；execute_query（参数化单步）
 - [ ] prepared 参数原生类型往返（php "si" 的 i 出 int(5)——MyXQL 字面参数列型返回串；需 server-side 类型提示或结果后cast）；result_metadata 返回元数据结果集；attr_get 常量族
 - [ ] stmt 更多结果集（next_result）；store/use_result 语义差（mysqlnd 无缓冲）；send_long_data 分块
+## D2 顺延（2026-09-30 sqlite3+pdo_sqlite）
+
+- [ ] 构建链：exqlite/elixir_make/cc_precompiler 为 git 依赖（hex TLS 被网络挡）；**deps/exqlite 打了 load_nif fallback 补丁**（escript 内 priv_dir 失效时落 _build 路径——mix deps.update 会覆盖，需登记）；escript emu_args -pa 全部 _build/dev ebin（escript 不能嵌 .so）
+- [ ] exqlite NIF 无 bind_parameter_name——参数名从 SQL 文本扫描（:name/顺序 ?）；:memory: 映射到 /tmp 唯一文件（NIF 每连接一文件）；BLOB/openBlob；loadExtension
+- [ ] pdo_sqlite 版本钉死 3.53.4（本机 php 链的 sqlite；exqlite 内嵌 3.48）；getAttribute 其余键；sqlite 的 lastInsertId 非字符串形态（php pdo_sqlite 恒 string）
+- [ ] 事务（BEGIN 文本协议）与 SAVEPOINT；FETCH_OBJ 族与 pdo_pgsql 同批
+## D3 顺延（2026-09-30 pgsql+pdo_pgsql）
+
+- [ ] **活库差分**：docker 拉 postgres 镜像被网络挡（hex TLS 同源）——失败路径已差分（连接拒绝/DNS 失败/pg_last_error 无连接 fatal）；服务器可得后补往返用例
+- [ ] pg_query_params 的 equery 通道写完未活测；大对象族（pg_lo_*）桩；异步族（send_query/get_result 单值 stash 非队列）；pg_copy_from/put_line 真拷贝协议
+- [ ] pg_fetch_result 的行/列参数形态；pg_convert/insert/update/delete/select（php 便捷层）；pg_meta_data 的 information_schema 查询
+- [ ] PDO pgsql 驱动：连接建立（活服务器验证）+ prepare/equery 参数绑定 + pgsql 特有 ATTR（ATTR_SERVER_VERSION 等）；SQLSTATE 08006 文案按文档近似（活库后对齐）
+- [ ] epgsql connect 键是 host（不是 hostname）——API 文档陷阱已注释
+## 工具链（2026-09-30）
+- [ ] mix local.rebar 与 hex 元数据均被 TLS 挡——MIX_REBAR3=~/.mix/rebar3 指向 brew rebar3 可绕过（已 cp 到 ~/.mix/rebar3）；gate.sh 需 export MIX_REBAR3 才能全新环境跑 deps.get
+- [ ] http_test 偶发遗留孤儿 `phpx serve` 进程（占 18898/18899 端口，后续 run 全体报 Address already in use 且 mix test 挂起等端口）——测试收尾 kill 不彻底，gate.sh 非 phpt 段后已有 18899 全清扫（pkill -9 -f "phpx serve"）

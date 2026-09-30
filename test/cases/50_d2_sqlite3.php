@@ -1,0 +1,24 @@
+<?php
+$db = new SQLite3(__DIR__ . "/50_fixture.db");
+$db->exec("DROP TABLE IF EXISTS t");
+$db->exec("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
+$st = $db->prepare("INSERT INTO t (name) VALUES (:n)");
+$st->bindValue(":n", "alice", SQLITE3_TEXT);
+var_dump($st->execute() instanceof SQLite3Result, $db->lastInsertRowID(), $db->changes());
+$st->bindValue(":n", "bob", SQLITE3_TEXT);
+$st->execute();
+$r = $db->query("SELECT id, name FROM t ORDER BY id");
+var_dump($r->fetchArray(SQLITE3_ASSOC), $r->numColumns(), $r->columnName(1), $r->fetchArray(SQLITE3_NUM));
+$r->finalize();
+$st2 = $db->prepare("SELECT :a + :b AS s");
+$st2->bindValue(":a", 1, SQLITE3_INTEGER);
+$st2->bindValue(":b", 2, SQLITE3_INTEGER);
+$r2 = $st2->execute();
+var_dump($r2->fetchArray(SQLITE3_NUM));
+$r2->finalize();
+var_dump($db->escapeString("a\"b"), $db->lastErrorMsg(), $db->lastErrorCode());
+$r3 = $db->query("SELECT COUNT(*) c FROM t");
+var_dump($r3->fetchArray(SQLITE3_NUM));
+$r3->finalize();
+$db->close();
+unlink(__DIR__ . "/50_fixture.db");

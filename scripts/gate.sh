@@ -16,12 +16,16 @@ mix test --exclude phpt >tmp/gate_nonphpt.log 2>&1
 rc=$?
 pkill -f 'phpx serve /tmp/phpbeam_http' 2>/dev/null
 pkill -f 'php -S 127.0.0.1:18898' 2>/dev/null
+# orphans also bind 18899 and linger with ppid=1 — sweep by the serve keyword
+pkill -9 -f 'phpx serve' 2>/dev/null || true
 line=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?(, [0-9]+ excluded)?' tmp/gate_nonphpt.log | tail -1)
 echo "non-phpt: ${line:-NO SUMMARY} (exit=$rc)"
 
 mix test --only phpt >tmp/gate_phpt.log 2>&1
 pkill -f 'phpx serve /tmp/phpbeam_http' 2>/dev/null
 pkill -f 'php -S 127.0.0.1:18898' 2>/dev/null
+# orphans also bind 18899 and linger with ppid=1 — sweep by the serve keyword
+pkill -9 -f 'phpx serve' 2>/dev/null || true
 line=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?(, [0-9]+ excluded)?' tmp/gate_phpt.log | tail -1)
 echo "phpt:     ${line:-NO SUMMARY}"
 
