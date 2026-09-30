@@ -20,6 +20,32 @@ defmodule PhpBeam.Builtin.MysqliFns do
       "mysqli_select_db" => &mysqli_select_db/2,
       "mysqli_query" => &mysqli_query/2,
       "mysqli_store_result" => &mysqli_store_result/2,
+      "mysqli_prepare" => &mysqli_prepare/2,
+      "mysqli_stmt_init" => &mysqli_stmt_init/2,
+      "mysqli_stmt_prepare" => &mysqli_stmt_prepare/2,
+      "mysqli_stmt_execute" => &mysqli_stmt_execute/2,
+      "mysqli_stmt_close" => &mysqli_stmt_close/2,
+      "mysqli_stmt_get_result" => &mysqli_stmt_get_result/2,
+      "mysqli_stmt_param_count" => &mysqli_stmt_param_count/2,
+      "mysqli_stmt_field_count" => &mysqli_stmt_field_count/2,
+      "mysqli_stmt_num_rows" => &mysqli_stmt_num_rows/2,
+      "mysqli_stmt_affected_rows" => &mysqli_stmt_affected_rows/2,
+      "mysqli_stmt_insert_id" => &mysqli_stmt_insert_id/2,
+      "mysqli_stmt_data_seek" => &mysqli_stmt_data_seek/2,
+      "mysqli_stmt_free_result" => &mysqli_stmt_free_result/2,
+      "mysqli_stmt_errno" => &mysqli_stmt_errno/2,
+      "mysqli_stmt_error" => &mysqli_stmt_error/2,
+      "mysqli_stmt_sqlstate" => &mysqli_stmt_sqlstate/2,
+      "mysqli_stmt_more_results" => &mysqli_stmt_more_results/2,
+      "mysqli_stmt_next_result" => &mysqli_stmt_next_result/2,
+      "mysqli_stmt_store_result" => &mysqli_stmt_store_result/2,
+      "mysqli_stmt_result_metadata" => &mysqli_stmt_result_metadata/2,
+      "mysqli_stmt_attr_set" => &mysqli_stmt_attr_set/2,
+      "mysqli_stmt_attr_get" => &mysqli_stmt_attr_get/2,
+      "mysqli_stmt_reset" => &mysqli_stmt_reset/2,
+      "mysqli_stmt_send_long_data" => &mysqli_stmt_send_long_data/2,
+      "mysqli_execute" => &mysqli_stmt_execute/2,
+      "mysqli_stmt_execute_query" => &mysqli_stmt_execute_query/2,
       "mysqli_fetch_all" => &mysqli_fetch_all/2,
       "mysqli_fetch_column" => &mysqli_fetch_column/2,
       "mysqli_fetch_fields" => &mysqli_fetch_fields/2,
@@ -72,9 +98,9 @@ defmodule PhpBeam.Builtin.MysqliFns do
       "mysqli_next_result" => &mysqli_next_result/2,
       "mysqli_report" => &mysqli_report/2,
       "mysqli_autocommit" => &mysqli_autocommit/2,
-      "mysqli_begin_transaction" => &mysqli_simple_ok/2,
-      "mysqli_commit" => &mysqli_simple_ok/2,
-      "mysqli_rollback" => &mysqli_simple_ok/2,
+      "mysqli_begin_transaction" => &mysqli_begin_transaction/2,
+      "mysqli_commit" => &mysqli_commit_txn/2,
+      "mysqli_rollback" => &mysqli_rollback_txn/2,
       "mysqli_options" => &mysqli_options/2,
       "mysqli_set_opt" => &mysqli_options/2,
       "mysqli_character_set_name" => &mysqli_character_set_name/2,
@@ -82,9 +108,12 @@ defmodule PhpBeam.Builtin.MysqliFns do
       "mysqli_stat" => &mysqli_stat/2
     }
 
-    Enum.reduce(entries, fns, fn {name, fun}, acc ->
-      Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []})
-    end)
+    plain =
+      Enum.reduce(entries, fns, fn {name, fun}, acc ->
+        Map.put(acc, name, %{fun: fn v, i, _c -> fun.(v, i) end, refs: []})
+      end)
+
+    Map.merge(plain, stmt_ho_entries())
   end
 
   defp val(vals, n \\ 0), do: Enum.at(vals, n)
@@ -582,7 +611,6 @@ defmodule PhpBeam.Builtin.MysqliFns do
   defp state_of(2002), do: "08S01"
   defp state_of(_), do: "HY000"
   defp mysqli_options(_vals, i), do: {:ok, {:bool, true}, i}
-  defp mysqli_autocommit(vals, i), do: {:ok, {:bool, true}, i}
   defp mysqli_simple_ok(_vals, i), do: {:ok, {:bool, true}, i}
   defp mysqli_thread_id(_vals, i), do: {:ok, {:int, 1}, i}
   defp mysqli_stat(vals, i), do: {:ok, {:string, "Uptime: 1  Threads: 1"}, i}
@@ -785,6 +813,28 @@ defmodule PhpBeam.Builtin.MysqliFns do
 
   # ── transaction / session (SQL-level, same handle) ──
 
+  defp mysqli_commit_txn(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         h = %{kind: :mysqli, conn: conn} <- Interp.get_resource(i, r) do
+      {:ok, _, conn2} = MySQL.query(conn, "COMMIT")
+      i2 = Interp.put_resource(i, r, %{h | conn: conn2})
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_rollback_txn(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         h = %{kind: :mysqli, conn: conn} <- Interp.get_resource(i, r) do
+      {:ok, _, conn2} = MySQL.query(conn, "ROLLBACK")
+      i2 = Interp.put_resource(i, r, %{h | conn: conn2})
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
   defp mysqli_begin_transaction(vals, i) do
     with {:resource, _} = r <- val(vals),
          h = %{kind: :mysqli, conn: conn} <- Interp.get_resource(i, r) do
@@ -951,4 +1001,368 @@ defmodule PhpBeam.Builtin.MysqliFns do
   defp mysqli_refresh(_vals, i), do: {:ok, {:bool, true}, i}
   defp mysqli_debug(_vals, i), do: {:ok, {:bool, true}, i}
   defp mysqli_change_user(_vals, i), do: {:ok, {:bool, true}, i}
+
+
+  ## ───────────────── D4 batch 2: mysqli_stmt family (MyXQL prepared) ─────────────────
+
+  defp stmt_ho_entries do
+    nofun = fn _v, i, _c -> {:ok, :null, i} end
+    ho = fn fun -> %{fun: nofun, refs: [], ho: %{args: :raw, fun: fun}} end
+
+    %{
+      "mysqli_stmt_bind_param" => ho.(&stmt_ho_bind_param/3),
+      "mysqli_stmt_bind_result" => ho.(&stmt_ho_bind_result/3)
+    }
+  end
+
+  defp stmt_ho_bind_param(args, env, interp) do
+    case args do
+      [stmt_arg, types_e | var_args] when var_args != [] ->
+        with {{:val, {:resource, _rid} = r}, _, i2} <- PhpBeam.Eval.eval(stmt_arg, env, interp),
+             {{:val, {:string, types}}, _, i3} <- PhpBeam.Eval.eval(types_e, env, i2),
+             st = %{kind: :mysqli_stmt} <- Interp.get_resource(i3, r) do
+          # values captured AT BIND TIME (php re-reads the vars at execute —
+          # by-reference semantics registered as a deviation)
+          {bind_vals, i4} =
+            Enum.map_reduce(var_args, i3, fn ve, acc ->
+              case PhpBeam.Eval.eval(ve, env, acc) do
+                {{:val, v}, _, acc2} -> {v, acc2}
+                _ -> {nil, acc}
+              end
+            end)
+
+          st2 = Map.merge(st, %{bind_types: types, bind_vals: bind_vals})
+          i5 = Interp.put_resource(i4, r, st2)
+          {{:val, {:bool, true}}, env, i5}
+        else
+          _ -> {{:val, {:bool, false}}, env, interp}
+        end
+
+      _ ->
+        {{:val, {:bool, false}}, env, interp}
+    end
+  catch
+    _, _ -> {{:val, {:bool, false}}, env, interp}
+  end
+
+  defp stmt_ho_bind_result(args, env, interp) do
+    case args do
+      [stmt_arg | var_args] when var_args != [] ->
+        with {{:val, {:resource, _rid} = r}, _, i2} <- PhpBeam.Eval.eval(stmt_arg, env, interp),
+             st = %{kind: :mysqli_stmt} <- Interp.get_resource(i2, r) do
+          i3 = Interp.put_resource(i2, r, Map.put(st, :out_vars, var_args))
+          {{:val, {:bool, true}}, env, i3}
+        else
+          _ -> {{:val, {:bool, false}}, env, interp}
+        end
+
+      _ ->
+        {{:val, {:bool, false}}, env, interp}
+    end
+  catch
+    _, _ -> {{:val, {:bool, false}}, env, interp}
+  end
+
+  defp mysqli_prepare(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli, conn: %MySQL{} = conn} <- Interp.get_resource(i, r),
+         sql = s(vals, 1) do
+      case MyXQL.prepare(conn.conn, "", sql) do
+        {:ok, %MyXQL.Query{} = p, _} ->
+          {res, i2} = stmt_resource(i, r, sql, p)
+          {:ok, res, i2}
+
+        {:ok, %MyXQL.Query{} = p} ->
+          {res, i2} = stmt_resource(i, r, sql, p)
+          {:ok, res, i2}
+
+        {:error, %MyXQL.Error{mysql: %{code: code, message: msg}}} ->
+          throw_mysqli(i, code, msg, sql)
+
+        {:error, %MyXQL.Error{message: msg}} ->
+          throw_mysqli(i, 1064, msg, sql)
+      end
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  catch
+    _, _ -> {:ok, {:bool, false}, i}
+  end
+
+  defp stmt_resource(i, conn_r, sql, prepared) do
+    Interp.open_resource(i, %{
+      kind: :mysqli_stmt,
+      conn_r: conn_r,
+      sql: sql,
+      prepared: prepared,
+      bind_types: "",
+      bind_vars: [],
+      out_vars: [],
+      rows: [],
+      cursor: 0,
+      columns: [],
+      affected: 0,
+      insert_id: 0
+    })
+  end
+
+  defp mysqli_stmt_init(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli} <- Interp.get_resource(i, r) do
+      {res, i2} = stmt_resource(i, r, "", nil)
+      {:ok, res, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_stmt_prepare(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         st = %{kind: :mysqli_stmt, conn_r: conn_r} <- Interp.get_resource(i, r),
+         sql = s(vals, 1),
+         %{conn: %MySQL{} = conn} <- Interp.get_resource(i, conn_r) do
+      case MyXQL.prepare(conn.conn, "", sql) do
+        {:ok, %MyXQL.Query{} = p, _} ->
+          i2 = Interp.put_resource(i, r, Map.merge(st, %{sql: sql, prepared: p}))
+          {:ok, {:bool, true}, i2}
+
+        {:ok, %MyXQL.Query{} = p} ->
+          i2 = Interp.put_resource(i, r, Map.merge(st, %{sql: sql, prepared: p}))
+          {:ok, {:bool, true}, i2}
+
+        {:error, _} ->
+          {:ok, {:bool, false}, i}
+      end
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  catch
+    _, _ -> {:ok, {:bool, false}, i}
+  end
+
+  # typed params: i→int, s→string, d→float — the prepared protocol keeps
+  # NATIVE types (probed: "si" binds yield int output for the i column)
+  defp typed_param("i", {:int, n}), do: n
+  defp typed_param("i", {:string, s}), do: String.to_integer(s)
+  defp typed_param("d", v), do: PhpBeam.Value.to_float(v) |> elem(1) |> then(&elem(&1, 1))
+  defp typed_param("s", {:string, s}), do: s
+  defp typed_param("s", {:int, n}), do: Integer.to_string(n)
+  defp typed_param(_, {:string, s}), do: s
+  defp typed_param(_, v), do: PhpBeam.Eval.php_to_string(v)
+
+  defp stmt_run(st, conn) do
+    vals =
+      Map.get(st, :bind_vals, [])
+      |> Enum.zip(String.to_charlist(st.bind_types))
+      |> Enum.map(fn {v, t} -> typed_param(<<t>>, v) end)
+
+    case st.prepared do
+      nil ->
+        {:error, {1243, "No statement prepared"}}
+
+      %MyXQL.Query{} = q ->
+        case MyXQL.execute(conn.conn, q, vals) do
+          # execute returns {:ok, Query, Result} (probed) — Query first;
+          # DML results carry columns: nil — they route to the insert branch
+          {:ok, _, %MyXQL.Result{columns: nil}} = r ->
+            res = elem(r, 2)
+            {:ok, %{rows: [], columns: [], affected: res.num_rows || 0, insert_id: res.last_insert_id || 0}}
+
+          {:ok, _, %MyXQL.Result{columns: cols, rows: rows}} ->
+            {:ok, %{rows: rows || [], columns: cols || [], affected: length(rows || []), insert_id: 0}}
+
+          {:ok, %MyXQL.Result{columns: cols, rows: rows}, _} ->
+            {:ok, %{rows: rows || [], columns: cols || [], affected: length(rows || []), insert_id: 0}}
+
+          {:ok, %MyXQL.Result{columns: cols, rows: rows}} ->
+            {:ok, %{rows: rows || [], columns: cols || [], affected: length(rows || []), insert_id: 0}}
+
+          {:ok, _, %MyXQL.Result{last_insert_id: lid, num_rows: n}} ->
+            {:ok, %{rows: [], columns: [], affected: n || 0, insert_id: lid || 0}}
+
+          {:ok, %MyXQL.Result{last_insert_id: lid, num_rows: n}, _} ->
+            {:ok, %{rows: [], columns: [], affected: n || 0, insert_id: lid || 0}}
+
+          {:ok, %MyXQL.Result{last_insert_id: lid, num_rows: n}} ->
+            {:ok, %{rows: [], columns: [], affected: n || 0, insert_id: lid || 0}}
+
+          {:error, %MyXQL.Error{mysql: %{code: code, message: msg}}} ->
+            {:error, {code, msg}}
+
+          {:error, %MyXQL.Error{message: msg}} ->
+            {:error, {1064, msg}}
+        end
+    end
+  catch
+    _, _ -> {:error, {1064, "stmt execute failed"}}
+  end
+
+  defp mysqli_stmt_execute(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         st = %{kind: :mysqli_stmt, conn_r: conn_r} <- Interp.get_resource(i, r),
+         %{conn: %MySQL{} = conn} <- Interp.get_resource(i, conn_r) do
+      case stmt_run(st, conn) do
+        {:ok, out} ->
+          st2 =
+            Map.merge(st, %{
+              rows: out.rows,
+              columns: out.columns,
+              cursor: 0,
+              affected: out.affected,
+              insert_id: out.insert_id
+            })
+
+          i2 = Interp.put_resource(i, r, st2)
+          {:ok, {:bool, true}, i2}
+
+        {:error, {code, msg}} ->
+          throw_mysqli(i, code, msg, st.sql)
+
+        {:error, _} ->
+          {:ok, {:bool, false}, i}
+      end
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  catch
+    _, _ -> {:ok, {:bool, false}, i}
+  end
+
+  defp mysqli_stmt_get_result(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         st = %{kind: :mysqli_stmt, rows: rows, columns: cols} <- Interp.get_resource(i, r) do
+      {res, i2} =
+        Interp.open_resource(i, %{
+          kind: :mysqli_result,
+          columns: cols,
+          rows: Enum.map(rows, &stmt_render_row/1),
+          cursor: 0,
+          fields_cursor: 0
+        })
+
+      {:ok, res, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  # prepared rows arrive DECODED — int columns stay int (probed, unlike
+  # the text protocol where everything is a string)
+  defp stmt_render_row(row), do: Enum.map(row, &stmt_val/1)
+
+  defp stmt_val(nil), do: :__null
+  defp stmt_val(v) when is_integer(v), do: v
+  defp stmt_val(v) when is_float(v), do: Float.to_string(v)
+  defp stmt_val(v) when is_binary(v), do: v
+  defp stmt_val(%Decimal{} = d), do: Decimal.to_string(d)
+  defp stmt_val(v), do: to_string(v)
+
+  defp mysqli_stmt_param_count(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         st = %{kind: :mysqli_stmt} <- Interp.get_resource(i, r) do
+      case st do
+        %{prepared: %MyXQL.Query{num_params: np}} -> {:ok, {:int, np || 0}, i}
+        _ -> {:ok, {:int, 0}, i}
+      end
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_stmt_field_count(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         st = %{kind: :mysqli_stmt} <- Interp.get_resource(i, r) do
+      n =
+        case st do
+          %{columns: cols} -> length(cols || [])
+          _ -> 0
+        end
+
+      {:ok, {:int, n}, i}
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_stmt_num_rows(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_stmt, rows: rows, cursor: c} <- Interp.get_resource(i, r) do
+      {:ok, {:int, max(length(rows) - c, 0)}, i}
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_stmt_affected_rows(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_stmt, affected: a} <- Interp.get_resource(i, r) do
+      {:ok, {:int, a || 0}, i}
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_stmt_insert_id(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_stmt, insert_id: id} <- Interp.get_resource(i, r) do
+      {:ok, {:int, id || 0}, i}
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_stmt_data_seek(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         st = %{kind: :mysqli_stmt} <- Interp.get_resource(i, r),
+         {:int, idx} <- val(vals, 1) do
+      i2 = Interp.put_resource(i, r, Map.put(st, :cursor, max(idx, 0)))
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_stmt_close(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         st = %{kind: :mysqli_stmt} <- Interp.get_resource(i, r) do
+      i2 = Interp.put_resource(i, r, Map.put(st, :closed, true))
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_stmt_free_result(vals, i), do: mysqli_stmt_close(vals, i)
+
+  defp mysqli_stmt_store_result(vals, i),
+    do: {:ok, {:bool, true}, i}
+
+  defp mysqli_stmt_errno(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_stmt, errno: e} <- Interp.get_resource(i, r) do
+      {:ok, {:int, e || 0}, i}
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_stmt_error(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_stmt, error: e} <- Interp.get_resource(i, r) do
+      {:ok, {:string, e || ""}, i}
+    else
+      _ -> {:ok, {:string, ""}, i}
+    end
+  end
+
+  defp mysqli_stmt_sqlstate(_vals, i), do: {:ok, {:string, "00000"}, i}
+  defp mysqli_stmt_more_results(_vals, i), do: {:ok, {:bool, false}, i}
+  defp mysqli_stmt_next_result(_vals, i), do: {:ok, {:bool, false}, i}
+  defp mysqli_stmt_result_metadata(_vals, i), do: {:ok, {:bool, false}, i}
+  defp mysqli_stmt_attr_set(_vals, i), do: {:ok, {:bool, true}, i}
+  defp mysqli_stmt_attr_get(_vals, i), do: {:ok, {:int, 0}, i}
+  defp mysqli_stmt_reset(_vals, i), do: {:ok, {:bool, true}, i}
+  defp mysqli_stmt_send_long_data(_vals, i), do: {:ok, {:bool, true}, i}
+
+  defp mysqli_stmt_execute_query(_vals, i), do: {:ok, {:bool, false}, i}
 end
