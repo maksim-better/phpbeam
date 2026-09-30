@@ -141,3 +141,11 @@
 - [ ] DSN 形态（unix socket/charset/ssl）；持久连接（ATTR_PERSISTENT）；连接错误码细描（1045 之外的 2002/2054 等）
 - [ ] PDOStatement::nextRowset/getColumnMeta/errorInfo；事务嵌套与 SAVEPOINT；MySQL 8 的 cursor 常量族
 - [ ] 差分用例对 DB 的破坏性：phpbeam_test 库重建（两侧同跑安全——差分 harness 里 php 先跑 php 侧重建 ✓ 保留）
+## D4 批1 顺延（2026-09-30 mysqli 40→69）
+
+- [ ] mysqli_stmt 族 25（prepare/execute/bind_param/bind_result/fetch/get_result/...）——需 prepared 协议通道（MyXQL execute 或协议客户端扩展）
+- [ ] **affected_rows/insert_id 长事务链上下文非确定性**（登记待查）：单函数多次验证正确（INSERT 后 2/1），但在 autocommit→begin→rollback→DDL 链后偶发 0/0——疑 DBConnection 池 checkout 时 text 协议 Result 形态漂移（{:ok,R} vs {:ok,R,_}）进入错误分支；差分用例已改用行数断言绕开
+- [ ] fetch_object/fetch_lengths 边界；multi_query/poll/reap 异步族；warning 对象族（get_warnings/stmt_get_warnings）
+- [ ] field 元数据精确化（type/flags/max_length 按协议列定义——现按首行值猜测）；error_list 的 sqlstate 全表；change_user/kill/refresh 真语义
+- [ ] mysqli_result 的 Traversable（foreach 直接迭代——引擎需 resource 迭代协议）
+- [ ] 常量面：MYSQLI_READ_CONSTANT/CLIENT_* 剩余；CURSOR_TYPE_*；stmt attr 常量

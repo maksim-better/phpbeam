@@ -82,6 +82,14 @@ defmodule PhpBeam.MySQL do
 
   # ───────────────────────── query ─────────────────────────
 
+  defp myxql_query(conn, sql) do
+    case MyXQL.query(conn, to_string(sql), [], query_type: :text) do
+      {:ok, %MyXQL.Result{}} = ok -> ok
+      {:ok, %MyXQL.Result{}, _} = ok -> ok
+      other -> other
+    end
+  end
+
   @doc """
   COM_QUERY via MyXQL. Result rows come back DECODED (ints, Decimals,
   dates) — re-rendered to text form so the mysqli layer keeps applying
@@ -92,7 +100,7 @@ defmodule PhpBeam.MySQL do
     # default :binary wraps every statement in the prepared protocol, which
     # the server rejects for `USE` (WP's real_connect passes dbname=null and
     # then calls select_db)
-    case MyXQL.query(conn, to_string(sql), [], query_type: :text) do
+    case myxql_query(conn, sql) do
       {:ok, %MyXQL.Result{} = r} ->
         meta = %{
           columns: r.columns || [],

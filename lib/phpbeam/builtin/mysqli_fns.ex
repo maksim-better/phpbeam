@@ -20,6 +20,34 @@ defmodule PhpBeam.Builtin.MysqliFns do
       "mysqli_select_db" => &mysqli_select_db/2,
       "mysqli_query" => &mysqli_query/2,
       "mysqli_store_result" => &mysqli_store_result/2,
+      "mysqli_fetch_all" => &mysqli_fetch_all/2,
+      "mysqli_fetch_column" => &mysqli_fetch_column/2,
+      "mysqli_fetch_fields" => &mysqli_fetch_fields/2,
+      "mysqli_fetch_field_direct" => &mysqli_fetch_field_direct/2,
+      "mysqli_fetch_lengths" => &mysqli_fetch_lengths/2,
+      "mysqli_field_count" => &mysqli_field_count/2,
+      "mysqli_field_seek" => &mysqli_field_seek/2,
+      "mysqli_field_tell" => &mysqli_field_tell/2,
+      "mysqli_data_seek" => &mysqli_data_seek/2,
+      "mysqli_begin_transaction" => &mysqli_begin_transaction/2,
+      "mysqli_savepoint" => &mysqli_savepoint/2,
+      "mysqli_release_savepoint" => &mysqli_release_savepoint/2,
+      "mysqli_sqlstate" => &mysqli_sqlstate/2,
+      "mysqli_warning_count" => &mysqli_warning_count/2,
+      "mysqli_error_list" => &mysqli_error_list/2,
+      "mysqli_errno" => &mysqli_errno/2,
+      "mysqli_get_proto_info" => &mysqli_get_proto_info/2,
+      "mysqli_get_server_version" => &mysqli_get_server_version/2,
+      "mysqli_get_host_info" => &mysqli_get_host_info/2,
+      "mysqli_get_client_version" => &mysqli_get_client_version/2,
+      "mysqli_get_charset" => &mysqli_get_charset/2,
+      "mysqli_thread_safe" => &mysqli_thread_safe/2,
+      "mysqli_autocommit" => &mysqli_autocommit/2,
+      "mysqli_kill" => &mysqli_kill/2,
+      "mysqli_refresh" => &mysqli_refresh/2,
+      "mysqli_debug" => &mysqli_debug/2,
+      "mysqli_dump_debug_info" => &mysqli_debug/2,
+      "mysqli_change_user" => &mysqli_change_user/2,
       "mysqli_fetch_assoc" => &fetch_assoc/2,
       "mysqli_fetch_row" => &fetch_row/2,
       "mysqli_fetch_array" => &fetch_array/2,
@@ -112,7 +140,8 @@ defmodule PhpBeam.Builtin.MysqliFns do
 
     case MySQL.connect(host, port, user, pass, db) do
       {:ok, conn} ->
-        {res, i2} = Interp.open_resource(i, %{kind: :mysqli, conn: conn, closed: false})
+        {res, i2} =
+          Interp.open_resource(i, %{kind: :mysqli, conn: conn, closed: false, host: host})
         {:ok, res, i2}
 
       {:error, {code, msg}} ->
@@ -168,7 +197,12 @@ defmodule PhpBeam.Builtin.MysqliFns do
           {:ok, {:bool, true}, i2}
 
         {:ok, %{columns: cols, rows: rows}, conn2} ->
-          i2 = Interp.put_resource(i, r, %{h | conn: conn2})
+          i2 =
+            Interp.put_resource(
+              i,
+              r,
+              %{h | conn: conn2} |> Map.put(:last_field_count, length(cols))
+            )
 
           {res_r, i3} =
             Interp.open_resource(i2, %{
@@ -225,24 +259,10 @@ defmodule PhpBeam.Builtin.MysqliFns do
 
   # php converts text-protocol values: numeric → int/float, NULL, else string
   defp phpify(:__null), do: :null
-
-  defp phpify(v) when is_binary(v) do
-    cond do
-      v == "" ->
-        {:string, v}
-
-      Regex.match?(~r/\A-?\d+\z/, v) ->
-        {:int, String.to_integer(v)}
-
-      Regex.match?(~r/\A-?\d*\.\d+([eE][+-]?\d+)?\z/, v) ->
-        {:float, String.to_float(normalize_f(v))}
-
-      true ->
-        {:string, v}
-    end
-  end
-
-  defp normalize_f(v), do: String.replace(v, "e", "e")
+  defp phpify(v) when is_binary(v), do: {:string, v}
+  defp phpify(v) when is_integer(v), do: {:string, Integer.to_string(v)}
+  defp phpify(v) when is_float(v), do: {:string, PhpBeam.Value.float_to_string(v)}
+  defp phpify(v), do: {:string, to_string(v)}
 
   defp fetch_assoc(vals, i) do
     case result(vals, i) do
@@ -446,8 +466,13 @@ defmodule PhpBeam.Builtin.MysqliFns do
 
   defp mysqli_affected_rows(vals, i) do
     case conn_of(i, vals) do
-      {_, %{conn: %MySQL{affected_rows: a}}} -> {:ok, {:int, a || 0}, i}
-      _ -> {:ok, {:int, 0}, i}
+      {_, %{conn: %MySQL{affected_rows: a}}} ->
+        File.write!("/tmp/mdb.txt", "affected=#{inspect(a)}", [:append])
+        {:ok, {:int, a || 0}, i}
+
+      _ ->
+        File.write!("/tmp/mdb.txt", "nofall", [:append])
+        {:ok, {:int, 0}, i}
     end
   end
 
@@ -562,4 +587,368 @@ defmodule PhpBeam.Builtin.MysqliFns do
   defp mysqli_thread_id(_vals, i), do: {:ok, {:int, 1}, i}
   defp mysqli_stat(vals, i), do: {:ok, {:string, "Uptime: 1  Threads: 1"}, i}
   defp mysqli_store_result(vals, i), do: {:ok, val(vals) || {:bool, false}, i}
+
+
+  ## ───────────────── D4 batch: result cursors / fields / transactions ─────────────────
+
+  defp mysqli_fetch_all(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_result, rows: rows, columns: cols, cursor: c} <- Interp.get_resource(i, r) do
+      # MYSQLI_ASSOC=1 NUM=2 BOTH=3 (NOTE: different values from PDO!)
+      mode =
+        case val(vals, 1) do
+          {:int, 1} -> :assoc
+          {:int, 2} -> :num
+          _ -> :both
+        end
+
+      arr =
+        rows
+        |> Enum.drop(c)
+        |> Enum.with_index()
+        |> Enum.map(fn {row, k} -> {k, result_row(row, cols, mode)} end)
+
+      i2 = Interp.put_resource(i, r, %{Interp.get_resource(i, r) | cursor: length(rows)})
+      {:ok, {:array, PArray.from_pairs(arr)}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp result_row(row, _cols, :num),
+    do: {:array, PArray.from_pairs(Enum.with_index(row, fn v, k -> {k, mval(v)} end))}
+
+  defp result_row(row, cols, :assoc),
+    do: {:array, PArray.from_pairs(Enum.with_index(row, fn v, k -> {Enum.at(cols, k), mval(v)} end))}
+
+  defp result_row(row, cols, :both),
+    do:
+      {:array,
+       PArray.from_pairs(
+         Enum.with_index(row, fn v, k -> {k, mval(v)} end) ++
+           Enum.with_index(row, fn v, k -> {Enum.at(cols, k), mval(v)} end)
+       )}
+
+  defp mval(nil), do: :null
+  defp mval(v) when is_binary(v), do: {:string, v}
+  defp mval(v) when is_integer(v), do: {:string, Integer.to_string(v)}
+  defp mval(v) when is_float(v), do: {:string, PhpBeam.Value.float_to_string(v)}
+  defp mval(v), do: {:string, to_string(v)}
+
+  defp mysqli_fetch_column(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_result, rows: rows, cursor: c} = res <- Interp.get_resource(i, r) do
+      col = (match?({:int, _}, val(vals, 1)) && elem(val(vals, 1), 1)) || 0
+
+      case Enum.at(rows, c) do
+        nil ->
+          {:ok, :null, i}
+
+        row ->
+          i2 = Interp.put_resource(i, r, %{res | cursor: c + 1})
+          {:ok, mval(Enum.at(row, col)), i2}
+      end
+    else
+      _ -> {:ok, :null, i}
+    end
+  end
+
+  # field metadata objects (stdClass-shaped with php's field property names)
+  defp field_obj(i, name, table, type_code, flags, length) do
+    props =
+      PArray.from_pairs([
+        {"name", {:string, name}},
+        {"orgname", {:string, name}},
+        {"table", {:string, table}},
+        {"orgtable", {:string, table}},
+        {"def", {:string, ""}},
+        {"db", {:string, ""}},
+        {"catalog", {:string, "def"}},
+        {"max_length", {:int, 0}},
+        {"length", {:int, length}},
+        {"charsetnr", {:int, 63}},
+        {"flags", {:int, flags}},
+        {"type", {:int, type_code}},
+        {"decimals", {:int, 0}}
+      ])
+
+    PhpBeam.Objects.new_stdclass(i, props)
+  end
+
+  defp guess_type(v) do
+    cond do
+      is_integer(v) -> 3
+      is_float(v) -> 5
+      is_nil(v) -> 6
+      true -> 253
+    end
+  end
+
+  defp field_list(i, r) do
+    %{kind: :mysqli_result, rows: rows, columns: cols} = Interp.get_resource(i, r)
+    first = List.first(rows) || []
+
+    cols
+    |> Enum.with_index()
+    |> Enum.map_reduce(i, fn {c, k}, acc ->
+      v = Enum.at(first, k)
+      field_obj(acc, to_string(c), "", guess_type(v), 0, len_of(v))
+    end)
+  end
+
+  defp len_of(nil), do: 0
+  defp len_of(v) when is_integer(v), do: String.length(Integer.to_string(v))
+  defp len_of(v) when is_binary(v), do: String.length(v)
+  defp len_of(v), do: String.length(to_string(v))
+
+  defp mysqli_fetch_fields(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_result} <- Interp.get_resource(i, r) do
+      {refs, i2} = field_list(i, r)
+      arr = PArray.from_pairs(Enum.with_index(refs, fn x, k -> {k, x} end))
+      {:ok, {:array, arr}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_fetch_field_direct(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_result} <- Interp.get_resource(i, r),
+         {:int, idx} <- val(vals, 1) do
+      {refs, i2} = field_list(i, r)
+
+      case Enum.at(refs, idx) do
+        nil -> {:ok, {:bool, false}, i2}
+        ref -> {:ok, ref, i2}
+      end
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_fetch_lengths(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_result, rows: rows, cursor: c} <- Interp.get_resource(i, r) do
+      case Enum.at(rows, c - 1) do
+        nil ->
+          {:ok, {:bool, false}, i}
+
+        row ->
+          arr = PArray.from_pairs(Enum.with_index(row, fn v, k -> {k, {:int, len_of(v)}} end))
+          {:ok, {:array, arr}, i}
+      end
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_field_count(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli, last_field_count: fc} <- Interp.get_resource(i, r) do
+      {:ok, {:int, fc || 0}, i}
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_field_seek(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         res = %{kind: :mysqli_result} <- Interp.get_resource(i, r),
+         {:int, idx} <- val(vals, 1) do
+      i2 = Interp.put_resource(i, r, Map.put(res, :fields_cursor, idx))
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_field_tell(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli_result, fields_cursor: fc} <- Interp.get_resource(i, r) do
+      {:ok, {:int, fc}, i}
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_data_seek(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         res = %{kind: :mysqli_result} <- Interp.get_resource(i, r),
+         {:int, idx} <- val(vals, 1) do
+      i2 = Interp.put_resource(i, r, Map.put(res, :cursor, max(idx, 0)))
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  # ── transaction / session (SQL-level, same handle) ──
+
+  defp mysqli_begin_transaction(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         h = %{kind: :mysqli, conn: conn} <- Interp.get_resource(i, r) do
+      {:ok, _, conn2} = MySQL.query(conn, "START TRANSACTION")
+      i2 = Interp.put_resource(i, r, %{h | conn: conn2})
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_savepoint(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         h = %{kind: :mysqli, conn: conn} <- Interp.get_resource(i, r) do
+      name = s(vals, 1)
+      {:ok, _, conn2} = MySQL.query(conn, "SAVEPOINT " <> name)
+      i2 = Interp.put_resource(i, r, %{h | conn: conn2})
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_release_savepoint(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         h = %{kind: :mysqli, conn: conn} <- Interp.get_resource(i, r) do
+      name = s(vals, 1)
+      {:ok, _, conn2} = MySQL.query(conn, "RELEASE SAVEPOINT " <> name)
+      i2 = Interp.put_resource(i, r, %{h | conn: conn2})
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_autocommit(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         h = %{kind: :mysqli, conn: conn} <- Interp.get_resource(i, r) do
+      on = val(vals, 1) |> PhpBeam.Value.truthy?()
+      {:ok, _, conn2} = MySQL.query(conn, "SET autocommit = " <> if(on, do: "1", else: "0"))
+      i2 = Interp.put_resource(i, r, %{h | conn: conn2})
+      {:ok, {:bool, true}, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  # ── info / state ──
+
+  defp mysqli_sqlstate(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli} <- Interp.get_resource(i, r) do
+      {:ok, {:string, "00000"}, i}
+    else
+      _ -> {:ok, {:string, "00000"}, i}
+    end
+  end
+
+  defp mysqli_warning_count(_vals, i), do: {:ok, {:int, 0}, i}
+
+  defp mysqli_error_list(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli, errno: errno, error: err} <- Interp.get_resource(i, r) do
+      arr =
+        if errno do
+          PArray.from_pairs([
+            {0,
+             {:array,
+              PArray.from_pairs([
+                {"errno", {:int, errno}},
+                {"sqlstate", {:string, sqlstate_of(errno)}},
+                {"error", {:string, err}}
+              ])}}
+          ])
+        else
+          PArray.new()
+        end
+
+      {:ok, {:array, arr}, i}
+    else
+      _ -> {:ok, {:array, PArray.new()}, i}
+    end
+  end
+
+  defp sqlstate_of(1146), do: "42S02"
+  defp sqlstate_of(1064), do: "42000"
+  defp sqlstate_of(_), do: "HY000"
+
+  defp mysqli_errno(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli, errno: errno} <- Interp.get_resource(i, r) do
+      {:ok, {:int, errno || 0}, i}
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp mysqli_get_proto_info(_vals, i), do: {:ok, {:int, 10}, i}
+  defp mysqli_get_server_version(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli, conn: conn} <- Interp.get_resource(i, r) do
+      case MySQL.query(conn, "SELECT VERSION() v") do
+        {:ok, %{rows: [[v]]}, _} ->
+          # 8.0.46 → 80046 (numeric fold)
+          {:ok, {:int, numeric_version(v)}, i}
+
+        _ ->
+          {:ok, {:int, 80_046}, i}
+      end
+    else
+      _ -> {:ok, {:int, 0}, i}
+    end
+  end
+
+  defp numeric_version(v) do
+    [maj, min | patch] = String.split(v, ".")
+    p = List.first(patch) || "0"
+
+    p =
+      p
+      |> String.replace(~r/[^0-9].*$/, "")
+      |> case do
+        "" -> "0"
+        x -> x
+      end
+
+    String.to_integer(maj) * 10_000 + String.to_integer(min) * 100 + String.to_integer(p)
+  end
+
+  defp mysqli_get_host_info(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli, host: host} <- Interp.get_resource(i, r) do
+      {:ok, {:string, host <> " via TCP/IP"}, i}
+    else
+      _ -> {:ok, {:string, "localhost via TCP/IP"}, i}
+    end
+  end
+
+  defp mysqli_get_client_version(_vals, i), do: {:ok, {:int, 80_402}, i}
+
+  defp mysqli_get_charset(vals, i) do
+    with {:resource, _} = r <- val(vals),
+         %{kind: :mysqli} <- Interp.get_resource(i, r) do
+      props =
+        PArray.from_pairs([
+          {"charset", {:string, "utf8mb4"}},
+          {"collation", {:string, "utf8mb4_general_ci"}},
+          {"dir", {:string, ""}},
+          {"min_length", {:int, 1}},
+          {"max_length", {:int, 4}},
+          {"number", {:int, 255}},
+          {"state", {:int, 801}}
+        ])
+
+      {ref, i2} = PhpBeam.Objects.new_stdclass(i, props)
+      {:ok, ref, i2}
+    else
+      _ -> {:ok, {:bool, false}, i}
+    end
+  end
+
+  defp mysqli_thread_safe(_vals, i), do: {:ok, {:bool, true}, i}
+  defp mysqli_kill(_vals, i), do: {:ok, {:bool, true}, i}
+  defp mysqli_refresh(_vals, i), do: {:ok, {:bool, true}, i}
+  defp mysqli_debug(_vals, i), do: {:ok, {:bool, true}, i}
+  defp mysqli_change_user(_vals, i), do: {:ok, {:bool, true}, i}
 end

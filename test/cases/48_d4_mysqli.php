@@ -1,0 +1,35 @@
+<?php
+$m = mysqli_connect("127.0.0.1", "root", "root", "information_schema");
+var_dump(mysqli_connect_errno(), mysqli_get_server_version($m), mysqli_character_set_name($m), mysqli_get_host_info($m));
+$r = mysqli_query($m, "SELECT 1 AS a, \"x\" AS b UNION SELECT 2, \"y\"");
+var_dump(mysqli_num_rows($r), mysqli_fetch_assoc($r), mysqli_fetch_assoc($r) === null);
+mysqli_data_seek($r, 0);
+var_dump(mysqli_fetch_all($r, MYSQLI_NUM));
+mysqli_data_seek($r, 0);
+var_dump(mysqli_fetch_all($r, MYSQLI_ASSOC));
+mysqli_data_seek($r, 0);
+var_dump(mysqli_fetch_column($r), mysqli_fetch_column($r, 1));
+mysqli_data_seek($r, 0);
+$f = mysqli_fetch_fields($r);
+var_dump(count($f), $f[0]->name, $f[1]->type, $f[1]->name);
+mysqli_data_seek($r, 0);
+var_dump(mysqli_fetch_field($r)->name, mysqli_field_tell($r));
+var_dump(mysqli_field_seek($r, 1), mysqli_fetch_field($r)->name);
+mysqli_free_result($r);
+var_dump(mysqli_field_count($m), mysqli_warning_count($m), mysqli_sqlstate($m), mysqli_errno($m));
+var_dump(mysqli_autocommit($m, true));
+mysqli_begin_transaction($m);
+mysqli_rollback($m);
+var_dump(mysqli_get_proto_info($m), mysqli_thread_safe(), mysqli_get_client_version());
+$c = mysqli_get_charset($m);
+var_dump($c->charset);
+mysqli_select_db($m, "phpbeam_test");
+mysqli_query($m, "DROP TABLE IF EXISTS t3");
+mysqli_query($m, "CREATE TABLE t3 (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(10))");
+mysqli_query($m, "INSERT INTO t3 (v) VALUES (\"a\"), (\"b\")");
+$rows = mysqli_fetch_all(mysqli_query($m, "SELECT id, v FROM t3 ORDER BY id"), MYSQLI_NUM);
+echo $rows[0][1], ",", $rows[1][1], "\n";
+var_dump(count($rows));
+var_dump(mysqli_real_escape_string($m, "a'b"), mysqli_escape_string($m, "c\"d"));
+try { mysqli_query($m, "SELECT * FROM nope_x"); } catch (mysqli_sql_exception $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+mysqli_close($m);

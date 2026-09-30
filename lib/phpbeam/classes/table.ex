@@ -1183,6 +1183,7 @@ defmodule PhpBeam.Classes.Table do
       "reflectionnamedtype" => native_reflection_named_type_class(),
       "reflectionattribute" => native_reflection_attribute_class(),
       "reflectionexception" => native_class("ReflectionException", "runtimeexception", []),
+      "mysqli_sql_exception" => native_class("mysqli_sql_exception", "runtimeexception", []),
       "reflectionfunctionabstract" =>
         PhpBeam.Classes.Reflection2.classes()["reflectionfunctionabstract"],
       "reflectionfunction" => PhpBeam.Classes.Reflection2.classes()["reflectionfunction"],
