@@ -17,6 +17,8 @@
 - Ruling: T002 的 tmp/{baseline,triage,env_blocked} 脚手架均在 /tmp/ gitignore 覆盖内，无入库物——完成即验证 gitignore，不产生 commit（避免空提交）。
 - [x] T002 脚手架 mkdir tmp/baseline tmp/triage tmp/env_blocked + .gitignore 第 23 行 `/tmp/` 覆盖核对 ✓ | tests: N/A（gitignored 目录） | commit: 无（见 Ruling）
 
+## Phase 2（Foundational：R1/R2）
+
 - [x] T003 R1 版本重钉：phpt_test.exs 默认 PHP_SRC→/Users/5i5j/Downloads/php-8.4.25 + 头注 oracle 8.4.17 重钉 + docs/matrix/drift.md 骨架（E7 格式） | tests: Code.string_to_quoted! syntax ok + tests/lang 解析 213 例 ✓（全量跑通顺延 T004 后——deps 未落无法编译） | commit: a98efc9
 
 - Ruling (T004): 本机 github https 443 被墙（curl 16 + connect timeout 实测），SSH 22/443 通（身份 maksim-better，仓库 origin 本就是 SSH）——解法 = **仓库本地** `git config url."git@github.com:".insteadOf "https://github.com/"`，零文件改动零版本漂移；不动全局配置。fallback 已探明备而未用：hex 全部 8 依赖精确版本在架（本机 hex 可达，与旧机情形相反）、s3 rebar3 可达。若换机：unset 该 local config 即还原。代价若错：无（可逆、仓库内）。
@@ -25,6 +27,13 @@
 - [x] T004 R2a 依赖与构建：mix deps.get 全落（git deps 走 SSH 通道 + jason 走 hex）+ mix escript.build 成功 + 非 phpt 全绿 + 漂移吸收 5 处（ini.ex/interp.ex include_path、const_eval+runtime+mysqli_fns 的 8.4.17 版本族、curl_fns/curl_consts 的 libcurl 8.18.0、pdo.ex sqlite 3.51.3） | tests: `mix test --exclude phpt` → **127 tests, 0 failures, EXIT=0**（tmp/t004_nonphpt5.log） | commit: 本 commit
 
 - [x] T005 R2b exqlite 补丁重建：scripts/patches/exqlite-load-nif.patch（56 行，含应用说明头）——比旧机版本更鲁棒：priv_dir 失败时**扫描 code path 真实 ebin 推导 ../priv**（归档伪路径被 is_dir 过滤）+ PHPBEAM_EXQLITE_NIF 逃生口。调试纪要：首版 which() 推导被归档遮蔽打脸；候选表 List.flatten 把 charlist 打成整数流（path 变成整数 47）——charlist 就是整数列表，flatten 会拆掉候选项本身，改用 ++ 拼接。 | tests: RED（:undef Sqlite3NIF.open 三轮复现）→ GREEN `./phpx -r 'new SQLite3(":memory:"); version()'` → 3.45.1 数组；case 50 直跑 **BYTE-IDENTICAL** 28 行；51 随套件绿 | commit: 本 commit
+
+### Phase 2 验证（D5）
+- 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt`
+- 输出摘要：`127 tests, 0 failures (698 excluded)`，EXIT=0（tmp/t004_nonphpt5.log）
+- 未验证项：phpt 套件本体（后在 T007/T012 补验）；http_test 孤儿清扫多轮观察到端口告警但套件绿——清扫效力随 full lane 持续运行观察
+
+## Phase 3（US1：设施恢复 MVP）
 
 - [x] T006 R3 MySQL 差分恢复：OrbStack 启动 + phpbeam-mysql 容器重建（U8 检查点应验：容器不存在；mysql:8.0，root/root + wp_test/laravel_test + wp/wppass + wp_test/wppass）+ D 系验收 | tests: 47/48/49/50/51 直差分 BYTE-IDENTICAL（51/68/1/28/27 行）、52 套件绿；套件整体 127/0 | commit: 本 commit
 
@@ -40,8 +49,19 @@
 
 - [x] T012 R5a 基线重录：security+run-test 纳入 suites 首录；**Ruling（模块原子净化）**：Macro.camelize 不吃连字符（run-test→Run-test 原子带杠，gate 模块正则漏 6 条失败）→ 模块名 `-`→`_` 后 camelize（RunTest/ZendTypeDeclarations），gate 正则同步放宽 `[A-Za-z0-9-]`；drift.md 补 R5 收口结论（漂移面=5 常量已吸收，phpt 失败集零漂移实证） | tests: 重录 **401 failures/8 分片**，分片和=摘要=401（348 旧+47 security+6 run-test） | commit: 本 commit
 
-### Phase 2 验证（D5）
-- 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
-- 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）
-- 未验证项：phpt 套件本体（归 T012 重录基线时首跑）；http_test 孤儿清扫在多轮运行中两次观察到端口占用告警但套件仍绿——清扫效力正式复验归 T014
+- [x] T013 PLAN.md 三次重排：spec 001 结构权威落位（判据一口径/总账本机重记 401@8 分片/五决策溯源/R 相收口 Z 待启/纪律机械化/风险与环境备忘全面换本机事实）——单独 commit（49f47df） | tests: N/A（文档；数字全部来自本会话实测） | commit: 49f47df
+- [x] T014 MVP 验收：quickstart 场景 1 全链路 | tests: 见下 D5 块 | commit: 本 commit
+
+### Phase 3（US1 MVP）验证（D5）
+- 命令：`mix escript.build`；`scripts/gate.sh --lane fast`；`mix test test/phpbeam/diff_test.exs`；`scripts/gate.sh --lane full`；`ls tmp/baseline/ | wc -l`
+- 输出摘要（真实输出，2026-10-03）：
+  - `Generated escript phpx with MIX_ENV=dev`
+  - `GATE: PASS (fast lane)`
+  - `1 test, 0 failures`（差分套件含 D 系 47–52）
+  - `self-check: shards 401 lines, baseline sum 401` + `GATE: PASS (full lane)`
+  - `8`（分片数）
+- 未验证项：phpt 8 目录以外的全部 Zend/ext 目录（属 Z/X 相）；Laravel/WP/Composer 冒烟资产本机不存在（旧机未随迁）——T015 首步须先重建 Laravel fixture（composer create-project，网络待验证），已记入恢复点
+
+### 恢复点（下会话从这里继续）
+下一任务 **T015（Z0a trait 死循环）**：前置=重建 Laravel 冒烟资产（本机无 artisan/composer 项目；composer 走系统 php 8.4.17）。之后 T016（Z0b autoload）→ T017（zend-exit 演练批）。
 
