@@ -517,7 +517,7 @@ defmodule PhpBeam.Builtin.MysqliFns do
     end
   end
 
-  defp mysqli_get_client_info(_vals, i), do: {:ok, {:string, "mysqlnd 8.4.2"}, i}
+  defp mysqli_get_client_info(_vals, i), do: {:ok, {:string, "mysqlnd 8.4.17"}, i}
 
   defp mysqli_set_charset(vals, i) do
     case conn_of(i, vals) do
@@ -973,7 +973,7 @@ defmodule PhpBeam.Builtin.MysqliFns do
     end
   end
 
-  defp mysqli_get_client_version(_vals, i), do: {:ok, {:int, 80_402}, i}
+  defp mysqli_get_client_version(_vals, i), do: {:ok, {:int, 80_417}, i}
 
   defp mysqli_get_charset(vals, i) do
     with {:resource, _} = r <- val(vals),

@@ -1,7 +1,8 @@
 defmodule PhpBeam.Builtin.CurlConsts do
   @moduledoc """
   The ext/curl constants, dumped from the local php 8.4's libcurl
-  8.11.1 binding (value parity beats hand-transcribing).
+  8.18.0 binding (value parity beats hand-transcribing; numeric constants
+  unchanged since the 8.11.1 dump — asserted in 43_c4_curl differential).
   """
 
   @all %{

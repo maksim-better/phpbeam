@@ -443,7 +443,7 @@ defmodule PhpBeam.Builtin.RuntimeFns do
   # of these satisfies WP's function_exists() bootstrap gates
   defp mysqli_stub(vals, i), do: {:ok, {:bool, false}, i}
 
-  defp mysqli_client_info(_vals, i), do: {:ok, {:string, "mysqlnd 8.4.2"}, i}
+  defp mysqli_client_info(_vals, i), do: {:ok, {:string, "mysqlnd 8.4.17"}, i}
 
   # claiming the sodium extension (matching the reference php-cli) means the
   # function entry points must exist too — WP's compat.php polyfills on

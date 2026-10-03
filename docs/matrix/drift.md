@@ -18,4 +18,11 @@
 
 登记格式：`用例路径 | 差异类型(expect|skipif) | 处置(重录吸收/个案分析/登记待查)`
 
-_（本节在 R5（T012）重录时填充；此处为骨架——T003 交付物。）_
+- test/cases/14_include.php | expect（php 侧警告内嵌 oracle 安装路径：旧机 `Cellar/php/8.4.2` → 本机 `Cellar/php@8.4/8.4.17`） | 处置：ini.ex:97 include_path 默认值重钉本机 keg 路径（该默认值始终为机器钉死值，换机须随迁；T004 修复，2026-10-03）
+- deps/exqlite 实测内嵌 SQLite 3.45.1 | 版本事实 | deferred.md D2 节记录的「exqlite 内嵌 3.48」与实际不符——以本机实测为准，D 系 sqlite 差分如断言版本串以此为准核对（T005 发现）
+- test/cases/43_c4_curl.php | expect（本机 libcurl 8.11.1→8.18.0：errno 37 文案 "Couldn't"→"Could not open file"、curl_version 版本串/host 三元组） | 处置：curl_fns.ex 版本块+错误文案重钉本机（deferred C4「跨机器差分需再探针」预登记项兑现；T004 修复，2026-10-03）
+- test/cases/47..52（D 系 DB 差分） | 环境不可得（OrbStack/MySQL 未启动） | 处置：T006 恢复容器后复跑——不属漂移，走 env_blocked 类（容器本机已重建：mysql:8.0 最新 8.0.x，root/root + wp_test/laravel_test + wp/wppass + wp_test/wppass，2026-10-03；旧机为 8.0.46，版本串如有断言以本机为准）
+- test/cases/48_d4_mysqli.php | expect（mysqlnd client 版本 = PHP 版本：80402→80417） | 处置：const_eval PHP_VERSION/ID/RELEASE + runtime/mysqli_fns 的 mysqlnd 串与 client_version 全部重钉 8.4.17；interp.ex 的 include_path 副本一并随迁（T004 修复，2026-10-03）
+- test/cases/51_d2_pdo_sqlite.php | expect（本机 php 8.4.17 链 SQLite 3.51.3；phpx 钉的 3.53.4 是旧机值） | 处置：pdo.ex sqlite_version 重钉 3.51.3（T004 修复，2026-10-03；换 oracle 版本须随迁）
+
+_（其余条目在 R5（T012）重录时填充。）_

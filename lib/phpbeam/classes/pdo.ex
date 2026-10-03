@@ -372,9 +372,10 @@ defmodule PhpBeam.Classes.Pdo do
   end
 
   defp sqlite_version(_conn) do
-    # pinned to the LOCAL php's bundled sqlite for differential parity
-    # (exqlite ships its own newer engine — 3.48 vs php's 3.53.4)
-    "3.53.4"
+    # pinned to the LOCAL php's linked sqlite for differential parity
+    # (local oracle php 8.4.17 links 3.51.3; exqlite 0.29.0 embeds 3.45.1 —
+    # version-string parity over engine parity, reprobed 2026-10-03)
+    "3.51.3"
   end
 
   defp open(obj, dsn, user, pass, i) do

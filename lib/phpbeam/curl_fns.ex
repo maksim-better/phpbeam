@@ -6,7 +6,7 @@ defmodule PhpBeam.Builtin.CurlFns do
   the httpc request. curl_multi/share families are sequential stubs.
 
   Probed semantics: exec on a file:// URL reads the file (ENOENT → errno
-  37 "Couldn't open file X"); no URL set → errno 3; escape/unescape are
+  37 "Could not open file X" — libcurl 8.18.0 wording); no URL set → errno 3; escape/unescape are
   RFC 3986; strerror uses libcurl's message table (major codes embedded).
   """
 
@@ -293,7 +293,7 @@ defmodule PhpBeam.Builtin.CurlFns do
 
         case File.read(path) do
           {:ok, bin} -> {:ok, bin, 0, []}
-          _ -> {:error, 37, "Couldn't open file " <> path}
+          _ -> {:error, 37, "Could not open file " <> path}
         end
 
       String.starts_with?(url, "http://") or String.starts_with?(url, "https://") ->
@@ -434,14 +434,14 @@ defmodule PhpBeam.Builtin.CurlFns do
     end
   end
 
-  # probed from the local php's libcurl 8.11.1
+  # probed from the local php's libcurl 8.18.0
   defp curl_version(_vals, i) do
     arr =
       PArray.from_pairs([
-        {"version", {:string, "8.11.1"}},
-        {"version_number", {:int, 528_385}},
+        {"version", {:string, "8.18.0"}},
+        {"version_number", {:int, 528_896}},
         {"ssl_version_number", {:int, 0}},
-        {"host", {:string, "aarch64-apple-darwin24.1.0"}},
+        {"host", {:string, "aarch64-apple-darwin24.6.0"}},
         {"age", {:int, 10}},
         {"features", {:int, 10_597_951}},
         {"ssl_version", {:string, "(SecureTransport) LibreSSL/3.3"}},

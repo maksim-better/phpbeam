@@ -94,7 +94,7 @@ defmodule PhpBeam.Ini do
     "ignore_repeated_source" => {"Core", 7, ""},
     "ignore_user_abort" => {"Core", 7, "0"},
     "implicit_flush" => {"Core", 7, "1"},
-    "include_path" => {"Core", 7, ".:/opt/homebrew/Cellar/php/8.4.2/share/php/pear"},
+    "include_path" => {"Core", 7, ".:/opt/homebrew/Cellar/php@8.4/8.4.17/share/php@8.4/pear"},
     "input_encoding" => {"Core", 7, ""},
     "internal_encoding" => {"Core", 7, ""},
     "intl.default_locale" => {"intl", 7, ""},

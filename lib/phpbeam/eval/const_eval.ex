@@ -131,10 +131,10 @@ defmodule PhpBeam.Eval.ConstEval do
         {:ok, {:float, 2.2250738585072014e-308}}
 
       "PHP_VERSION" ->
-        {:ok, {:string, "8.4.2"}}
+        {:ok, {:string, "8.4.17"}}
 
       "PHP_VERSION_ID" ->
-        {:ok, {:int, 80_402}}
+        {:ok, {:int, 80_417}}
 
       "PHP_MAJOR_VERSION" ->
         {:ok, {:int, 8}}
@@ -143,7 +143,7 @@ defmodule PhpBeam.Eval.ConstEval do
         {:ok, {:int, 4}}
 
       "PHP_RELEASE_VERSION" ->
-        {:ok, {:int, 2}}
+        {:ok, {:int, 17}}
 
       "PHP_EXTRA_VERSION" ->
         {:ok, {:string, ""}}

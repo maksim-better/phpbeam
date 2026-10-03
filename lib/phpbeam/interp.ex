@@ -34,7 +34,7 @@ defmodule PhpBeam.Interp do
               "error_reporting" => "30719",
               "default_charset" => "UTF-8",
               "display_errors" => "1",
-              "include_path" => ".:/opt/homebrew/Cellar/php/8.4.2/share/php/pear",
+              "include_path" => ".:/opt/homebrew/Cellar/php@8.4/8.4.17/share/php@8.4/pear",
               "input_encoding" => "",
               "internal_encoding" => "",
               "output_encoding" => ""
