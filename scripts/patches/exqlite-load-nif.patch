@@ -1,0 +1,56 @@
+# exqlite load_nif fallback — escript 内 :code.priv_dir/1 解析到归档伪路径时，扫描 code path 上真实 ebin 目录推导 ../priv/sqlite3_nif.so
+# 应用时机：mix deps.get / deps.update 之后（deps 是 gitignored，补丁必须重放）：
+#   git apply scripts/patches/exqlite-load-nif.patch && mix deps.compile exqlite && mix escript.build
+# 逃生口：PHPBEAM_EXQLITE_NIF 环境变量直接指定 .so 路径（不带扩展名）；验证：./phpx -r '$db = new SQLite3(":memory:"); var_dump($db->version());'
+#
+--- a/deps/exqlite/lib/exqlite/sqlite3_nif.ex
++++ b/deps/exqlite/lib/exqlite/sqlite3_nif.ex
+@@ -13,10 +13,46 @@
+   @type row() :: list()
+ 
+   def load_nif() do
+-    path = :filename.join(:code.priv_dir(:exqlite), ~c"sqlite3_nif")
+-    :erlang.load_nif(path, 0)
++    # phpbeam patch: inside the phpx escript the archive embeds exqlite/ebin
++    # and shadows the real _build copy, so both :code.priv_dir/1 and
++    # :code.which/1 resolve to archive pseudo-paths with no real
++    # priv/sqlite3_nif.so behind them (escripts cannot carry .so files).
++    # Scan the code path for a REAL ebin directory and derive ../priv from
++    # it — the escript's emu_args "-pa _build/dev/lib/*/ebin" keeps the real
++    # one reachable. PHPBEAM_EXQLITE_NIF is an explicit escape hatch.
++    # See scripts/patches/exqlite-load-nif.patch.
++    case Enum.find(nif_candidates(), &nif_exists?/1) do
++      nil -> {:error, :nif_not_found}
++      path -> :erlang.load_nif(path, 0)
++    end
+   end
+ 
++  defp nif_candidates() do
++    explicit =
++      case System.get_env("PHPBEAM_EXQLITE_NIF") do
++        nil -> []
++        path -> [String.to_charlist(path)]
++      end
++
++    priv_dir =
++      case :code.priv_dir(:exqlite) do
++        {:error, _} -> []
++        dir -> [:filename.join(dir, ~c"sqlite3_nif")]
++      end
++
++    # charlists are integer lists — build the candidate list with ++, never
++    # List.flatten (it would merge the paths' own characters into the spine)
++    from_code_path =
++      for ebin <- :code.get_path(),
++          is_list(ebin),
++          :filelib.is_dir(ebin),
++          do: :filename.absname(:filename.join(ebin, ~c"../priv/sqlite3_nif"))
++
++    explicit ++ priv_dir ++ from_code_path
++  end
++
++  defp nif_exists?(path), do: is_list(path) and :filelib.is_regular(path ++ ~c".so")
++
+   @spec open(String.t(), integer()) :: {:ok, db()} | {:error, reason()}
+   def open(_path, _flags), do: :erlang.nif_error(:not_loaded)
+ 

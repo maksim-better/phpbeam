@@ -24,6 +24,8 @@
 - 附带（T006 提前件）: OrbStack 启动后发现 phpbeam-mysql 容器不存在（U8 运行时检查点应验）→ 重建 mysql:8.0（root/root，库 wp_test/laravel_test，用户 wp/wppass + wp_test/wppass，127.0.0.1:3306）。D 系差分 47–52 在套件中通过（正式验收仍归 T006）。
 - [x] T004 R2a 依赖与构建：mix deps.get 全落（git deps 走 SSH 通道 + jason 走 hex）+ mix escript.build 成功 + 非 phpt 全绿 + 漂移吸收 5 处（ini.ex/interp.ex include_path、const_eval+runtime+mysqli_fns 的 8.4.17 版本族、curl_fns/curl_consts 的 libcurl 8.18.0、pdo.ex sqlite 3.51.3） | tests: `mix test --exclude phpt` → **127 tests, 0 failures, EXIT=0**（tmp/t004_nonphpt5.log） | commit: 本 commit
 
+- [x] T005 R2b exqlite 补丁重建：scripts/patches/exqlite-load-nif.patch（56 行，含应用说明头）——比旧机版本更鲁棒：priv_dir 失败时**扫描 code path 真实 ebin 推导 ../priv**（归档伪路径被 is_dir 过滤）+ PHPBEAM_EXQLITE_NIF 逃生口。调试纪要：首版 which() 推导被归档遮蔽打脸；候选表 List.flatten 把 charlist 打成整数流（path 变成整数 47）——charlist 就是整数列表，flatten 会拆掉候选项本身，改用 ++ 拼接。 | tests: RED（:undef Sqlite3NIF.open 三轮复现）→ GREEN `./phpx -r 'new SQLite3(":memory:"); version()'` → 3.45.1 数组；case 50 直跑 **BYTE-IDENTICAL** 28 行；51 随套件绿 | commit: 本 commit
+
 ### Phase 2 验证（D5）
 - 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
 - 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）
