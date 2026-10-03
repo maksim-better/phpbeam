@@ -34,6 +34,23 @@ suites = [
   {"output", "tests/output"}
 ]
 
+# PHPT_DIRS="lang,basic" limits the compiled suites to those dir_ids
+# (scripts/gate.sh --lane dirs). Unset/empty = all suites.
+suites =
+  case System.get_env("PHPT_DIRS") do
+    nil ->
+      suites
+
+    wanted ->
+      want = wanted |> String.split(",", trim: true) |> MapSet.new(&String.trim/1)
+
+      unless MapSet.subset?(want, MapSet.new(suites, &elem(&1, 0))) do
+        raise "PHPT_DIRS names unknown suites (typo in a dir id?): #{wanted}"
+      end
+
+      Enum.filter(suites, fn {dir_id, _} -> MapSet.member?(want, dir_id) end)
+  end
+
 groups =
   for {dir_id, rel} <- suites,
       dir = Path.join(php_src, rel),

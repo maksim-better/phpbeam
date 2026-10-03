@@ -30,6 +30,8 @@
 
 - [x] T007 R4a harness 目录机制：phpt_test.exs groups 改显式 {dir_id, php-src 相对路径} 对 + 头注固化 U9 扁平命名约定（tests/* 本名 / zend-&lt;sub&gt; / zend-root / ext-&lt;mod&gt;；失败行 Module 名编码目录→gate 分片依据）；Phpt.run 的 :suite 原本就线程化（tmp/phpt/&lt;suite&gt;/ 命名空间），零改动兼容 | tests: `mix test --only phpt` → **697 tests, 348 failures**（与 PLAN 记录的 D 相收口数完全一致——换代零漂移实证；tmp/t007_phpt.log） | commit: 本 commit
 
+- [x] T008 R4b 门禁三 lane：scripts/gate.sh 全量重写——fast/dirs/full + --record [-- <dir>]、分片只收缩比对（comm -13）、full 分片和自检、映射默认 lane（无 gate_map.conf 时 fail-safe 走 full，T009 接表）；harness 侧 PHPT_DIRS 编译期过滤（未知 dir_id 即 raise 防手滑）。调试纪要：①失败行 awk 分片首版没剥 "test " 前缀（分片名带空格）；②gate_phpt.log 被 dirs lane 复用覆盖，重录必须走 record 全量而非手工重切 | tests: 三态验证——record 全量（348/6 分片，和自检 348=348）、dirs lang PASS（112/112 shrink-ok）、**篡改证伪 RED**（删基线末行→GATE: FAIL 精确报出该例）、恢复后 full PASS、fast PASS | commit: 本 commit
+
 ### Phase 2 验证（D5）
 - 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
 - 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）
