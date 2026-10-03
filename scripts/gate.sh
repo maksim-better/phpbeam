@@ -62,7 +62,7 @@ run_phpt() {
   line=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?(, [0-9]+ excluded)?' tmp/gate_phpt.log | tail -1)
   echo "phpt:     ${line:-NO SUMMARY} ${dirs:+(dirs: ${(j:,:)dirs})}"
   # ExUnit failure block "N) test <dir>/<file>.phpt (Module)" — async output glues lines, never anchor ^
-  grep -oE '[0-9]+\) test [a-zA-Z0-9./_-]+\.phpt \(PhpBeam\.Phpt\.[A-Za-z]+\.G[0-9]+\)' tmp/gate_phpt.log \
+  grep -oE '[0-9]+\) test [a-zA-Z0-9./_-]+\.phpt \(PhpBeam\.Phpt\.[A-Za-z0-9-]+\.G[0-9]+\)' tmp/gate_phpt.log \
     | sed -E 's/^[0-9]+\) //' | sort | awk '{split($2, a, "/"); print > ("tmp/failures_now/" a[1] ".txt")}'
   return 0
 }

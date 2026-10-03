@@ -38,6 +38,8 @@
 
 - [x] T011 账本标记行：exempt.md +18 行 EXEMPT-DIR（16 扩展+OPcache+FFI 编译类）；deferred.md 存量 24 节转写 DEFER 作用域行（转写不改语义，散文节保持权威）。**Ruling（判定语义收紧）**：节级 DEFER 作用域仅元数据不产生容忍——容忍只认分诊时逐例 `case:<id>` 标记（否则 15 条引擎根因可放行全部 348，phase 判据失真）；criterion.sh 同步收紧并回归 | tests: 转写后 freeze/phase 均 348=0+0+348（目录级行指未纳入目录、节级零容忍——设计行为实证）；case: 逐例容忍此前已验证 1=1 | commit: 本 commit
 
+- [x] T012 R5a 基线重录：security+run-test 纳入 suites 首录；**Ruling（模块原子净化）**：Macro.camelize 不吃连字符（run-test→Run-test 原子带杠，gate 模块正则漏 6 条失败）→ 模块名 `-`→`_` 后 camelize（RunTest/ZendTypeDeclarations），gate 正则同步放宽 `[A-Za-z0-9-]`；drift.md 补 R5 收口结论（漂移面=5 常量已吸收，phpt 失败集零漂移实证） | tests: 重录 **401 failures/8 分片**，分片和=摘要=401（348 旧+47 security+6 run-test） | commit: 本 commit
+
 ### Phase 2 验证（D5）
 - 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
 - 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）

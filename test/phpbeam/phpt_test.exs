@@ -31,7 +31,9 @@ suites = [
   {"func", "tests/func"},
   {"classes", "tests/classes"},
   {"basic", "tests/basic"},
-  {"output", "tests/output"}
+  {"output", "tests/output"},
+  {"security", "tests/security"},
+  {"run-test", "tests/run-test"}
 ]
 
 # PHPT_DIRS="lang,basic" limits the compiled suites to those dir_ids
@@ -60,7 +62,11 @@ groups =
   end
 
 for {dir_id, idx, files} <- groups do
-  defmodule Module.concat([PhpBeam.Phpt, Macro.camelize(dir_id), "G#{idx}"]) do
+  # sanitize for the module atom: Macro.camelize leaves dashes in place
+  # ("run-test" → "Run-test"), so fold them to underscores first
+  mod_flat = dir_id |> String.replace("-", "_") |> Macro.camelize()
+
+  defmodule Module.concat([PhpBeam.Phpt, mod_flat, "G#{idx}"]) do
     use ExUnit.Case, async: true
 
     for f <- files do

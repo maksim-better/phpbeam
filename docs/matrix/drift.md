@@ -25,4 +25,13 @@
 - test/cases/52_d3_pgsql.php（手工 2>&1 发现，非套件差异） | 语义缺口登记 | php 的 log_errors=1 + error_log 空时每错写 stderr 一份 `PHP Deprecated:`/`PHP Fatal error:` 副本，phpx 仅走显示通道——差分 harness 只比 stdout 故不可见；Z 相 Zend 错误协议类用例可能踩到，登记 deferred.md（T006 发现）
 - test/cases/51_d2_pdo_sqlite.php | expect（本机 php 8.4.17 链 SQLite 3.51.3；phpx 钉的 3.53.4 是旧机值） | 处置：pdo.ex sqlite_version 重钉 3.51.3（T004 修复，2026-10-03；换 oracle 版本须随迁）
 
+## R5 重录结论（T012，2026-10-03 收口）
+
+**漂移总量化**：php-src 8.4.24→8.4.25 + oracle 8.4.2→8.4.17 换代的实际漂移面 =
+上表 5 处机器钉常量（include_path keg、PHP_VERSION 族、mysqlnd 串、libcurl 8.18.0、
+pdo_sqlite 3.51.3），全部 probe 实证后重钉；**phpt 失败集零漂移**——既有 6 目录
+697 例的 348 失败与 PLAN 记录的 D 相收口数逐例一致（T007 实证）。新纳入
+tests/security（47 失败/50 例）与 tests/run-test（6/13）为首录非漂移。
+本机基线事实源：`tmp/baseline/*.txt`，8 分片 401 行，全量 lane 分片和自检通过。
+
 _（其余条目在 R5（T012）重录时填充。）_
