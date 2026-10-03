@@ -68,6 +68,15 @@
 
 - [x] T018 argv 播种：CLI 附参 → $argv/$argc（-r → "Standard input code"、脚本→原样拼写、-- 剥离、无参恒有 [argv0]）+ $_SERVER 的 argv/argc 镜像 + SCRIPT_NAME/PHP_SELF/SCRIPT_FILENAME 保 as-typed（display 路径线程化，__FILE__ 仍 canonical）。探针三形状全 byte-match 8.4.17；调试纪要：①变量住 interp.globals 非 env（argv_info 桩是天生忽略参数的空壳）；②键名无下划线（$argv 非 $_argv）；③PArray.put 返 {:ok,arr} 元组不能管道直连 | tests: srvargv/srvkeys/-r 三探针 + 差分 54_z0_argv.php IDENTICAL + 门禁全量 PASS（401/401 只收缩+自检） | commit: 本 commit
 
+- [x] T015-p2 + T017-p1（Z 相首批大扫除，一waves 一 commit——分解见下）：
+  - **Laravel 冒烟资产重建**（T015 前置）：composer prefer-source 双通道下载（首任务被 600s 腰斩后续装），vendor 就位
+  - **artisan boot 打穿三层**：FILTER/INPUT 常量补集（39 个，探针转储拼接；INPUT_SERVER=4→5 修正 + INPUT_ENV 补）→ badmatch 吞 fatal 的 **unwind 传播清扫**（eval.ex 8 位 + interp.ex 语句 9 位：if/while/do_while×2/for/switch/foreach 主+ref×2 + @ 抑制器 + cast 续体抽取 + 逻辑 and/or/**短路**修复（原实现两边都求值！）+ foreach_dispatch 续体法）→ artisan 现到 PHP 层正规错误（sebastian/version 的 @proc_open）
+  - **exit/die 保留字执法**（T017 主刀）：类族名/顶层 const/goto 位 `expecting identifier`、函数名 `expecting "("`、标签位 `unexpected token ":"`（exit 当表达式撞冒号）、**die 一律渲染 "exit"**（T_EXIT 规范名）；类成员位放行（正向例保持绿）
+  - **错误双通道**：解析错误 + 运行期 uncaught 的 log_errors stderr 副本（探针钉形：前缀 PHP+双空格、uncaught 带全栈、无前导空行）；harness 改 run-tests 语义（只比 stdout，2>/dev/null——此前 stderr 合并无害因 phpx 从不发 stderr）
+  - **@include/@require 解析**：unary 层接 ternary 级 include（parse_include 抽取）；PHPX_TRACE_DEPTH 行号栈
+  - zend-exit 分片 **24→12**；差分 55（短路+@include+fatal 传播）stdout/stderr 双通道 IDENTICAL
+  - 调试纪要：for 门控 case-case 需括号；foreach_ref 替换残留孤儿调用；@suppress 计数器须在 unwind 出口回退 | tests: 门禁全量 PASS（9 分片只收缩、自检 413=基线收敛、zend-exit 12）；差分 53/54/55 三新增全同 | commit: 本 commit
+
 ### 恢复点（下会话从这里继续）
 下一任务 **T015（Z0a trait 死循环）**：前置=重建 Laravel 冒烟资产（本机无 artisan/composer 项目；composer 走系统 php 8.4.17）。之后 T016（Z0b autoload）→ T017（zend-exit 演练批）。
 

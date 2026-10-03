@@ -131,7 +131,7 @@ defmodule PhpBeam.Test.Phpt do
     # bind) that run fine single-shot but kiss the 10s alarm under the
     # gate's 16-way parallel load
     shell(
-      "cd #{q(dir)} && SKIP_SLOW_TESTS=1 perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)}#{ini_args} #{q(file)} 2>&1"
+      "cd #{q(dir)} && SKIP_SLOW_TESTS=1 perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)}#{ini_args} #{q(file)} 2>/dev/null"
     )
   end
 

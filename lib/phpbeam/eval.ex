@@ -801,8 +801,10 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:unop, :!, e}, env, interp) do
-    {{:val, v}, env2, interp2} = eval(e, env, interp)
-    {{:val, {:bool, not Value.truthy?(v)}}, env2, interp2}
+    case eval(e, env, interp) do
+      {{:unwind, _} = u, env2, interp2} -> {u, env2, interp2}
+      {{:val, v}, env2, interp2} -> {{:val, {:bool, not Value.truthy?(v)}}, env2, interp2}
+    end
   end
 
   def eval({:unop, :-, e}, env, interp) do
@@ -848,13 +850,26 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:unop, :@, e}, env, interp) do
-    {{:val, v}, env2, interp2} = eval(e, env, %{interp | suppress: interp.suppress + 1})
-    {{:val, v}, env2, %{interp2 | suppress: interp2.suppress - 1}}
+    # @ suppresses diagnostics, never fatals — the unwind escapes with the
+    # suppression counter decremented (probed: @include with fatal inside
+    # still fatals in php)
+    case eval(e, env, %{interp | suppress: interp.suppress + 1}) do
+      {{:val, v}, env2, interp2} ->
+        {{:val, v}, env2, %{interp2 | suppress: interp2.suppress - 1}}
+
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, %{interp2 | suppress: interp2.suppress - 1}}
+    end
   end
 
   def eval({:cast, kind, e}, env, interp) do
-    {{:val, v}, env2, interp2} = eval(e, env, interp)
+    case eval(e, env, interp) do
+      {{:unwind, _} = u, env2, interp2} -> {u, env2, interp2}
+      {{:val, v}, env2, interp2} -> cast_val(kind, v, env2, interp2)
+    end
+  end
 
+  defp cast_val(kind, v, env2, interp2) do
     case kind do
       :int ->
         # lossy float→int casts raise a php 8.1+ deprecation on stdout
@@ -947,22 +962,48 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:binop, op, l, r}, env, interp) when op in [:and, :or, :xor] do
-    {{:val, lv}, env2, interp2} = eval(l, env, interp)
-    {{:val, rv}, env3, interp3} = eval(r, env2, interp2)
+    # short-circuit (php never evaluates the RHS once decided) and unwinds
+    # from either side propagate — `require ... or die()` fatals through here
+    case eval(l, env, interp) do
+      {{:unwind, _} = u, e2, i2} ->
+        {u, e2, i2}
 
-    res =
-      case op do
-        :and -> Value.truthy?(lv) and Value.truthy?(rv)
-        :or -> Value.truthy?(lv) or Value.truthy?(rv)
-        :xor -> Value.truthy?(lv) != Value.truthy?(rv)
-      end
+      {{:val, lv}, e2, i2} ->
+        cond do
+          op == :and and not Value.truthy?(lv) -> {{:val, {:bool, false}}, e2, i2}
+          op == :or and Value.truthy?(lv) -> {{:val, {:bool, true}}, e2, i2}
 
-    {{:val, {:bool, res}}, env3, interp3}
+          true ->
+            case eval(r, e2, i2) do
+              {{:unwind, _} = u, e3, i3} ->
+                {u, e3, i3}
+
+              {{:val, rv}, e3, i3} ->
+                res =
+                  case op do
+                    :and -> Value.truthy?(rv)
+                    :or -> Value.truthy?(rv)
+                    :xor -> Value.truthy?(lv) != Value.truthy?(rv)
+                  end
+
+                {{:val, {:bool, res}}, e3, i3}
+            end
+        end
+    end
   end
 
   # instanceof: the RHS is a class reference, not a constant
   def eval({:binop, :instanceof, l, r}, env, interp) do
-    {{:val, lv}, env2, interp2} = eval(l, env, interp)
+    case eval(l, env, interp) do
+      {{:unwind, _} = u, e2, i2} ->
+        {u, e2, i2}
+
+      {{:val, lv}, env2, interp2} ->
+        instanceof_rhs(lv, r, env2, interp2)
+    end
+  end
+
+  defp instanceof_rhs(lv, r, env2, interp2) do
 
     target =
       case r do
@@ -1020,8 +1061,10 @@ defmodule PhpBeam.Eval do
   def eval({:coalesce, l, r}, env, interp) do
     case isset?(l, env, interp) do
       {true, env2, interp2} ->
-        {{:val, v}, env3, interp3} = eval(l, env2, interp2)
-        {{:val, deref(v, interp3)}, env3, interp3}
+        case eval(l, env2, interp2) do
+          {{:unwind, _} = u, env3, interp3} -> {u, env3, interp3}
+          {{:val, v}, env3, interp3} -> {{:val, deref(v, interp3)}, env3, interp3}
+        end
 
       {false, env2, interp2} ->
         eval(r, env2, interp2)
@@ -1053,8 +1096,10 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:match, subj, arms}, env, interp) do
-    {{:val, s}, env2, interp2} = eval(subj, env, interp)
-    match_arms(arms, s, env2, interp2)
+    case eval(subj, env, interp) do
+      {{:unwind, _} = u, env2, interp2} -> {u, env2, interp2}
+      {{:val, s}, env2, interp2} -> match_arms(arms, s, env2, interp2)
+    end
   end
 
   def eval({:isset, targets}, env, interp) do
@@ -1071,8 +1116,10 @@ defmodule PhpBeam.Eval do
     {ok?, _, _} = isset?(e, env, interp)
 
     if ok? do
-      {{:val, v}, _env2, _i2} = eval(e, env, interp)
-      {{:val, {:bool, not Value.truthy?(v)}}, env, interp}
+      case eval(e, env, interp) do
+        {{:unwind, _} = u, e2, i2} -> {u, e2, i2}
+        {{:val, v}, _e2, _i2} -> {{:val, {:bool, not Value.truthy?(v)}}, env, interp}
+      end
     else
       {{:val, {:bool, true}}, env, interp}
     end
@@ -1326,8 +1373,10 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:throw, e}, env, interp) do
-    {{:val, v}, env2, interp2} = eval(e, env, interp)
-    {{:unwind, {:php_throw, v}}, env2, interp2}
+    case eval(e, env, interp) do
+      {{:unwind, _} = u, env2, interp2} -> {u, env2, interp2}
+      {{:val, v}, env2, interp2} -> {{:unwind, {:php_throw, v}}, env2, interp2}
+    end
   end
 
   def eval({:exit_expr, e}, env, interp) do

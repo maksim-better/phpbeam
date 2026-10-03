@@ -389,6 +389,13 @@ defmodule PhpBeam.Ini do
   unregistered names are dropped. mode :startup keeps every access level;
   :perdir keeps only PERDIR-allowed entries (php's user_ini rules).
   """
+  # display_errors values that emit the display copy on the stdout/body
+  # stream ("stderr" routes it to stderr instead — the log copy already
+  # covers that channel, so treat it as off for the out stream)
+  def display_on?(v) do
+    to_string(v) |> String.downcase() |> then(&(&1 in ~w(1 on true yes stdout)))
+  end
+
   def apply_entries(ini, entries, mode) do
     Enum.reduce(entries, ini, fn {k, v}, acc ->
       case @table do

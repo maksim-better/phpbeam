@@ -242,8 +242,90 @@ defmodule PhpBeam.Eval.ConstEval do
       "INPUT_COOKIE" ->
         {:ok, {:int, 2}}
 
-      "INPUT_SERVER" ->
+      "INPUT_ENV" ->
         {:ok, {:int, 4}}
+
+      "INPUT_SERVER" ->
+        {:ok, {:int, 5}}
+
+      "FILTER_CALLBACK" ->
+        {:ok, {:int, 1024}}
+      "FILTER_FLAG_ALLOW_FRACTION" ->
+        {:ok, {:int, 4096}}
+      "FILTER_FLAG_ALLOW_HEX" ->
+        {:ok, {:int, 2}}
+      "FILTER_FLAG_ALLOW_OCTAL" ->
+        {:ok, {:int, 1}}
+      "FILTER_FLAG_ALLOW_SCIENTIFIC" ->
+        {:ok, {:int, 16384}}
+      "FILTER_FLAG_ALLOW_THOUSAND" ->
+        {:ok, {:int, 8192}}
+      "FILTER_FLAG_EMAIL_UNICODE" ->
+        {:ok, {:int, 1048576}}
+      "FILTER_FLAG_EMPTY_STRING_NULL" ->
+        {:ok, {:int, 256}}
+      "FILTER_FLAG_ENCODE_AMP" ->
+        {:ok, {:int, 64}}
+      "FILTER_FLAG_ENCODE_HIGH" ->
+        {:ok, {:int, 32}}
+      "FILTER_FLAG_ENCODE_LOW" ->
+        {:ok, {:int, 16}}
+      "FILTER_FLAG_GLOBAL_RANGE" ->
+        {:ok, {:int, 268435456}}
+      "FILTER_FLAG_HOSTNAME" ->
+        {:ok, {:int, 1048576}}
+      "FILTER_FLAG_IPV4" ->
+        {:ok, {:int, 1048576}}
+      "FILTER_FLAG_IPV6" ->
+        {:ok, {:int, 2097152}}
+      "FILTER_FLAG_NONE" ->
+        {:ok, {:int, 0}}
+      "FILTER_FLAG_NO_ENCODE_QUOTES" ->
+        {:ok, {:int, 128}}
+      "FILTER_FLAG_NO_PRIV_RANGE" ->
+        {:ok, {:int, 8388608}}
+      "FILTER_FLAG_NO_RES_RANGE" ->
+        {:ok, {:int, 4194304}}
+      "FILTER_FLAG_PATH_REQUIRED" ->
+        {:ok, {:int, 262144}}
+      "FILTER_FLAG_QUERY_REQUIRED" ->
+        {:ok, {:int, 524288}}
+      "FILTER_FLAG_STRIP_BACKTICK" ->
+        {:ok, {:int, 512}}
+      "FILTER_FLAG_STRIP_HIGH" ->
+        {:ok, {:int, 8}}
+      "FILTER_FLAG_STRIP_LOW" ->
+        {:ok, {:int, 4}}
+      "FILTER_FORCE_ARRAY" ->
+        {:ok, {:int, 67108864}}
+      "FILTER_NULL_ON_FAILURE" ->
+        {:ok, {:int, 134217728}}
+      "FILTER_REQUIRE_ARRAY" ->
+        {:ok, {:int, 16777216}}
+      "FILTER_REQUIRE_SCALAR" ->
+        {:ok, {:int, 33554432}}
+      "FILTER_SANITIZE_ADD_SLASHES" ->
+        {:ok, {:int, 523}}
+      "FILTER_SANITIZE_EMAIL" ->
+        {:ok, {:int, 517}}
+      "FILTER_SANITIZE_ENCODED" ->
+        {:ok, {:int, 514}}
+      "FILTER_SANITIZE_FULL_SPECIAL_CHARS" ->
+        {:ok, {:int, 522}}
+      "FILTER_SANITIZE_SPECIAL_CHARS" ->
+        {:ok, {:int, 515}}
+      "FILTER_SANITIZE_STRIPPED" ->
+        {:ok, {:int, 513}}
+      "FILTER_SANITIZE_URL" ->
+        {:ok, {:int, 518}}
+      "FILTER_VALIDATE_BOOLEAN" ->
+        {:ok, {:int, 258}}
+      "FILTER_VALIDATE_MAC" ->
+        {:ok, {:int, 276}}
+      "INPUT_ENV" ->
+        {:ok, {:int, 4}}
+      "INPUT_SERVER" ->
+        {:ok, {:int, 5}}
 
       "INPUT_ENV" ->
         {:ok, {:int, 5}}

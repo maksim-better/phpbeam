@@ -150,9 +150,24 @@ defmodule PhpBeam.Interp do
         {"\nFatal error: #{msg} in #{fname} on line #{line}\n", 255, interp2_stub()}
 
       {:error, msg, line} ->
-        {"PHP Parse error:  syntax error, #{msg}" <> maybe_line(line) <> "\n", 255,
-         interp2_stub()}
+        {parse_error_render(msg, file, line, ini_entries), 255, interp2_stub()}
     end
+  end
+
+  # php 8.4.17 CLI probed: parse errors render twice — display copy on the
+  # output stream (`Parse error: syntax error, ... in file on line N`,
+  # display_errors-gated) and log copy on stderr (`PHP Parse error:  ...`,
+  # log_errors default on). Both carry file+line.
+  defp parse_error_render(msg, file, line, ini_entries) do
+    fname = file || "Command line code"
+    IO.write(:stderr, "PHP Parse error:  syntax error, #{msg} in #{fname} on line #{line}\n")
+
+    disp =
+      PhpBeam.Ini.apply_entries(%{}, ini_entries, :startup)
+      |> Map.get("display_errors", "1")
+      |> PhpBeam.Ini.display_on?()
+
+    if disp, do: "\nParse error: syntax error, #{msg} in #{fname} on line #{line}\n", else: ""
   end
 
   # auto_prepend_file runs BEFORE the main script (same request: shared
@@ -270,8 +285,7 @@ defmodule PhpBeam.Interp do
       PhpBeam.Eval.Finalize.finish(res, env2, interp2)
     else
       {:error, msg, line} ->
-        {"PHP Parse error:  syntax error, #{msg}" <> maybe_line(line) <> "\n", 255,
-         interp2_stub()}
+        {parse_error_render(msg, file, line, ini_layer), 255, interp2_stub()}
     end
   end
 
@@ -752,9 +766,24 @@ defmodule PhpBeam.Interp do
 
     trace = frames ++ ["##{length(interp.call_stack)} {main}\n"]
 
-    out <>
+    body =
       "\nFatal error: Uncaught #{class}: #{msg} in #{file}:#{line}\nStack trace:\n" <>
-      IO.iodata_to_binary(trace) <> "  thrown in #{file} on line #{line}\n"
+        IO.iodata_to_binary(trace) <> "  thrown in #{file} on line #{line}\n"
+
+    # log_errors copy on stderr (probed: same block with the PHP-prefixed
+    # first line — uncaught logs DO carry the full trace)
+    if log_errors_on?(interp) do
+      body
+      |> String.replace_prefix("\nFatal error:", "\nPHP Fatal error: ")
+      |> String.trim_leading("\n")
+      |> then(&IO.write(:stderr, &1))
+    end
+
+    out <> body
+  end
+
+  defp log_errors_on?(interp) do
+    Map.get(interp.ini, "log_errors", "1") |> to_string() |> String.downcase() |> then(&(&1 in ~w(1 on true yes)))
   end
 
   defp register_builtins(interp) do
@@ -896,45 +925,53 @@ defmodule PhpBeam.Interp do
   end
 
   def exec_stmt({:if, cond, then, else_part}, env, interp) do
-    {{:val, c}, env2, interp2} = Eval.eval(cond, env, interp)
+    case Eval.eval(cond, env, interp) do
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
 
-    if Value.truthy?(c) do
-      exec_stmts(then, env2, interp2)
-    else
-      case else_part do
-        nil -> {:ok, env2, interp2}
-        stmts -> exec_stmts(stmts, env2, interp2)
-      end
+      {{:val, c}, env2, interp2} ->
+        if Value.truthy?(c) do
+          exec_stmts(then, env2, interp2)
+        else
+          case else_part do
+            nil -> {:ok, env2, interp2}
+            stmts -> exec_stmts(stmts, env2, interp2)
+          end
+        end
     end
   end
 
   def exec_stmt({:while, cond, body}, env, interp), do: loop_while(cond, body, env, interp)
 
   defp loop_while(cond, body, env, interp) do
-    {{:val, c}, env2, interp2} = Eval.eval(cond, env, interp)
+    case Eval.eval(cond, env, interp) do
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
 
-    if Value.truthy?(c) do
-      case exec_stmts(body, env2, interp2) do
-        {:ok, env3, interp3} ->
-          loop_while(cond, body, env3, interp3)
+      {{:val, c}, env2, interp2} ->
+        if Value.truthy?(c) do
+          case exec_stmts(body, env2, interp2) do
+            {:ok, env3, interp3} ->
+              loop_while(cond, body, env3, interp3)
 
-        {{:unwind, {:break, 1}}, env3, interp3} ->
-          {:ok, env3, interp3}
+            {{:unwind, {:break, 1}}, env3, interp3} ->
+              {:ok, env3, interp3}
 
-        {{:unwind, {:continue, 1}}, env3, interp3} ->
-          loop_while(cond, body, env3, interp3)
+            {{:unwind, {:continue, 1}}, env3, interp3} ->
+              loop_while(cond, body, env3, interp3)
 
-        {{:unwind, {:break, n}}, env3, interp3} ->
-          {{:unwind, {:break, n - 1}}, env3, interp3}
+            {{:unwind, {:break, n}}, env3, interp3} ->
+              {{:unwind, {:break, n - 1}}, env3, interp3}
 
-        {{:unwind, {:continue, n}}, env3, interp3} ->
-          {{:unwind, {:continue, n - 1}}, env3, interp3}
+            {{:unwind, {:continue, n}}, env3, interp3} ->
+              {{:unwind, {:continue, n - 1}}, env3, interp3}
 
-        unw ->
-          unw
-      end
-    else
-      {:ok, env2, interp2}
+            unw ->
+              unw
+          end
+        else
+          {:ok, env2, interp2}
+        end
     end
   end
 
@@ -943,21 +980,19 @@ defmodule PhpBeam.Interp do
   defp loop_do_while(body, cond, env, interp) do
     case exec_stmts(body, env, interp) do
       {:ok, env2, interp2} ->
-        {{:val, c}, env3, interp3} = Eval.eval(cond, env2, interp2)
-
-        if Value.truthy?(c),
-          do: loop_do_while(body, cond, env3, interp3),
-          else: {:ok, env3, interp3}
+        case Eval.eval(cond, env2, interp2) do
+          {{:unwind, _} = u, env3, interp3} -> {u, env3, interp3}
+          {{:val, c}, env3, interp3} -> if(Value.truthy?(c), do: loop_do_while(body, cond, env3, interp3), else: {:ok, env3, interp3})
+        end
 
       {{:unwind, {:break, 1}}, env2, interp2} ->
         {:ok, env2, interp2}
 
       {{:unwind, {:continue, 1}}, env2, interp2} ->
-        {{:val, c}, env3, interp3} = Eval.eval(cond, env2, interp2)
-
-        if Value.truthy?(c),
-          do: loop_do_while(body, cond, env3, interp3),
-          else: {:ok, env3, interp3}
+        case Eval.eval(cond, env2, interp2) do
+          {{:unwind, _} = u, env3, interp3} -> {u, env3, interp3}
+          {{:val, c}, env3, interp3} -> if(Value.truthy?(c), do: loop_do_while(body, cond, env3, interp3), else: {:ok, env3, interp3})
+        end
 
       {{:unwind, {:break, n}}, env2, interp2} ->
         {{:unwind, {:break, n - 1}}, env2, interp2}
@@ -976,40 +1011,44 @@ defmodule PhpBeam.Interp do
   end
 
   defp loop_for(cond, step, body, env, interp) do
-    {go?, env2, interp2} =
-      case cond do
-        nil ->
-          {true, env, interp}
+    case(case cond do
+           nil ->
+             {true, env, interp}
 
-        c ->
-          {{:val, v}, e, i} = Eval.eval(c, env, interp)
-          {Value.truthy?(v), e, i}
-      end
+           c ->
+             case Eval.eval(c, env, interp) do
+               {{:unwind, _} = u, e, i} -> {u, e, i}
+               {{:val, v}, e, i} -> {Value.truthy?(v), e, i}
+             end
+         end) do
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
 
-    if go? do
-      case exec_stmts(body, env2, interp2) do
-        {:ok, env3, interp3} ->
-          {_, env4, interp4} = eval_all(step, env3, interp3)
-          loop_for(cond, step, body, env4, interp4)
+      {false, env2, interp2} ->
+        {:ok, env2, interp2}
 
-        {{:unwind, {:break, 1}}, env3, interp3} ->
-          {:ok, env3, interp3}
+      {true, env2, interp2} ->
+        case exec_stmts(body, env2, interp2) do
+          {:ok, env3, interp3} ->
+            {_, env4, interp4} = eval_all(step, env3, interp3)
+            loop_for(cond, step, body, env4, interp4)
 
-        {{:unwind, {:continue, 1}}, env3, interp3} ->
-          {_, env4, interp4} = eval_all(step, env3, interp3)
-          loop_for(cond, step, body, env4, interp4)
+          {{:unwind, {:break, 1}}, env3, interp3} ->
+            {:ok, env3, interp3}
 
-        {{:unwind, {:break, n}}, env3, interp3} ->
-          {{:unwind, {:break, n - 1}}, env3, interp3}
+          {{:unwind, {:continue, 1}}, env3, interp3} ->
+            {_, env4, interp4} = eval_all(step, env3, interp3)
+            loop_for(cond, step, body, env4, interp4)
 
-        {{:unwind, {:continue, n}}, env3, interp3} ->
-          {{:unwind, {:continue, n - 1}}, env3, interp3}
+          {{:unwind, {:break, n}}, env3, interp3} ->
+            {{:unwind, {:break, n - 1}}, env3, interp3}
 
-        unw ->
-          unw
-      end
-    else
-      {:ok, env2, interp2}
+          {{:unwind, {:continue, n}}, env3, interp3} ->
+            {{:unwind, {:continue, n - 1}}, env3, interp3}
+
+          unw ->
+            unw
+        end
     end
   end
 
@@ -1018,8 +1057,13 @@ defmodule PhpBeam.Interp do
   end
 
   def exec_stmt({:foreach, subj, key_t, val_t, by_ref?, body}, env, interp) do
-    {{:val, subject}, env2, interp2} = Eval.eval(subj, env, interp)
+    case Eval.eval(subj, env, interp) do
+      {{:unwind, _} = u, env2, interp2} -> {u, env2, interp2}
+      {{:val, subject}, env2, interp2} -> foreach_dispatch(subject, subj, key_t, val_t, by_ref?, body, env2, interp2)
+    end
+  end
 
+  defp foreach_dispatch(subject, subj, key_t, val_t, by_ref?, body, env2, interp2) do
     case subject do
       {:array, arr} ->
         pairs = PArray.to_pairs(arr)
@@ -1266,29 +1310,37 @@ defmodule PhpBeam.Interp do
     case exec_stmts(body, env3, interp5) do
       {:ok, env3, interp4} ->
         # subject may have been reassigned during the body; re-evaluate
-        {{:val, subject}, _e, interp5} = Eval.eval(subj, env3, interp4)
+        case Eval.eval(subj, env3, interp4) do
+          {{:unwind, _} = u, e, i5} ->
+            {u, e, i5}
 
-        remaining =
-          case subject do
-            {:array, arr} -> remaining_pairs(arr, k)
-            _ -> []
-          end
+          {{:val, subject}, _e, interp5} ->
+            remaining =
+              case subject do
+                {:array, arr} -> remaining_pairs(arr, k)
+                _ -> []
+              end
 
-        foreach_ref(remaining, path, key_t, val_t, body, env3, interp5, subj)
+            foreach_ref(remaining, path, key_t, val_t, body, env3, interp5, subj)
+        end
 
       {{:unwind, {:break, 1}}, env3, interp3} ->
         {:ok, env3, interp3}
 
       {{:unwind, {:continue, 1}}, env3, interp3} ->
-        {{:val, subject}, _e, interp5} = Eval.eval(subj, env3, interp3)
+        case Eval.eval(subj, env3, interp3) do
+          {{:unwind, _} = u, e, i5} ->
+            {u, e, i5}
 
-        remaining =
-          case subject do
-            {:array, arr} -> remaining_pairs(arr, k)
-            _ -> []
-          end
+          {{:val, subject}, _e, interp5} ->
+            remaining =
+              case subject do
+                {:array, arr} -> remaining_pairs(arr, k)
+                _ -> []
+              end
 
-        foreach_ref(remaining, path, key_t, val_t, body, env3, interp5, subj)
+            foreach_ref(remaining, path, key_t, val_t, body, env3, interp5, subj)
+        end
 
       {{:unwind, {:break, n}}, env3, interp3} ->
         {{:unwind, {:break, n - 1}}, env3, interp3}
@@ -1339,8 +1391,10 @@ defmodule PhpBeam.Interp do
   defp bind_target(env, interp, _other, _v), do: {env, interp}
 
   def exec_stmt({:switch, subj, cases}, env, interp) do
-    {{:val, s}, env2, interp2} = Eval.eval(subj, env, interp)
-    exec_switch_cases(cases, s, env2, interp2)
+    case Eval.eval(subj, env, interp) do
+      {{:unwind, _} = u, env2, interp2} -> {u, env2, interp2}
+      {{:val, s}, env2, interp2} -> exec_switch_cases(cases, s, env2, interp2)
+    end
   end
 
   defp exec_switch_cases([], _s, env, interp), do: {:ok, env, interp}

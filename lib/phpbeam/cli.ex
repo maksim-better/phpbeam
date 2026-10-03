@@ -129,7 +129,20 @@ defmodule PhpBeam.CLI do
             msg =
               case reason do
                 %_{message: m} -> m
-                _ -> inspect(reason, limit: 4) <> " ST " <> (__STACKTRACE__ |> Enum.take(4) |> Enum.map(fn {mm, ff, _, _} -> "#{mm}.#{ff}" end) |> Enum.join(","))
+                _ ->
+                  depth = String.to_integer(System.get_env("PHPX_TRACE_DEPTH") || "4")
+
+                  inspect(reason, limit: 12) <>
+                    " ST " <>
+                    (__STACKTRACE__
+                     |> Enum.take(depth)
+                     |> Enum.map(fn {mm, ff, _, opts} ->
+                       case Keyword.get(opts, :line) do
+                         nil -> "#{mm}.#{ff}"
+                         l -> "#{mm}.#{ff}:#{l}"
+                       end
+                     end)
+                     |> Enum.join(","))
               end
 
             IO.write(:stderr, "phpx internal error (#{kind}): #{msg}\n")

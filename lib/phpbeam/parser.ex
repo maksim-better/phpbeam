@@ -73,6 +73,18 @@ defmodule PhpBeam.Parser do
 
   defp take_name(ts, _name), do: {false, ts}
 
+  # php lexes exit/die as T_EXIT, so declaration slots expecting a plain
+  # identifier reject them outright (probed 8.4.17): class-like names,
+  # top-level const names, goto targets → `expecting identifier`; function
+  # names → `expecting "("`. The message ALWAYS renders the canonical token
+  # name "exit" even when the source says `die` (T_EXIT carries no spelling).
+  # Class MEMBER names accept them — define_class_members_exit_die.phpt is a
+  # positive test (it passes).
+  defp reject_exit_die!([{:name, l, n} | _], expecting) when n in ~w(exit die),
+    do: raise(ParseError, message: "unexpected token \"exit\", expecting #{expecting}", line: l)
+
+  defp reject_exit_die!(_, _), do: :ok
+
   defp take_ident([{k, _, v} | rest]) when k == :name, do: {v, rest}
 
   defp take_ident([{_, l, v} | _]),
@@ -145,6 +157,12 @@ defmodule PhpBeam.Parser do
       end
 
     {{:stmt_line, line, stmt}, rest}
+  end
+
+  defp statement_raw([{_, _, n}, {:op, cl, ":"} | _] = ts) when n in ~w(exit die) do
+    # php parses `exit:` as an exit-expression, then trips on the colon —
+    # the error names the COLON, not the keyword (probed: unexpected token ":")
+    raise ParseError, message: "unexpected token \":\"", line: cl
   end
 
   defp statement_raw([{_, _, _}, {:op, _, ":"} | _] = ts) do
@@ -274,6 +292,7 @@ defmodule PhpBeam.Parser do
 
       # forward goto (labels resolved at execution time)
       "goto" ->
+        reject_exit_die!(tl(ts), "identifier")
         {name, r1} = take_ident(tl(ts))
         {{:goto, String.downcase(name)}, expect_semi(r1)}
 
@@ -318,6 +337,7 @@ defmodule PhpBeam.Parser do
   # ───────────────────────── classes ─────────────────────────
 
   defp class_stmt(mods, [{_, _, kind} | rest]) do
+    reject_exit_die!(rest, "identifier")
     {name, rest2} = take_ident(rest)
     {extends, rest3} = optional_extends(kind, rest2)
     {implements, rest4} = optional_implements(kind, rest3)
@@ -345,6 +365,7 @@ defmodule PhpBeam.Parser do
 
   # `enum Name [: string] { use Trait; case A; case B = "b"; const/methods }`
   defp enum_stmt(mods, [{_, _, "enum"} | rest]) do
+    reject_exit_die!(rest, "identifier")
     {name, rest2} = take_ident(rest)
 
     {backing, rest3} =
@@ -718,6 +739,9 @@ defmodule PhpBeam.Parser do
 
   # statement-level `const A = 1, B = 2;`
   defp const_stmt([{_, _, "const"} | rest]) do
+    # top-level const only — class const via const_member ACCEPTS exit/die
+    # (php probe; define_class_members_exit_die.phpt positive)
+    reject_exit_die!(rest, "identifier")
     {entries, rest2} = const_entries(rest, [])
     {{:const_decl, entries}, expect_semi(rest2)}
   end
@@ -1318,9 +1342,16 @@ defmodule PhpBeam.Parser do
     case tl(ts) do
       # `function &name()` — return-by-ref declaration (approximated as
       # by-value until ref-returns land)
-      [{:op, _, "&"}, {:name, _, _} | _] -> func_def(tl(tl(ts)))
-      [{:name, _, _} | _] -> func_def(tl(ts))
-      _ -> expr_statement(ts)
+      [{:op, _, "&"}, {:name, _, _} | _] ->
+        reject_exit_die!(tl(tl(ts)), ~s("("))
+        func_def(tl(tl(ts)))
+
+      [{:name, _, _} | _] ->
+        reject_exit_die!(tl(ts), ~s("("))
+        func_def(tl(ts))
+
+      _ ->
+        expr_statement(ts)
     end
   end
 
@@ -1589,7 +1620,11 @@ defmodule PhpBeam.Parser do
   # `include`/`require` sit below assignment (`$v = include ...` parses) and
   # consume a full ternary-level expression — the WordPress idiom
   # `require_once ABSPATH . 'wp-settings.php'` concatenates before including
-  defp ternary([{:name, _, kw} | rest]) when kw in @include_kws do
+  defp ternary([{:name, _, kw} | _] = ts) when kw in @include_kws do
+    parse_include(ts)
+  end
+
+  defp parse_include([{:name, _, kw} | rest]) do
     {e, r} = ternary(rest)
     {{:include, String.to_atom(kw), e}, r}
   end
@@ -1790,6 +1825,12 @@ defmodule PhpBeam.Parser do
 
       {:op, _, "@"} ->
         wrap_unop(tl(ts), :@)
+
+      # `@include`/`@require`: include binds looser than unary, but the
+      # suppressed-include idiom is everywhere (composer) — wrap the WHOLE
+      # include expression, not just its path operand
+      {:name, _, kw} when kw in @include_kws ->
+        parse_include(ts)
 
       {:op, _, "++"} ->
         {e, r} = unary(tl(ts))
