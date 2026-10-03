@@ -1,6 +1,12 @@
-# Acceptance suites from the php-src distribution (PHP 8.4.24), run through
+# Acceptance suites from the php-src distribution (PHP 8.4.25), run through
 # the .phpt harness in PhpBeam.Test.Phpt. Point PHP_SRC at an unpacked
 # php-src tree; without it every suite degrades to a single skipped test.
+#
+# Golden references on this machine (2026-10-03, spec 001-phpt-semantic-completion R1):
+#   oracle php  = /opt/homebrew/bin/php 8.4.17   (was 8.4.2 on the old dev box)
+#   suite source= php-src 8.4.25                 (was 8.4.24)
+# Version drift between the two eras is quantified in docs/matrix/drift.md at
+# baseline re-record time (R5); never silently absorbed.
 #
 #     mix test test/phpbeam/phpt_test.exs            # all suites
 #     mix test --only phpt                           # anywhere
@@ -9,7 +15,7 @@
 # Suits are chunked into many small async modules so phpx spawns run in
 # parallel (~0.2s each, ~780 cases over tests/{lang,strings,func,classes,
 # basic,output}).
-php_src = System.get_env("PHP_SRC", "/Users/guozhu/Downloads/php-8.4.24")
+php_src = System.get_env("PHP_SRC", "/Users/5i5j/Downloads/php-8.4.25")
 escript = Path.expand("../../phpx", __DIR__)
 php_bin = "/opt/homebrew/bin/php"
 
