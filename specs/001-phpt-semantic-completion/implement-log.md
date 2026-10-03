@@ -62,6 +62,10 @@
   - `8`（分片数）
 - 未验证项：phpt 8 目录以外的全部 Zend/ext 目录（属 Z/X 相）；Laravel/WP/Composer 冒烟资产本机不存在（旧机未随迁）——T015 首步须先重建 Laravel fixture（composer create-project，网络待验证），已记入恢复点
 
+## Phase 4（US2：Z 相——进行中）
+
+- [x] T015-p1 trait 别名旁路修复（Z0a 第一刀，13GB 循环本体仍在追）：合成探针 t2（嵌套 trait + insteadof + as）暴露真 bug——`TB::f as fB` 的源方法被 insteadof 排除后**别名一起消失**（php 语义：排除只让出原名槽，别名仍挂）；修 table.ex merge_trait_methods：kept 只按 insteadof_excluded? 收（顺带清一段恒 false 死代码）+ 新增 excluded_aliases 通道对全候选集解析、仅入别名槽（键 downcase 对齐 219/431 行既有规范化——首版原始键被大小写咬了一口）；get_class_methods 是登记在案的 stub（旁路发现，Z 相反射目录债） | tests: RED（undefined method fB，watchdog 护栏）→ GREEN `O:TA/TB/TA.g` 与 php 逐字节一致；差分 53_z0_trait_alias.php BYTE-IDENTICAL；非 phpt 127/0 | commit: 本 commit
+
 ### 恢复点（下会话从这里继续）
 下一任务 **T015（Z0a trait 死循环）**：前置=重建 Laravel 冒烟资产（本机无 artisan/composer 项目；composer 走系统 php 8.4.17）。之后 T016（Z0b autoload）→ T017（zend-exit 演练批）。
 

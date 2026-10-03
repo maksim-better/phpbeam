@@ -405,17 +405,11 @@ defmodule PhpBeam.Classes.Table do
       end)
 
     # insteadof: method from `from`-trait wins; excluded traits' versions drop
+    # from the ORIGINAL slot only — an `as` alias may still target them (php:
+    # `TB::f as fB` adds fB even though TB::f lost the f-slot to TA::f)
     kept =
       Enum.reject(candidates, fn {mname, _m, tkey} ->
-        Enum.any?(adaptions, fn
-          {:insteadof, from, method, excluded} ->
-            String.downcase(method) == mname and
-              resolve_decl_name(from, interp) == tkey and
-              false
-
-          _ ->
-            false
-        end) or insteadof_excluded?(mname, tkey, adaptions, interp)
+        insteadof_excluded?(mname, tkey, adaptions, interp)
       end)
 
     # as: alias / re-visibility
@@ -446,28 +440,51 @@ defmodule PhpBeam.Classes.Table do
 
     # php: `m as x` ADDS an alias while keeping m accessible (only
     # insteadof removes); entries carry the originals alongside renames
-    Enum.reduce(renamed, class.methods, fn entry, acc ->
-      case entry do
-        {mname, m, _tkey} ->
-          if Map.has_key?(class.methods, mname) or Map.has_key?(acc, mname) do
-            acc
-          else
-            Map.put(acc, mname, m)
-          end
-
-        {mname, m, alias_name, am} ->
-          acc2 =
+    acc0 =
+      Enum.reduce(renamed, class.methods, fn entry, acc ->
+        case entry do
+          {mname, m, _tkey} ->
             if Map.has_key?(class.methods, mname) or Map.has_key?(acc, mname) do
               acc
             else
               Map.put(acc, mname, m)
             end
 
-          if Map.has_key?(class.methods, alias_name) or Map.has_key?(acc2, alias_name) do
-            acc2
-          else
-            Map.put(acc2, alias_name, am)
-          end
+          {mname, m, alias_name, am} ->
+            acc2 =
+              if Map.has_key?(class.methods, mname) or Map.has_key?(acc, mname) do
+                acc
+              else
+                Map.put(acc, mname, m)
+              end
+
+            if Map.has_key?(class.methods, alias_name) or Map.has_key?(acc2, alias_name) do
+              acc2
+            else
+              Map.put(acc2, alias_name, am)
+            end
+        end
+      end)
+
+    # aliases whose SOURCE was insteadof-excluded: resolve against the full
+    # candidate set (they never entered `kept`/`renamed`) — enter under the
+    # alias name only
+    excluded_aliases =
+      for {:as, from, orig, alias_name, vis} <- adaptions,
+          alias_name != nil,
+          {mname, m, tkey} <- candidates,
+          String.downcase(orig) == mname,
+          from != nil and resolve_decl_name(from, interp) == tkey,
+          insteadof_excluded?(mname, tkey, adaptions, interp) do
+        {String.downcase(alias_name), %{m | name: alias_name, visibility: vis || m.visibility}}
+      end
+      |> Enum.uniq_by(&elem(&1, 0))
+
+    Enum.reduce(excluded_aliases, acc0, fn {alias_key, am}, acc ->
+      if Map.has_key?(class.methods, alias_key) or Map.has_key?(acc, alias_key) do
+        acc
+      else
+        Map.put(acc, alias_key, am)
       end
     end)
   end
