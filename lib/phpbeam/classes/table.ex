@@ -859,6 +859,18 @@ defmodule PhpBeam.Classes.Table do
 
   # php compares RESOLVED types: an aliased `HttpTransporterInterface` in the
   # child matches the parent's fully-qualified spelling
+  # leading-backslash ABSOLUTE form: resolve_type_fq skips ns/alias
+  # prefixing for fq names, so the expansion lands as-is. `name` may already
+  # carry the full namespaced display — don't re-prefix.
+  defp ancestor_key(%{ns: ns, name: name}), do: fq_type_key(ns, name)
+  defp child_key(%{ns: ns, name: name}), do: fq_type_key(ns, name)
+
+  defp fq_type_key(ns, name) do
+    # `name` may already carry the full namespaced display — don't re-prefix
+    base = if String.contains?(name, "\\"), do: name, else: Enum.join(ns ++ [name], "\\")
+    "\\" <> base
+  end
+
   defp type_eq?(nil, _ct, _interp, _class, _pclass), do: true
 
   defp type_eq?(_pt, nil, _interp, _class, _pclass), do: true
@@ -873,6 +885,15 @@ defmodule PhpBeam.Classes.Table do
     ct_l = String.downcase(ct)
 
     cond do
+      # `self`/`static` bind to a class: parent's self = the DECLARING
+      # (ancestor) class, child's = the child — expand before comparing
+      # (php: Some::orElse(Option $e) is compatible with Option::orElse(self $e))
+      pt_l in ~w(self static) ->
+        type_eq?(ancestor_key(pclass), ct, interp, class, pclass)
+
+      ct_l in ~w(self static) ->
+        type_eq?(pt, child_key(class), interp, class, pclass)
+
       pt_l in builtin_types or ct_l in builtin_types ->
         # builtin spellings (int/integer, bool/boolean) normalize loosely;
         # the child may WIDEN (contravariance): callable -> ?callable is
@@ -1310,17 +1331,20 @@ defmodule PhpBeam.Classes.Table do
     ifaces =
       Map.new(
         [
-          {"countable", "Countable"},
-          {"arrayaccess", "ArrayAccess"},
-          {"stringable", "Stringable"},
-          {"jsonserializable", "JsonSerializable"},
-          {"iterator", "Iterator"},
-          {"iteratoraggregate", "IteratorAggregate"},
-          {"traversable", "Traversable"},
-          {"serializable", "Serializable"},
-          {"datetimeinterface", "DateTimeInterface"}
+          {"countable", "Countable", nil},
+          {"arrayaccess", "ArrayAccess", nil},
+          {"stringable", "Stringable", nil},
+          {"jsonserializable", "JsonSerializable", nil},
+          # php: Iterator and IteratorAggregate both extend Traversable —
+          # is_a?/instanceof walks this edge (Some implements IteratorAggregate
+          # IS a Traversable)
+          {"iterator", "Iterator", "traversable"},
+          {"iteratoraggregate", "IteratorAggregate", "traversable"},
+          {"traversable", "Traversable", nil},
+          {"serializable", "Serializable", nil},
+          {"datetimeinterface", "DateTimeInterface", nil}
         ],
-        fn {key, name} -> {key, native_iface(name)} end
+        fn {key, name, parent} -> {key, native_iface(name, parent)} end
       )
 
     base
@@ -3006,11 +3030,11 @@ defmodule PhpBeam.Classes.Table do
     {{:unwind, {:php_throw, obj_ref}}, nil, i3}
   end
 
-  defp native_iface(name) do
+  defp native_iface(name, parent \\ nil) do
     %__MODULE__{
       name: name,
       kind: :interface,
-      parent: nil,
+      parent: parent,
       interfaces: [],
       consts: %{},
       props: [],

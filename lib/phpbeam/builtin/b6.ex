@@ -1278,23 +1278,32 @@ defmodule PhpBeam.Builtin.B6 do
           # iterator_to_array() the result of generator-based collections
           collect_gen(oref, preserve_keys?, i, [])
         else
-          arr =
-            case obj.dt_state && obj.dt_state["arr"] do
-              %PArray{} = inner ->
-                inner
+          unless PhpBeam.Classes.is_a?(i, obj.class, "traversable") do
+            # probed php 8.4: plain object → TypeError
+            {:unwind,
+             {:php_throw,
+              {:native_error, "TypeError",
+               "iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, stdClass given"}},
+             i}
+          else
+            arr =
+              case Map.get(obj, :dt_state) && obj.dt_state["arr"] do
+                %PArray{} = inner ->
+                  inner
 
-              _ ->
-                obj.props
-            end
+                _ ->
+                  obj.props
+              end
 
-          arr =
-            if preserve_keys? do
-              arr
-            else
-              PArray.from_pairs(Enum.map(PArray.to_pairs(arr), fn {_k, v} -> {nil, v} end))
-            end
+            arr =
+              if preserve_keys? do
+                arr
+              else
+                PArray.from_pairs(Enum.map(PArray.to_pairs(arr), fn {_k, v} -> {nil, v} end))
+              end
 
-          {:ok, {:array, arr}, i}
+            {:ok, {:array, arr}, i}
+          end
         end
 
       _ ->

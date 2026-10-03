@@ -282,6 +282,7 @@ defmodule PhpBeam.Eval do
     case isset?(obj_e, env, interp) do
       {true, env2, interp2} -> eval({:prop, obj_e, name_e}, env2, interp2)
       {false, env2, interp2} -> {{:val, :null}, env2, interp2}
+      {{:unwind, _} = u, env2, interp2} -> {u, env2, interp2}
     end
   end
 
@@ -453,7 +454,12 @@ defmodule PhpBeam.Eval do
               else:
                 scope_in_chain?(interp, scope, method.class || class_key) or
                   scope_in_chain?(interp, method.class || class_key, scope) or
-                  scope_in_chain?(interp, scope, class_key || method.class)
+                  scope_in_chain?(interp, scope, class_key || method.class) or
+                  trait_used_by?(interp, scope, class_key || method.class)
+
+          # php compiles trait methods INTO the using class — a trait scope
+          # sees the using class's protected members (EnumeratesValues →
+          # Collection::newInstance)
 
           if visible,
             do: nil,
@@ -502,6 +508,23 @@ defmodule PhpBeam.Eval do
         nil -> false
         c -> scope_in_chain?(interp, c.parent, target)
       end
+  end
+
+  # a TRAIT scope (env.scope_class inside a flattened method) sees the using
+  # class's members — walk the class chain collecting :traits (deep: traits
+  # using traits keep their trait keys in the using class's list)
+  defp trait_used_by?(_interp, nil, _class_key), do: false
+  defp trait_used_by?(_interp, _trait_key, nil), do: false
+
+  defp trait_used_by?(interp, trait_key, class_key) do
+    case interp.classes[class_key] do
+      nil ->
+        false
+
+      c ->
+        (c.traits || []) |> Enum.any?(&scope_in_chain?(interp, &1, trait_key)) or
+          trait_used_by?(interp, trait_key, c.parent)
+    end
   end
 
   # the display name keeps the source spelling (keys are lowercased)
@@ -1060,6 +1083,9 @@ defmodule PhpBeam.Eval do
 
   def eval({:coalesce, l, r}, env, interp) do
     case isset?(l, env, interp) do
+      {{:unwind, _} = u, env2, interp2} ->
+        {u, env2, interp2}
+
       {true, env2, interp2} ->
         case eval(l, env2, interp2) do
           {{:unwind, _} = u, env3, interp3} -> {u, env3, interp3}
@@ -1105,23 +1131,31 @@ defmodule PhpBeam.Eval do
   def eval({:isset, targets}, env, interp) do
     res =
       Enum.all?(targets, fn t ->
-        {ok?, _, _} = isset?(t, env, interp)
-        ok?
+        case isset?(t, env, interp) do
+          {{:unwind, _} = u, e2, i2} -> throw({:isset_unwind, u, e2, i2})
+          {ok?, _, _} -> ok?
+        end
       end)
 
     {{:val, {:bool, res}}, env, interp}
+  catch
+    {:isset_unwind, u, e2, i2} -> {u, e2, i2}
   end
 
   def eval({:empty, e}, env, interp) do
-    {ok?, _, _} = isset?(e, env, interp)
+    case isset?(e, env, interp) do
+      {{:unwind, _} = u, e2, i2} ->
+        {u, e2, i2}
 
-    if ok? do
-      case eval(e, env, interp) do
-        {{:unwind, _} = u, e2, i2} -> {u, e2, i2}
-        {{:val, v}, _e2, _i2} -> {{:val, {:bool, not Value.truthy?(v)}}, env, interp}
-      end
-    else
-      {{:val, {:bool, true}}, env, interp}
+      {ok?, env2, interp2} ->
+        if ok? do
+          case eval(e, env2, interp2) do
+            {{:unwind, _} = u, e3, i3} -> {u, e3, i3}
+            {{:val, v}, _e3, _i3} -> {{:val, {:bool, not Value.truthy?(v)}}, env2, interp2}
+          end
+        else
+          {{:val, {:bool, true}}, env, interp}
+        end
     end
   end
 

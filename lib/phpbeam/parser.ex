@@ -2414,8 +2414,20 @@ defmodule PhpBeam.Parser do
         {cls, rest2} =
           case peek(rest) do
             {:name, _, _} ->
-              {parts, r, fq} = qualified_name(rest)
-              {{:cname, fq, parts}, r}
+              case rest do
+                # `new static::$prop(...)` / `new Foo::$bar(...)` — the class
+                # SOURCE is a static property; the args below belong to the
+                # CONSTRUCTOR, so consume only Name::$prop here (php 8.4:
+                # Application line 249 idiom)
+                [{:name, _, _}, {:op, _, "::"}, {:variable, _, vname} | _] ->
+                  {parts, r, fq} = qualified_name(rest)
+                  {true, [{:variable, _, _} | r2]} = take_op(r, "::")
+                  {{:static_prop, {:cname, fq, parts}, {:var, vname}}, r2}
+
+                _ ->
+                  {parts, r, fq} = qualified_name(rest)
+                  {{:cname, fq, parts}, r}
+              end
 
             {:op, _, "\\"} ->
               {parts, r, fq} = qualified_name(rest)

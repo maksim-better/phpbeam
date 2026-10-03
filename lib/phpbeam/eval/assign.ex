@@ -591,10 +591,13 @@ defmodule PhpBeam.Eval.Assign do
         end
 
       {:index, container, idx_expr} ->
-        {ok?, env2, interp2} = isset?(container, env, interp)
+        case isset?(container, env, interp) do
+          {{:unwind, _} = u, e1, i1} ->
+            {u, e1, i1}
 
-        if ok? do
-          {{:val, c}, env3, interp3} = Eval.eval(container, env2, interp2)
+          {ok?, env2, interp2} ->
+            if ok? do
+              {{:val, c}, env3, interp3} = Eval.eval(container, env2, interp2)
 
           case idx_expr do
             nil ->
@@ -641,6 +644,7 @@ defmodule PhpBeam.Eval.Assign do
         else
           {false, env2, interp2}
         end
+        end
 
       {:prop, obj_e, name_e} ->
         {{:val, ov}, env2, interp2} = Eval.eval(obj_e, env, interp)
@@ -681,8 +685,13 @@ defmodule PhpBeam.Eval.Assign do
         {false, env, interp}
 
       _ ->
-        {{:val, v}, env2, interp2} = Eval.eval(target, env, interp)
-        {v != :null, env2, interp2}
+        case Eval.eval(target, env, interp) do
+          {{:unwind, _} = u, e2, i2} ->
+            {u, e2, i2}
+
+          {{:val, v}, e2, i2} ->
+            {v != :null, e2, i2}
+        end
     end
   end
 
