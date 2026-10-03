@@ -171,3 +171,6 @@
 ## 工具链（2026-09-30）
 - [ ] mix local.rebar 与 hex 元数据均被 TLS 挡——MIX_REBAR3=~/.mix/rebar3 指向 brew rebar3 可绕过（已 cp 到 ~/.mix/rebar3）；gate.sh 需 export MIX_REBAR3 才能全新环境跑 deps.get
 - [ ] http_test 偶发遗留孤儿 `phpx serve` 进程（占 18898/18899 端口，后续 run 全体报 Address already in use 且 mix test 挂起等端口）——测试收尾 kill 不彻底，gate.sh 非 phpt 段后已有 18899 全清扫（pkill -9 -f "phpx serve"）
+## T006（2026-10-03，spec 001）
+
+- [ ] **log_errors 的 stderr 副本通道**：log_errors=1 且 error_log 空时，php 对每条错误/弃用在显示副本之外再写一行 `PHP Xxx: message in file on line N` 到 stderr（差分 harness 只比 stdout 故 47–52 不可见；手工 2>&1 比对暴露——52_d3_pgsql）。错误协议域，Z 相 Zend 错误类用例预计踩到时一并接上（A1 的 warn 管线补 log 通道）

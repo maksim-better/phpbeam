@@ -26,6 +26,8 @@
 
 - [x] T005 R2b exqlite 补丁重建：scripts/patches/exqlite-load-nif.patch（56 行，含应用说明头）——比旧机版本更鲁棒：priv_dir 失败时**扫描 code path 真实 ebin 推导 ../priv**（归档伪路径被 is_dir 过滤）+ PHPBEAM_EXQLITE_NIF 逃生口。调试纪要：首版 which() 推导被归档遮蔽打脸；候选表 List.flatten 把 charlist 打成整数流（path 变成整数 47）——charlist 就是整数列表，flatten 会拆掉候选项本身，改用 ++ 拼接。 | tests: RED（:undef Sqlite3NIF.open 三轮复现）→ GREEN `./phpx -r 'new SQLite3(":memory:"); version()'` → 3.45.1 数组；case 50 直跑 **BYTE-IDENTICAL** 28 行；51 随套件绿 | commit: 本 commit
 
+- [x] T006 R3 MySQL 差分恢复：OrbStack 启动 + phpbeam-mysql 容器重建（U8 检查点应验：容器不存在；mysql:8.0，root/root + wp_test/laravel_test + wp/wppass + wp_test/wppass）+ D 系验收 | tests: 47/48/49/50/51 直差分 BYTE-IDENTICAL（51/68/1/28/27 行）、52 套件绿；套件整体 127/0 | commit: 本 commit
+
 ### Phase 2 验证（D5）
 - 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
 - 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）
