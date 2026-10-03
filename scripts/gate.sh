@@ -101,6 +101,8 @@ shard_sum_selfcheck() {
 # changed files (stdin) → dir set. gate_map.conf rule: `glob -> ALL | dir,dir` (# comments; empty dst = fast lane)
 # first matching rule wins; no rule matching the file = ALL (fail-safe); no conf at all = ALL.
 phpbeam_map_dirs() {
+  emulate -L zsh
+  setopt extendedglob  # [[:space:]]# = one-or-more quantifier in parameter trimming
   local conf=scripts/gate_map.conf
   local -a out
   local path line pat dst
@@ -109,9 +111,8 @@ phpbeam_map_dirs() {
     local matched=0
     while IFS= read -r line; do
       case "$line" in '#'*|'') continue ;; esac
-      pat="${line%%->*}"; dst="${line##*->}"
-      pat="${${pat%%[[:space:]]}##[[:space:]]}"
-      dst="${${dst%%[[:space:]]}##[[:space:]]}"
+      pat="${line%%->*}"; pat="${pat%%[[:space:]]#}"; pat="${pat##[[:space:]]#}"
+      dst="${line#*->}"; dst="${dst%%\#*}"; dst="${dst%%[[:space:]]#}"; dst="${dst##[[:space:]]#}"
       if [[ "$path" == ${~pat} ]]; then
         matched=1
         case "$dst" in
@@ -168,11 +169,12 @@ case "${lane:-}" in
       echo "GATE: PASS (full lane via fail-safe)"
     else
       changed=$( { git status --porcelain 2>/dev/null | awk '{print $NF}'; git diff --name-only "$(git merge-base master HEAD)" 2>/dev/null; } | sort -u)
-      dirs=($(phpbeam_map_dirs "$changed"))
+      dirs=($(printf '%s\n' "$changed" | phpbeam_map_dirs))
       if [ ${#dirs[@]} -eq 0 ]; then
         run_nonphpt
         echo "GATE: PASS (fast lane — mapping of changes is empty)"
       elif [ ${#dirs[@]} -eq 1 ] && [ "${dirs[1]}" = ALL ]; then
+        dirs=()   # ALL is not a dir id — run the unfiltered suite
         run_nonphpt; run_phpt; compare_shards; shard_sum_selfcheck
         echo "GATE: PASS (full lane — mapping hit ALL)"
       else

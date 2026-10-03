@@ -32,6 +32,8 @@
 
 - [x] T008 R4b 门禁三 lane：scripts/gate.sh 全量重写——fast/dirs/full + --record [-- <dir>]、分片只收缩比对（comm -13）、full 分片和自检、映射默认 lane（无 gate_map.conf 时 fail-safe 走 full，T009 接表）；harness 侧 PHPT_DIRS 编译期过滤（未知 dir_id 即 raise 防手滑）。调试纪要：①失败行 awk 分片首版没剥 "test " 前缀（分片名带空格）；②gate_phpt.log 被 dirs lane 复用覆盖，重录必须走 record 全量而非手工重切 | tests: 三态验证——record 全量（348/6 分片，和自检 348=348）、dirs lang PASS（112/112 shrink-ok）、**篡改证伪 RED**（删基线末行→GATE: FAIL 精确报出该例）、恢复后 full PASS、fast PASS | commit: 本 commit
 
+- [x] T009 R4c 映射表：scripts/gate_map.conf V1（lib/ 引擎核心→ALL；test/scripts/docs/specs/md→空=快通道；未命中→ALL fail-safe 由 gate.sh 执行）+ phpbeam_map_dirs 三处真 bug 修复（zsh 单字符修剪陷阱→emulate -L+extendedglob 纯参数展开；`X/**/Y` 在 [[ == ]] 下零目录不命中→双行模式；stdin 传参弄反→printf 管道） | tests: 提取函数单测 10/10（lib 两级→ALL、test/docs/scripts/specs→EMPTY、未命中→ALL）；端到端默认 lane：分支 diff 含 lib → 映射 ALL → full PASS（348/348 只收缩+自检） | commit: 本 commit
+
 ### Phase 2 验证（D5）
 - 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
 - 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）
