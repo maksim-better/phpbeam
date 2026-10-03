@@ -83,9 +83,9 @@
 
 ### 恢复点（下会话从这里继续）
 
-**artisan 链当前层**：`Class "Some" not found`（= PhpOption\Some，包在 vendor/phpoption）——**use 导入解析在特定上下文失效**（错误报短名，疑 static-call/isset? 路径没过 interp.uses.normal）。同场需修 `Assign.isset?:684` 的 val 硬解（fatal 穿 `??` 变 badmatch——清扫族漏网位）。
+**13GB 循环（T015 本体）已精确复现**：artisan 至 Carbon `Traits/Date.php`，循环三角 **1108↔1157↔1345**（魔术 `__get`→`getLocalMacro('get'.…)`→`executeCallableWithContext` 链），watchdog 240s 内 mem→**16GB**；objs=116/fns=1491/cls=225/inc=160 全稳定、out=13 稳定 → **非对象/注册表泄漏，是巨型 binary 或数组在 env/statics 累积**。前人在 interp.ex:842 留了 10 万语句 TRACE 哨兵（stderr，回头门控成 env 开关）。
+排查建议：对 statics（`static $formats` 每调用重算？）与 `localizedFormats`/macro 注册表的增长下手；用 :erlang.process_info binary 高水位（binary_memory）区分 binary vs term 泄漏；Carbon Traits/Date.php 的 mixin 展开与 LocalFactory 注册路径。
 
-**zend-exit 剩 11**：exit_values/exit_named_arg/exit_string_with_buffer（exit 参数弃用警告：`Passing null to parameter #1 ($status)…deprecations` + float 15.5 隐转警告 + named arg `status:`）、ast_print ×4（assert 消息的 zend_ast dump 含 exit）、disabling ×2（disable_functions 摸 exit/die 的 startup 警告 `Cannot disable function exit() in Unknown on line 0`）、die_string_cast（`exit(): Argument #1 ($status) must be of type string|int, stdClass given`）、exit_as_function（exit/die 的 FCC `exit(...)`）。
-
-** artisan 每修一层剥一洋葱**：FILTER→badmatch 清扫→proc_open→生成器键→implementsInterface→现在 PhpOption 导入层。
+**zend-exit 剩 11 分解**（上轮记录仍有效）：exit 参数弃用警告族（null/float/named-arg）、ast_print ×4（assert AST dump 含 exit）、disabling ×2（startup 警告 `in Unknown on line 0`）、die_string_cast（TypeError 措辞）、exit_as_function（FCC）。
+**附带债**：native_error 在 catch 未物化（$e 绑消息串）；require 实参优先级（`require X or die` 应解析为 require(X or die)——rq6 探针）；interp.ex:842 TRACE 门控。
 
