@@ -28,6 +28,8 @@
 
 - [x] T006 R3 MySQL 差分恢复：OrbStack 启动 + phpbeam-mysql 容器重建（U8 检查点应验：容器不存在；mysql:8.0，root/root + wp_test/laravel_test + wp/wppass + wp_test/wppass）+ D 系验收 | tests: 47/48/49/50/51 直差分 BYTE-IDENTICAL（51/68/1/28/27 行）、52 套件绿；套件整体 127/0 | commit: 本 commit
 
+- [x] T007 R4a harness 目录机制：phpt_test.exs groups 改显式 {dir_id, php-src 相对路径} 对 + 头注固化 U9 扁平命名约定（tests/* 本名 / zend-&lt;sub&gt; / zend-root / ext-&lt;mod&gt;；失败行 Module 名编码目录→gate 分片依据）；Phpt.run 的 :suite 原本就线程化（tmp/phpt/&lt;suite&gt;/ 命名空间），零改动兼容 | tests: `mix test --only phpt` → **697 tests, 348 failures**（与 PLAN 记录的 D 相收口数完全一致——换代零漂移实证；tmp/t007_phpt.log） | commit: 本 commit
+
 ### Phase 2 验证（D5）
 - 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
 - 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）

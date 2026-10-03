@@ -19,25 +19,40 @@ php_src = System.get_env("PHP_SRC", "/Users/5i5j/Downloads/php-8.4.25")
 escript = Path.expand("../../phpx", __DIR__)
 php_bin = "/opt/homebrew/bin/php"
 
+# dir_id => php-src-relative path. Flat ids keep the generated Module names
+# valid unique atoms (spec 001 research U9): tests/* top level keep their
+# plain name; future Zend/tests subdirs become zend-<sub>, root-level
+# Zend/tests files become zend-root, ext/<mod>/tests becomes ext-<mod>.
+# The failure line format "test <file>.phpt (PhpBeam.Phpt.<Flat>.G<N>)"
+# then encodes the directory — the gate shards baselines on it.
+suites = [
+  {"lang", "tests/lang"},
+  {"strings", "tests/strings"},
+  {"func", "tests/func"},
+  {"classes", "tests/classes"},
+  {"basic", "tests/basic"},
+  {"output", "tests/output"}
+]
+
 groups =
-  for suite <- ~w(lang strings func classes basic output),
-      dir = Path.join(php_src, "tests/#{suite}"),
+  for {dir_id, rel} <- suites,
+      dir = Path.join(php_src, rel),
       files = (File.dir?(dir) && Path.wildcard(Path.join(dir, "*.phpt")) |> Enum.sort()) || [],
       {chunk, idx} <- Enum.with_index(Enum.chunk_every(files, 40)) do
-    {suite, idx, chunk}
+    {dir_id, idx, chunk}
   end
 
-for {suite, idx, files} <- groups do
-  defmodule Module.concat([PhpBeam.Phpt, Macro.camelize(suite), "G#{idx}"]) do
+for {dir_id, idx, files} <- groups do
+  defmodule Module.concat([PhpBeam.Phpt, Macro.camelize(dir_id), "G#{idx}"]) do
     use ExUnit.Case, async: true
 
     for f <- files do
       @tag :phpt
-      test "#{suite}/#{Path.basename(f)}" do
+      test "#{dir_id}/#{Path.basename(f)}" do
         case PhpBeam.Test.Phpt.run(unquote(f),
                escript: unquote(escript),
                php_bin: unquote(php_bin),
-               suite: unquote(suite)
+               suite: unquote(dir_id)
              ) do
           {:ok, _} ->
             assert true
