@@ -129,9 +129,13 @@ defmodule PhpBeam.Test.Phpt do
     # SKIP_SLOW_TESTS mirrors run-tests.php's -m/--slow toggle: the phpt
     # SKIPIF blocks opt out heavy stress cases (e.g. func/010's 16K-arg
     # bind) that run fine single-shot but kiss the 10s alarm under the
-    # gate's 16-way parallel load
+    # gate's 16-way parallel load.
+    # TEST_PHP_EXECUTABLE(_ESCAPED) mirror run-tests.php's exports — exit_values
+    # and friends re-invoke the interpreter via exec() ($php . ' --no-php-ini …')
+    escaped = String.replace(escript, "'", "'\\''")
+
     shell(
-      "cd #{q(dir)} && SKIP_SLOW_TESTS=1 perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)}#{ini_args} #{q(file)} 2>/dev/null"
+      "cd #{q(dir)} && SKIP_SLOW_TESTS=1 TEST_PHP_EXECUTABLE=#{q(escript)} TEST_PHP_EXECUTABLE_ESCAPED='#{escaped}' perl -e 'alarm #{@timeout_s}; exec @ARGV' #{q(escript)}#{ini_args} #{q(file)} 2>/dev/null"
     )
   end
 

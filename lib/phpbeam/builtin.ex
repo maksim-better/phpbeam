@@ -27,6 +27,7 @@ defmodule PhpBeam.Builtin do
     SocketsFns,
     CurlFns,
     FtpFns,
+    ProcFns,
     PosixFns,
     XmlFns,
     PgsqlFns,
@@ -69,6 +70,7 @@ defmodule PhpBeam.Builtin do
     |> SocketsFns.register()
     |> CurlFns.register()
     |> FtpFns.register()
+    |> ProcFns.register()
     |> PosixFns.register()
     |> XmlFns.register()
     |> PgsqlFns.register()

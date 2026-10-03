@@ -1264,24 +1264,67 @@ defmodule PhpBeam.Builtin.B6 do
 
   defp iterator_to_array_v(vals, i) do
     case vals do
-      [{:object, _} = oref | _] ->
+      [{:object, _} = oref | rest] ->
         obj = Eval.get_object(i, oref)
 
-        arr =
-          case obj.dt_state && obj.dt_state["arr"] do
-            %PArray{} = inner ->
-              inner
-
-            _ ->
-              obj.props
+        preserve_keys? =
+          case rest do
+            [{:bool, false} | _] -> false
+            _ -> true
           end
 
-        {:ok, {:array, arr}, i}
+        if obj.class == "generator" do
+          # exhaust the generator (same driver as foreach): Laravel feeds
+          # iterator_to_array() the result of generator-based collections
+          collect_gen(oref, preserve_keys?, i, [])
+        else
+          arr =
+            case obj.dt_state && obj.dt_state["arr"] do
+              %PArray{} = inner ->
+                inner
+
+              _ ->
+                obj.props
+            end
+
+          arr =
+            if preserve_keys? do
+              arr
+            else
+              PArray.from_pairs(Enum.map(PArray.to_pairs(arr), fn {_k, v} -> {nil, v} end))
+            end
+
+          {:ok, {:array, arr}, i}
+        end
 
       _ ->
         {:ok, {:array, PArray.new()}, i}
     end
   end
+
+  defp collect_gen(oref, preserve_keys?, i, acc) do
+    send_arg = if acc == [], do: :start, else: :null
+
+    case Eval.gen_resume(oref, send_arg, i) do
+      {:yielded, k, v, i2} ->
+        # probed php 8.4: preserve_keys=false re-keys ONLY integer keys —
+        # string keys survive in both modes
+        pair =
+          cond do
+            preserve_keys? -> {key_or_nil(k), Eval.deref(v, i2)}
+            # probed 8.4: false re-keys EVERYTHING — string keys drop too
+            true -> {nil, Eval.deref(v, i2)}
+          end
+
+        collect_gen(oref, preserve_keys?, i2, acc ++ [pair])
+
+      _other ->
+        {:ok, {:array, PArray.from_pairs(acc)}, i}
+    end
+  end
+
+  defp key_or_nil(:null), do: nil
+  defp key_or_nil(k), do: k
 
   defp iterator_count_v(vals, i) do
     case vals do

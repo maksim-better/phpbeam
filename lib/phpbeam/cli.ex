@@ -66,6 +66,10 @@ defmodule PhpBeam.CLI do
 
   defp ini_options(["-n" | rest], _acc), do: ini_options(rest, [])
 
+  # long spelling used by php-src's own test suite when it re-invokes the
+  # binary ($php . ' --no-php-ini ' …)
+  defp ini_options(["--no-php-ini" | rest], _acc), do: ini_options(rest, [])
+
   defp ini_options(["-c" | rest], acc) do
     case rest do
       [path | rest2] -> ini_options(rest2, ini_file_entries(path) ++ acc)

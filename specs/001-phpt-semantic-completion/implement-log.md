@@ -77,6 +77,8 @@
   - zend-exit 分片 **24→12**；差分 55（短路+@include+fatal 传播）stdout/stderr 双通道 IDENTICAL
   - 调试纪要：for 门控 case-case 需括号；foreach_ref 替换残留孤儿调用；@suppress 计数器须在 unwind 出口回退 | tests: 门禁全量 PASS（9 分片只收缩、自检 413=基线收敛、zend-exit 12）；差分 53/54/55 三新增全同 | commit: 本 commit
 
+- [x] T017-p2 进程执行族落地 + 三连修：`Builtin.ProcFns`（proc_open/close/terminate/get_status + exec/system/passthru/shell_exec + escapeshellarg/cmd；fd0/1 走 Port stdio、fd2 临时文件、数组形经 /usr/bin/env、字符串形 sh -c 带 $0="sh" argv0 修正；同步族 run_sync 收集到 exit_status）——**纯箭头必须裹 %{fun:, refs:[]}**（registry v2 约定，裸箭头在 call_named case_clause 崩）；`iterator_to_array(Generator)` 补驱动分支（gen_resume 复用；false 模式全重编、true 模式保键）；**生成器键计数器修**（显式 string 键不推计数器、无键才 use-and-bump、int 显键设 n+1——探针 g1/g2 全同）；`ReflectionClass::implementsInterface`（is_a? 传递闭包 + 接口不存在 ReflectionException）；harness 注入 TEST_PHP_EXECUTABLE(_ESCAPED) + cli 认 `--no-php-ini` | tests: po/sync-family 探针 BYTE-IDENTICAL；g1/g2/ii IDENTICAL；门禁全量 PASS（412 收敛）；zend-exit 12→11（exit_statements 清，env 注入生效） | commit: 本 commit
+
 ### 恢复点（下会话从这里继续）
 
 **当前收敛点：proc_open 族实现**（artisan 唯一堵点 = sebastian/version.php:88 的 `@proc_open(['git','describe'], [1=>['pipe','w']], $pipes)`；同时解锁 zend-exit 的 exit_values/exit_statements/exit_named_arg/exit_string_with_buffer_output 4 例）。

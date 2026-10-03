@@ -2276,6 +2276,27 @@ defmodule PhpBeam.Classes.Table do
             native_fn("getAttributes", fn obj, _args, i ->
               {:ok, {{:array, PArray.new()}, obj}, i}
             end),
+            native_fn("implementsInterface", fn obj, args, i ->
+              key = rc_state(obj) |> Map.get("key")
+
+              case rc_resolve_key(obj, args, i) do
+                {:ok, ikey} ->
+                  case get_class(i, ikey) do
+                    %{kind: :interface} ->
+                      {:ok, {{:bool, is_a?(i, key, ikey)}, obj}, i}
+
+                    _ ->
+                      rc_throw(
+                        obj,
+                        i,
+                        "Interface \"" <> dt_s(Enum.at(args, 0, :null)) <> "\" does not exist"
+                      )
+                  end
+
+                err ->
+                  err
+              end
+            end),
             native_fn("isInstantiable", fn obj, _args, i ->
               key = rc_state(obj) |> Map.get("key")
               c = get_class(i, key)

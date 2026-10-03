@@ -374,6 +374,10 @@ defmodule PhpBeam.Builtin.StreamFns do
   # Returns {data, interp}; EOF yields "" (and sets eof on plain resources)
   defp unified_read(i, _r, %{std: _}, _len), do: {"", i}
 
+  # proc_open pipes (fd1 = port stdout, fd2 = redirected temp file)
+  defp unified_read(i, r, %{proc_pipe: _} = res, len),
+    do: PhpBeam.Builtin.ProcFns.pipe_read(i, r, res, len)
+
   defp unified_read(i, r, %{filt: f}, len) do
     inner = PhpBeam.Interp.get_resource(i, f.inner)
 
@@ -545,6 +549,10 @@ defmodule PhpBeam.Builtin.StreamFns do
   end
 
   defp unified_write(i, _r, %{std: :stdin}, _data), do: {:ok, {:int, 0}, i}
+
+  # proc_open fd0 pipe: fwrite feeds the child's stdin
+  defp unified_write(i, r, %{proc_pipe: _} = res, data),
+    do: PhpBeam.Builtin.ProcFns.pipe_write(i, res, data)
 
   # php://output rides the output-buffering machinery (probed: interleaves
   # with ob content); php://stdout BYPASSES ob — write_direct appends to the

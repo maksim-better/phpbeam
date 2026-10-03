@@ -1265,8 +1265,17 @@ defmodule PhpBeam.Eval do
 
   defp adv_key(%{gen_ctx: ctx} = i, k) do
     case k do
-      {:int, n} -> %{i | gen_ctx: %{ctx | key: n + 1}}
-      _ -> %{i | gen_ctx: %{ctx | key: ctx[:key] + 1}}
+      {:int, n} ->
+        %{i | gen_ctx: %{ctx | key: n + 1}}
+
+      # keyless: use-and-bump. Explicit STRING keys do NOT move the auto
+      # counter — php's generator numbers independently of string keys
+      # (probed 8.4: yield "a"=>1; yield 2; → keys a, 0)
+      nil ->
+        %{i | gen_ctx: %{ctx | key: ctx[:key] + 1}}
+
+      _ ->
+        i
     end
   end
 
