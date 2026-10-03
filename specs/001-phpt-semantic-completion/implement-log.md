@@ -34,6 +34,8 @@
 
 - [x] T009 R4c 映射表：scripts/gate_map.conf V1（lib/ 引擎核心→ALL；test/scripts/docs/specs/md→空=快通道；未命中→ALL fail-safe 由 gate.sh 执行）+ phpbeam_map_dirs 三处真 bug 修复（zsh 单字符修剪陷阱→emulate -L+extendedglob 纯参数展开；`X/**/Y` 在 [[ == ]] 下零目录不命中→双行模式；stdin 传参弄反→printf 管道） | tests: 提取函数单测 10/10（lib 两级→ALL、test/docs/scripts/specs→EMPTY、未命中→ALL）；端到端默认 lane：分支 diff 含 lib → 映射 ALL → full PASS（348/348 只收缩+自检） | commit: 本 commit
 
+- [x] T010 R4d 判定命令：scripts/criterion.sh——freeze（只认豁免集）/phase <相>（豁免∪顺延）双模式、EXEMPT-CASE（标识或 */后缀双形态匹配）/EXEMPT-DIR/DEFER 三类标记行解析、无分片 exit 2 提示先跑 full。zsh 两陷阱：`%% (*` 的括号是模式分组符→改截首空格；`*/"$id"` 未全引用被当文件名展开→全引号 | tests: 四态矩阵——freeze 基线 348=0+0+348(exit1)；+1 CASE→豁免1/未登记347；+DIR lang→豁免112；+DEFER strings(phase Z)→容忍7/未登记229——计数逐一精确，账本合成后还原 | commit: 本 commit
+
 ### Phase 2 验证（D5）
 - 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
 - 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）
