@@ -81,19 +81,9 @@
 
 ### 恢复点（下会话从这里继续）
 
-**当前收敛点：proc_open 族实现**（artisan 唯一堵点 = sebastian/version.php:88 的 `@proc_open(['git','describe'], [1=>['pipe','w']], $pipes)`；同时解锁 zend-exit 的 exit_values/exit_statements/exit_named_arg/exit_string_with_buffer_output 4 例）。
+**artisan 链当前层**：`Class "Some" not found`（= PhpOption\Some，包在 vendor/phpoption）——**use 导入解析在特定上下文失效**（错误报短名，疑 static-call/isset? 路径没过 interp.uses.normal）。同场需修 `Assign.isset?:684` 的 val 硬解（fatal 穿 `??` 变 badmatch——清扫族漏网位）。
 
-**设计已定**（探针基线 /tmp/po.php 过）：fd0/1 走 Port stdio（interp 进程持 mailbox，fread 时 `receive after 0` 排空缓冲）；fd2 管道走临时文件重定向（`… 2>tmp`，数组形经 `/bin/sh -c 'exec "$@" 2>tmp' sh argv`，纯数组形 `/usr/bin/env argv` PATH 解析）；数组/字符串双形；proc_close 等待 exit_status（≤5s）返回规范化退出码；同步族（exec/system/passthru/shell_exec）同一机制复用；escapeshellarg/cmd 纯字符串。
+**zend-exit 剩 11**：exit_values/exit_named_arg/exit_string_with_buffer（exit 参数弃用警告：`Passing null to parameter #1 ($status)…deprecations` + float 15.5 隐转警告 + named arg `status:`）、ast_print ×4（assert 消息的 zend_ast dump 含 exit）、disabling ×2（disable_functions 摸 exit/die 的 startup 警告 `Cannot disable function exit() in Unknown on line 0`）、die_string_cast（`exit(): Argument #1 ($status) must be of type string|int, stdClass given`）、exit_as_function（exit/die 的 FCC `exit(...)`）。
 
-**实现前必读**（上轮草稿因未核接口被弃）：
-1. `PhpBeam.Interp` 资源 API 实名（735-746 行一带：get_resource/2 旁的新建/删除函数名）
-2. `StreamFns.unified_read` 加 `%{proc_pipe:}` 分支的接线（资源须能回写自身句柄——参考 mem 资源怎么持 key）
-3. by-ref 写回用 `{:ref_call, ret, [新值列表], interp}`（sockets create_pair 范型）；proc_open 的 refs/skip_eval_refs = [2]，exec = [1,2]
-4. fwrite 对 fd0 管道 → `Port.command`（fclose(pipes[0]) v1 no-op——stdin-EOF 无端口支持，登记 deferred）
-5. 挂进 `Builtin.registry` 的 register 链 + builtin.ex 的 @param_names 如需
-6. v1 边界预登记 deferred：fd0 EOF 缺失、descriptor 'file' 形、proc_terminate 近似、真异步 get_status
-
-完成 proc_open 后：重跑 `/tmp/po.php` 双引擎对拍 → artisan --version 预期打穿或暴露下一层 → zend-exit 复跑收缩 12→~8 → 提交。剩余 12 例分解：ast_print ×4（assert 的 AST dump 含 exit）、disabling ×2（disable_functions 对不可禁函数的 startup 警告 `in Unknown on line 0`）、die_string_cast（exit 的 TypeError 措辞 `Argument #1 ($status) must be of type string|int, stdClass given`）、exit_as_function（exit/die 的 FCC）、exec 族 4 例。
-
-**Laravel 冒烟链现况**：vendor 就位；artisan 已从 badmatch 内错打穿到 PHP 层正规错误（0dee0aa）。
+** artisan 每修一层剥一洋葱**：FILTER→badmatch 清扫→proc_open→生成器键→implementsInterface→现在 PhpOption 导入层。
 
