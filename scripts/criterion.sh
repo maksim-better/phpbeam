@@ -8,7 +8,10 @@
 # 账本（docs/matrix/，机器可读标记行，格式见 contracts/baseline-formats.md）：
 #   EXEMPT-CASE <用例标识或 php-src 相对路径> | 理由 | 解除: 条件   —— 终态豁免（两种模式都计入）
 #   EXEMPT-DIR  <dir-id>                      | 理由 | 解除: 条件   —— 目录级豁免
-#   DEFER      <简述> | <dir-id[,…] 或 ALL>   | 根因… | 再入… | 登记…  —— 顺延（仅 phase 模式容忍）
+#   DEFER      <简述> | <作用域> | 根因… | 再入… | 登记…              —— 顺延
+#     作用域两种形态：`dir[,dir…]`（节级元数据，仅供检索，**不产生容忍**——防止
+#     少数根因放行整目录）；`case:<id>[,case:<id>…]`（分诊时逐例登记，phase 模式
+#     容忍且仅容忍这些用例）。
 # 顺延不计入 freeze 达标（规格 SC-006：豁免集才算数）。
 # 退出码：0=达标 1=未达标（列未登记项）2=输入缺失。
 set -u
@@ -37,12 +40,13 @@ fi
 # ---- 账本读取 ---------------------------------------------------------------
 exempt_cases=(${(f)"$(grep -h '^EXEMPT-CASE' docs/matrix/exempt.md 2>/dev/null | awk '{print $2}')"})
 exempt_dirs=(${(f)"$(grep -h '^EXEMPT-DIR' docs/matrix/exempt.md 2>/dev/null | awk '{print $2}')"})
-defer_dirs=()
+defer_cases=()
 if [ "$mode" = phase ]; then
   for f in ${(f)"$(grep -h '^DEFER' docs/matrix/deferred.md 2>/dev/null | awk -F'|' '{print $2}')"}; do
     f="${f// /}"
-    [ -n "$f" ] && defer_dirs+=(${(s:,:)f})
+    [ -n "$f" ] && defer_cases+=(${(s:,:)f})   # 仅 case:<id> 令牌产生容忍；dir 令牌是元数据
   done
+  defer_cases=(${(M)defer_cases:#case:*})
 fi
 
 # ---- 作差 -------------------------------------------------------------------
@@ -61,8 +65,8 @@ for line in ${(f)failures}; do
   fi
   if [ $hit -eq 1 ]; then exempted=$((exempted+1)); continue; fi
   if [ "$mode" = phase ]; then
-    for dd in "${defer_dirs[@]:-}"; do
-      [ "$dd" = "$dir" ] || [ "$dd" = ALL ] && { hit=2; break; }
+    for dc in "${defer_cases[@]:-}"; do
+      [ "$dc" = "case:$id" ] || [ "$dc" = "case:*/$id" ] && { hit=2; break; }
     done
     if [ $hit -eq 2 ]; then tolerated=$((tolerated+1)); continue; fi
   fi

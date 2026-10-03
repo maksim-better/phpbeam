@@ -174,3 +174,34 @@
 ## T006（2026-10-03，spec 001）
 
 - [ ] **log_errors 的 stderr 副本通道**：log_errors=1 且 error_log 空时，php 对每条错误/弃用在显示副本之外再写一行 `PHP Xxx: message in file on line N` 到 stderr（差分 harness 只比 stdout 故 47–52 不可见；手工 2>&1 比对暴露——52_d3_pgsql）。错误协议域，Z 相 Zend 错误类用例预计踩到时一并接上（A1 的 warn 管线补 log 通道）
+
+## 机器可读标记行（T011，2026-10-03——存量节转写，语义不变）
+
+节级 DEFER 行：作用域=dir-id（**仅供检索的元数据，不产生 phase 容忍**——容忍只认
+`case:<id>` 逐例登记，criterion.sh 执行；防少数根因放行整目录）。逐例 case: 标记
+在 Z/X 分诊时随批补写；原散文节保持权威。
+引擎域 = tests/{lang,strings,func,classes,basic,output} 六目录。
+
+DEFER A1 错误协议（E_STRICT 常量/闭包 var_dump/assign 派发） | lang,strings,func,classes,basic,output | 根因: 见 A1 节 | 再入: Z 相错误协议类分诊 | 登记: 2026-09-26
+DEFER H0 顺延（short_tags/unset_properties/析构次序…） | lang,strings,func,classes,basic,output | 根因: 见 H0 节 | 再入: Z 相 | 登记: 2026-09-26
+DEFER B1 date（DatePeriod foreach/createFromFormat 全说明符…） | ext-date | 根因: 见 B1 节 | 再入: X1-ext-date | 登记: 2026-09-26
+DEFER B2 mbstring（mb_ereg 族 11/kana/send_mail…） | ext-mbstring,ext-ctype,ext-iconv | 根因: 见 B2 节 | 再入: X1 对应目录 | 登记: 2026-09-26
+DEFER B3 数组族（uintersect_assoc slot 语义/multisort 全语法） | func,basic,ext-standard | 根因: 见 B3 节 | 再入: X1 | 登记: 2026-09-26
+DEFER B4 Reflection（返回类型反射/invoke/文件行号族） | ext-reflection | 根因: 见 B4 节（返回类型=深度工程，Z 相超盒拆里程碑） | 再入: X1-ext-reflection | 登记: 2026-09-26
+DEFER B5 SPL（stack/queue foreach 第二轮/FixedArray 引擎写路径…） | ext-spl | 根因: 见 B5 节 | 再入: X1-ext-spl | 登记: 2026-09-26
+DEFER B6 hash/tokenizer/filter（token 非键类别/废弃过滤器…） | ext-hash,ext-tokenizer,ext-filter,ext-json,func | 根因: 见 B6 节 | 再入: X1 对应目录 | 登记: 2026-09-26
+DEFER B7 bcmath/gmp/session/readline（GMP id 回收/随机流/自定义 handler…） | ext-bcmath,ext-gmp,ext-session,ext-readline | 根因: 见 B7 节 | 再入: X1 对应目录 | 登记: 2026-09-27
+DEFER C1 zlib+zip（gzpassthru 写模式/条目压缩方法…） | ext-zlib,ext-zip | 根因: 见 C1 节 | 再入: X2 对应目录 | 登记: 2026-09-29
+DEFER C1c Phar（写路径物化/PharData 写/alias 注册表…） | ext-phar | 根因: 见 C1c 节 | 再入: X2-ext-phar | 登记: 2026-09-29
+DEFER C2 openssl（seal/open by-ref/CSR 族/cipher 名单…） | ext-openssl | 根因: 见 C2 节 | 再入: X2-ext-openssl | 登记: 2026-09-29
+DEFER C3 sockets（select/addrinfo/cmsg/INET6…） | ext-sockets | 根因: 见 C3 节 | 再入: X2-ext-sockets | 登记: 2026-09-30
+DEFER C4 curl（重定向链/认证/multi 真并发/CA bundle…） | ext-curl | 根因: 见 C4 节 | 再入: X2-ext-curl | 登记: 2026-09-30
+DEFER C5 ftp（ftp:// 包装器/size/mdtm/nb_*…） | ext-ftp | 根因: 见 C5 节 | 再入: X2-ext-ftp | 登记: 2026-09-30
+DEFER C6 xml 族（XMLWriter/Reader/DOM 变异穿透全集…） | ext-xml,ext-dom,ext-simplexml | 根因: 见 C6 节 | 再入: X2 对应目录 | 登记: 2026-09-30
+DEFER C7 posix（身份切换桩/TTY 探测…） | ext-posix | 根因: 见 C7 节 | 再入: X2-ext-posix | 登记: 2026-09-30
+DEFER D1 PDO（FETCH_OBJ 族/ERRMODE/持久连接…） | ext-pdo,ext-pdo_mysql,ext-mysqli | 根因: 见 D1 节 | 再入: X2 对应目录 | 登记: 2026-09-30
+DEFER D2 sqlite3（:memory: 映射/BLOB/构建链登记…） | ext-sqlite3,ext-pdo_sqlite | 根因: 见 D2 节 | 再入: X2 对应目录 | 登记: 2026-09-30
+DEFER D3 pgsql（活库差分/equery 活测/大对象…） | ext-pgsql,ext-pdo | 根因: 见 D3 节 | 再入: X2-ext-pgsql（服务器可得时） | 登记: 2026-09-30
+DEFER D4 mysqli（by-ref 执行期重读/stmt_fetch 写回/multi-async 12…） | ext-mysqli | 根因: 见 D4 批1/批2 节 | 再入: X2-ext-mysqli | 登记: 2026-09-30
+DEFER 工具链（MIX_REBAR3 流程/http_test 孤儿进程…） | （构建域，无目录关联） | 根因: 见工具链节 | 再入: 持续 | 登记: 2026-09-30
+DEFER T006 log_errors stderr 副本通道 | lang,strings,func,classes,basic,output | 根因: A1 warn 管线缺 log 通道 | 再入: Z 相错误协议类分诊 | 登记: 2026-10-03

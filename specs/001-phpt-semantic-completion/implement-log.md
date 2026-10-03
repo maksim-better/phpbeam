@@ -36,6 +36,8 @@
 
 - [x] T010 R4d 判定命令：scripts/criterion.sh——freeze（只认豁免集）/phase <相>（豁免∪顺延）双模式、EXEMPT-CASE（标识或 */后缀双形态匹配）/EXEMPT-DIR/DEFER 三类标记行解析、无分片 exit 2 提示先跑 full。zsh 两陷阱：`%% (*` 的括号是模式分组符→改截首空格；`*/"$id"` 未全引用被当文件名展开→全引号 | tests: 四态矩阵——freeze 基线 348=0+0+348(exit1)；+1 CASE→豁免1/未登记347；+DIR lang→豁免112；+DEFER strings(phase Z)→容忍7/未登记229——计数逐一精确，账本合成后还原 | commit: 本 commit
 
+- [x] T011 账本标记行：exempt.md +18 行 EXEMPT-DIR（16 扩展+OPcache+FFI 编译类）；deferred.md 存量 24 节转写 DEFER 作用域行（转写不改语义，散文节保持权威）。**Ruling（判定语义收紧）**：节级 DEFER 作用域仅元数据不产生容忍——容忍只认分诊时逐例 `case:<id>` 标记（否则 15 条引擎根因可放行全部 348，phase 判据失真）；criterion.sh 同步收紧并回归 | tests: 转写后 freeze/phase 均 348=0+0+348（目录级行指未纳入目录、节级零容忍——设计行为实证）；case: 逐例容忍此前已验证 1=1 | commit: 本 commit
+
 ### Phase 2 验证（D5）
 - 命令：`./phpx -r 'echo 1+1;'` → `2`；`mix test --exclude phpt` 
 - 输出摘要：`Finished in 16.8s … 127 tests, 0 failures (698 excluded)`，EXIT=0（698 excluded = phpt 全套件，PHP_SRC 已就位）
