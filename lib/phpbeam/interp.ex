@@ -124,9 +124,10 @@ defmodule PhpBeam.Interp do
   # symlink cycles: give up and append the unresolved tail
   defp resolve_r(parts, acc, _n), do: "/" <> Path.join(Enum.reverse(acc) ++ parts)
 
-  def run(src, file \\ nil, ini_entries \\ []) do
+  def run(src, file \\ nil, ini_entries \\ [], argv \\ [], display \\ nil) do
     # the caller (cli) decides the spelling: real path for files,
-    # "Command line code" for -r — matching php's __FILE__
+    # "Command line code" for -r — matching php's __FILE__ (canonicalized);
+    # `display` is the as-invoked spelling php keeps in $_SERVER keys
     interp =
       %__MODULE__{
         file_stack: if(file, do: [file], else: []),
@@ -134,7 +135,8 @@ defmodule PhpBeam.Interp do
         ini_global: PhpBeam.Ini.apply_entries(%{}, ini_entries, :startup)
       }
       |> register_builtins()
-      |> seed_server(file)
+      |> seed_server(display || file)
+      |> seed_argv(argv)
 
     env = Env.global_scope(argv_info(src))
 
@@ -339,6 +341,28 @@ defmodule PhpBeam.Interp do
   defp maybe_line(l), do: " on line #{l}"
 
   defp argv_info(_src), do: []
+
+  # CLI $argv/$argc superglobals (php CLI SAPI always defines them; argv[0]
+  # is the script path as invoked / "Standard input code" for -r — probed
+  # against php 8.4.17). $_SERVER['argv'/'argc'] mirrors the same list.
+  defp seed_argv(interp, []), do: interp
+
+  defp seed_argv(interp, argv) do
+    arr = PArray.from_pairs(Enum.map(argv, &{nil, {:string, &1}}))
+
+    globals =
+      interp.globals
+      |> Map.put("argv", {:array, arr})
+      |> Map.put("argc", {:int, length(argv)})
+      |> Map.update("_SERVER", {:array, PArray.new()}, fn {:array, srv} ->
+        # PArray.put returns {:ok, arr} — unwrap, don't pipe
+        {:ok, s1} = PArray.put(srv, "argv", {:array, arr})
+        {:ok, s2} = PArray.put(s1, "argc", {:int, length(argv)})
+        {:array, s2}
+      end)
+
+    %{interp | globals: globals}
+  end
 
   @doc "placeholder interp for contexts without one"
   def new_stub, do: %__MODULE__{}

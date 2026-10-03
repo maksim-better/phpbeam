@@ -28,8 +28,8 @@ defmodule PhpBeam.CLI do
       ["--help" | _] ->
         IO.puts(@usage)
 
-      ["-r", code | _] ->
-        run_code("<?php " <> code, "Command line code", ini_entries)
+      ["-r", code | rest] ->
+        run_code("<?php " <> code, "Command line code", ini_entries, ["Standard input code" | strip_dd(rest)])
 
       ["--repl"] ->
         PhpBeam.Repl.start()
@@ -38,10 +38,12 @@ defmodule PhpBeam.CLI do
         {docroot, port} = serve_opts(srv_rest)
         PhpBeam.Http.serve(docroot, port)
 
-      [file | _rest] ->
+      [file | rest] ->
         case File.read(file) do
           {:ok, src} ->
-            run_code(src, script_path(file), ini_entries)
+            # __FILE__ is the canonicalized path; $argv[0] and the $_SERVER
+            # SCRIPT keys keep the spelling as invoked — both probed against php
+            run_code(src, script_path(file), ini_entries, [file | strip_dd(rest)], file)
 
           {:error, _} ->
             IO.puts(:stderr, "Could not open input file: #{file}")
@@ -56,6 +58,11 @@ defmodule PhpBeam.CLI do
 
   # php-style startup INI flags; stops at the first non-flag argument
   defp ini_options(args), do: ini_options(args, [])
+
+  # `php script.php -- a b` / `php -r code -- a b`: one leading `--` separates
+  # SAPI args from script args; without it the extras still go to $argv
+  defp strip_dd(["--" | rest]), do: rest
+  defp strip_dd(rest), do: rest
 
   defp ini_options(["-n" | rest], _acc), do: ini_options(rest, [])
 
@@ -103,17 +110,17 @@ defmodule PhpBeam.CLI do
     PhpBeam.Ini.parse_file(full)
   end
 
-  def run_code(src, file \\ nil, ini_entries \\ []) do
-    {out, code} = run_and_capture(src, file, ini_entries)
+  def run_code(src, file \\ nil, ini_entries \\ [], argv \\ [], display \\ nil) do
+    {out, code} = run_and_capture(src, file, ini_entries, argv, display)
     IO.write(out)
     if code != 0, do: System.halt(code)
   end
 
-  def run_and_capture(src, file \\ nil, ini_entries \\ []) do
+  def run_and_capture(src, file \\ nil, ini_entries \\ [], argv \\ [], display \\ nil) do
     task =
       Task.async(fn ->
         try do
-          PhpBeam.Interp.run(src, file, ini_entries)
+          PhpBeam.Interp.run(src, file, ini_entries, argv, display)
         catch
           :exit, r ->
             {"PHP Fatal error:  internal exit " <> inspect(r, limit: 6) <> "\n", 255, nil}
