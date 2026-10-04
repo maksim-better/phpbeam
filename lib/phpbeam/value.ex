@@ -44,7 +44,7 @@ defmodule PhpBeam.Value do
   def type({:array, _}), do: :array
   def type({:object, _}), do: :object
   # runtime closures are Closure OBJECTS (php: gettype = "object")
-  def type({:closure, _, _, _, _, _, _, _}), do: :object
+  def type({:closure, _, _, _, _, _, _, _, _}), do: :object
   def type(_other), do: :string
 
   def gettype(v) do
@@ -408,6 +408,7 @@ defmodule PhpBeam.Value do
   end
 
   def strict_eq({:object, a}, {:object, b}), do: object_identity(a, b)
+  def strict_eq({:closure, id, _, _, _, _, _, _, _}, {:closure, id, _, _, _, _, _, _, _}), do: true
   def strict_eq(_, _), do: false
 
   defp strict_pairs_eq([{_, v1} | r1], [{_, v2} | r2]) do

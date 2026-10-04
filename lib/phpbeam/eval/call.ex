@@ -143,7 +143,7 @@ defmodule PhpBeam.Eval.Call do
     do: invoke_fcc(f, args, env, interp)
 
   def call_value(
-        {:closure, params, body, captures, _arrow?, def_file, def_line, gen?},
+        {:closure, _id, params, body, captures, _arrow?, def_file, def_line, gen?},
         args,
         env,
         interp
@@ -221,7 +221,7 @@ defmodule PhpBeam.Eval.Call do
 
   def call_cb(cb, call_args, env, interp)
 
-  def call_cb({:closure, _, _, _, _, _, _, _} = closure_value, call_args, env, interp),
+  def call_cb({:closure, _, _, _, _, _, _, _, _} = closure_value, call_args, env, interp),
     do: call_value(closure_value, wrap_args(call_args), env, interp)
 
   def call_cb({:closure, _, _, _, _, _} = closure_ast, call_args, env, interp) do

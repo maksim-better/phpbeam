@@ -788,11 +788,11 @@ defmodule PhpBeam.Builtin.MiscFns do
   end
 
   defp callable_name({:string, n}), do: n
-  defp callable_name({:closure, _, _, _, _, _, _, _}), do: "Closure"
+  defp callable_name({:closure, _, _, _, _, _, _, _, _}), do: "Closure"
   defp callable_name({:array, _}), do: ""
   defp callable_name(_), do: ""
 
-  defp callable?({:closure, _, _, _, _, _, _, _}, _i), do: true
+  defp callable?({:closure, _, _, _, _, _, _, _, _}, _i), do: true
 
   defp callable?({:string, name}, i),
     do: Map.has_key?(i.functions, down(name))
@@ -822,7 +822,7 @@ defmodule PhpBeam.Builtin.MiscFns do
         {:ok, {:bool, down(obj.class) == cls or subclass?(obj.class, cls, i)}, i}
 
       # runtime closures are Closure instances
-      {:closure, _, _, _, _, _, _, _} ->
+      {:closure, _, _, _, _, _, _, _, _} ->
         {:ok, {:bool, cls == "closure"}, i}
 
       _ ->

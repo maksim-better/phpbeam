@@ -15,12 +15,16 @@ defmodule PhpBeam.Closure do
   # def_file/def_line feed php's `{closure:file:line}` naming; gen? marks a
   # generator-factory body (contains yield)
   def runtime(params, body, captures, arrow?, def_file, def_line, gen?) do
-    {:closure, params, body, captures, arrow?, def_file, def_line, gen?}
+    # element 2 is a unique id minted at CREATION: php closures are objects —
+    # copies of the same closure are identical (=== true), two creations of
+    # identical source are distinct. Structural equality can't express that.
+    {:closure, :erlang.unique_integer([:positive]), params, body, captures,
+     arrow?, def_file, def_line, gen?}
   end
 
   def ast?({:closure, _, _, _, _, _}), do: true
   def ast?(_), do: false
 
-  def runtime?({:closure, _, _, _, _, _, _, _}), do: true
+  def runtime?({:closure, _, _, _, _, _, _, _, _}), do: true
   def runtime?(_), do: false
 end

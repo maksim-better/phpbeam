@@ -333,14 +333,14 @@ defmodule PhpBeam.Classes.Reflection2 do
     )
   end
 
-  # closure value: {:closure, params, body, captures, arrow?, def_file, def_line, gen?}
+  # closure value: {:closure, id, params, body, captures, arrow?, def_file, def_line, gen?}
   defp closure_state(obj, cb, i) do
-    params = elem(cb, 1)
+    params = elem(cb, 2)
 
     name =
-      case elem(cb, 5) do
+      case elem(cb, 6) do
         nil -> "{closure}"
-        f -> "{closure:#{f}:#{elem(cb, 6)}}"
+        f -> "{closure:#{f}:#{elem(cb, 7)}}"
       end
 
     st_put(obj, "name", name)

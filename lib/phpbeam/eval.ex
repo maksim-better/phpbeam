@@ -1079,7 +1079,7 @@ defmodule PhpBeam.Eval do
 
       # runtime closures ARE Closure instances (the container's
       # `instanceof Closure` checks on binding concretes)
-      {{:closure, _, _, _, _, _, _, _}, {:ok, tkey}} ->
+      {{:closure, _, _, _, _, _, _, _, _}, {:ok, tkey}} ->
         {{:val, {:bool, PhpBeam.Classes.is_a?(interp2, "closure", tkey)}}, env2, interp2}
 
       {_, _} ->
