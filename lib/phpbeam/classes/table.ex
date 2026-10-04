@@ -791,7 +791,9 @@ defmodule PhpBeam.Classes.Table do
   end
 
   defp check_abstract_methods(class, key, chain, interp) do
-    if class.abstract? do
+    # php: abstract methods in a TRAIT are requirements on the USING class —
+    # the trait itself is never "incomplete" (ParsesLogConfiguration)
+    if class.abstract? or class.kind == :trait do
       :ok
     else
       ancestors = chain ++ class.interfaces

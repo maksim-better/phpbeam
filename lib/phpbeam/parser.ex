@@ -539,17 +539,20 @@ defmodule PhpBeam.Parser do
   end
 
   defp use_trait_names(ts, acc) do
-    {parts, rest, _} = qualified_name(ts)
+    # keep the fq flag: `use \Nx\Helper` inside `namespace Ny;` must NOT get
+    # the ns re-prepended (LogManager's cross-ns traits)
+    {parts, rest, fq} = qualified_name(ts)
+    entry = {parts, fq}
     {yes, rest2} = take_op(rest, ",")
 
     # stop if the next token opens a { block (adaptions)
     if yes and not at_op?(rest2, "{") do
-      use_trait_names(rest2, [parts | acc])
+      use_trait_names(rest2, [entry | acc])
     else
       if yes do
-        {Enum.reverse([parts | acc]), rest2}
+        {Enum.reverse([entry | acc]), rest2}
       else
-        {Enum.reverse([parts | acc]), rest}
+        {Enum.reverse([entry | acc]), rest}
       end
     end
   end

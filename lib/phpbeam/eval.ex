@@ -165,18 +165,31 @@ defmodule PhpBeam.Eval do
   end
 
   def eval({:index, container, idx}, env, interp) do
-    {{:val, c}, env2, interp2} = eval(container, env, interp)
+    case eval(container, env, interp) do
+      # defensive unwrap: some producer wraps an already-complete unwind
+      # signal once more — strip the extra layer so the throw propagates
+      {{:unwind, {:unwind, _} = inner}, e2, i2} ->
+        {inner, e2, i2}
 
-    case idx do
-      nil ->
-        case EvalError.warn(env2, interp2, "Cannot use [] for reading") do
-          {:cont, _, i3} -> {{:val, :null}, env2, i3}
-          {:unwind, u, _, i3} -> {{:unwind, u}, env2, i3}
-        end
+      {{:val, c}, env2, interp2} ->
+        index_body(c, idx, env2, interp2)
 
-      idx_expr ->
-        {{:val, i}, env3, interp3} = eval(idx_expr, env2, interp2)
-        index_read(c, i, env3, interp3)
+      other ->
+        other
+    end
+  end
+
+  defp index_body(c, nil, env2, interp2) do
+    case EvalError.warn(env2, interp2, "Cannot use [] for reading") do
+      {:cont, _, i3} -> {{:val, :null}, env2, i3}
+      {:unwind, u, _, i3} -> {{:unwind, u}, env2, i3}
+    end
+  end
+
+  defp index_body(c, idx_expr, env2, interp2) do
+    case eval(idx_expr, env2, interp2) do
+      {{:unwind, _} = u, e3, i3} -> {u, e3, i3}
+      {{:val, i}, e3, i3} -> index_read(c, i, e3, i3)
     end
   end
 
@@ -745,7 +758,16 @@ defmodule PhpBeam.Eval do
     {cur0, get_env, interp2} = read_target(target, env, interp)
     cur = deref(cur0, interp2)
 
-    {{:val, r}, env2, interp3} = eval(rhs, get_env, interp2)
+    case eval(rhs, get_env, interp2) do
+      {{:unwind, _} = u, e2, i2} ->
+        {u, e2, i2}
+
+      {{:val, r}, env2, interp3} ->
+        assign_op_result(op, target, rhs, cur, r, env2, interp3, get_env)
+    end
+  end
+
+  defp assign_op_result(op, target, _rhs, cur, r, env2, interp3, get_env) do
 
     result =
       case op do
