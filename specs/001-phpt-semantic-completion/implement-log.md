@@ -85,6 +85,8 @@
 
 - [x] T016b trait 双语义修 + unwind 传播：①`use_trait_names` 丢 qualified_name 的 **fq 标志**（`\Nx\Helper` 被 ns 重叠成 `ny\nx\helper`——`use \Nx\Helper` in ns Ny 探针钉死）；②**trait 抽象方法被按类的完整性执法**（`ParsesLogConfiguration` 含 abstract → "must be declared abstract" fatal → 注册中止 → LogManager 消失——即 T016b「autoload 丢类」的因果链全通）——`check_abstract_methods` 对 kind==:trait 豁免；③assign_op RHS 与 index 容器/索引路径的 val 硬解改 unwind 传播；④index 容器**双包 unwind 防御性解包**（某产地把完整 unwind 再裹一层——未追到产地，防御层兜底，登记待查）。php 8.4 语义点：trait 抽象方法=用类要求 | tests: nt/nt2/dt 探针、LogManager class_exists bool(true)、artisan 进到 `BindingResolutionException: Target class [config] does not exist`（容器绑定层——`config` 别名绑定未注册，下一层）；fast lane PASS | commit: 1189ec7
 
+- [x] T017-p4 反射双修：ReflectionFunction 构造器认 registry 的 `{:user,...}` 元组（此前只认 map→用户函数 "does not exist"）；`ReflectionParameter->name` 真实属性化（两处生成点写入实例动态属性表——php 把 name 作为属性暴露，Laravel 容器 `$dependency->name` 直读） | tests: rp/rc/bt/alias 探针全同；fast+lang+classes+zend-exit lane PASS | commit: f571f15
+
 ### 恢复点（下会话从这里继续）
 
 **artisan 当前层（T016b 本案）**：`Class "illuminate\log\logmanager" not found`（LogServiceProvider(49)→loadClass→includeFile 文件跑了但类没落账）。**最小复现已固化**：`phpx -r 'require "vendor/autoload.php"; var_dump(class_exists("Illuminate\\Log\\LogManager"));'` → phpx false / php true。**已探明的机制**：fetch_class 的 autoload reduce 里，composer 闭包返回 `{{:unwind,_},_,it2}` 且 **it2 的 classes 计数倒退**（125→124——unwind 携带陈旧 interp，把 include 期间注册的类回滚掉）＝ deferred「class_exists→autoload 注册进被丢弃 interp」的真身。下一步：沿 unwind 产地追（嫌疑：call_cb/call_function 的 return-unwind 或 fatal_violation catch 携带 call 前 interp 的路径；在 include 返回点打印 classes 计数二分定位）。
