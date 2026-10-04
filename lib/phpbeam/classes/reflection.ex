@@ -202,6 +202,9 @@ defmodule PhpBeam.Classes.Reflection2 do
 
         po2 =
           st_put(po, "pname", elem(p, 1))
+          # php exposes ->name as a real property (Laravel's container
+          # dependency resolution reads $dependency->name directly)
+          |> st_put("name", elem(p, 1))
           |> st_put("ptype", elem(p, 2))
           |> st_put("pdefault", elem(p, 3))
           |> st_put("by_ref", elem(p, 4))
@@ -209,7 +212,16 @@ defmodule PhpBeam.Classes.Reflection2 do
           |> st_put("position", idx)
           |> st_put("fn_name", st(obj)["name"] || "")
 
-        ib2 = PhpBeam.Objects.put_object(ib, oref, po2)
+        # ->name must be a REAL property (not just method/state) — the
+        # native class declares no props, so write into the instance's
+        # dynamic prop table (Laravel reads $dependency->name directly)
+        po3 =
+          case PArray.put(po2.props, {:string, "name"}, {:string, elem(p, 1)}) do
+            {:ok, pp} -> %{po2 | props: pp}
+            _ -> po2
+          end
+
+        ib2 = PhpBeam.Objects.put_object(ib, oref, po3)
         {oref, ib2}
       end)
 
@@ -254,6 +266,22 @@ defmodule PhpBeam.Classes.Reflection2 do
             case args do
               [{:string, fname} | _] ->
                 case Map.get(i.functions, String.downcase(fname)) do
+                  # userland fn: {:user, params, body, file, line, ns, uses}
+                  {:user, uparams, _, _, _, _, _} = uentry ->
+                    ps =
+                      Enum.map(uparams, fn
+                        {:param, n, _, _, _, _} -> {:param, n, nil, nil, false, false}
+                        n when is_binary(n) -> {:param, n, nil, nil, false, false}
+                      end)
+
+                    obj2 =
+                      st_put(obj, "name", fname)
+                      |> st_put("params", ps)
+                      |> st_put("builtin?", false)
+                      |> st_put("ret", elem(uentry, 0) == :ok and nil)
+
+                    {:ok, {{:null, obj2}, obj2}, i}
+
                   entry when is_map(entry) ->
                     # params: optional names list; absent → no parameters
                     ps =

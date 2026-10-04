@@ -2578,9 +2578,16 @@ defmodule PhpBeam.Classes.Table do
     {{:object, pid}, i2} = Eval.make_instance(i, "reflectionparameter")
     pob = Eval.get_object(i2, {:object, pid})
 
+    pob =
+      case PArray.put(pob.props, {:string, "name"}, {:string, pname}) do
+        {:ok, pp} -> %{pob | props: pp}
+        _ -> pob
+      end
+
     st =
       pob
       |> rc_put("pname", pname)
+      |> rc_put("name", pname)
       |> rc_put("ptype", ptype)
       |> rc_put("pdefault", pdefault)
       |> rc_put("pidx", {:int, idx})
