@@ -87,7 +87,12 @@
 
 - [x] T017-p4 反射双修：ReflectionFunction 构造器认 registry 的 `{:user,...}` 元组（此前只认 map→用户函数 "does not exist"）；`ReflectionParameter->name` 真实属性化（两处生成点写入实例动态属性表——php 把 name 作为属性暴露，Laravel 容器 `$dependency->name` 直读） | tests: rp/rc/bt/alias 探针全同；fast+lang+classes+zend-exit lane PASS | commit: f571f15
 
+- [x] T017-p5 闭包身份修复：`$f=fn();$g=$f;$f===$g` 恒 false（php true）——runtime 元组第 2 位铸 unique_integer、strict_eq 加闭包子句、8 处宽度匹配 + call_value/closure_state 位置解构随迁（call_value 漏改首跑 function_clause 当场抓获） | tests: ci/stp/stp2 全同；fast PASS | commit: 58f768f
+
 ### 恢复点（下会话从这里继续）
+
+**artisan 洋葱当前层（已定位到根）**：`LoadConfiguration` bootstrap → Symfony Finder 扫 config 目录 → **SPL 迭代器家族缺失**——`FilterIterator`/`IteratorIterator`/`FilesystemIterator`/`RecursiveDirectoryIterator`/`GlobIterator` 全无（`class_exists` 全 false；含 FileTypeFilterIterator extends \FilterIterator 注册即 fatal "Class filteriterator not found"）。**下一单元＝SPL 迭代器家族模块**（B5 债，X1-ext-spl 也要）：以 IteratorIterator（包装 inner Traversable，转发 current/key/next/rewind/valid）、FilterIterator（子类 override accept()；引擎驱动循环调 accept）、FilesystemIterator/RecursiveDirectoryIterator（目录扫 + SplFileInfo 产出）、GlobIterator（glob 模式）为骨架；Finder 另需 SplFileInfo 的 isFile/isDir/getFilename/getPathname 真目录语义（B5 里 SplFileInfo 族已有底子）。差分锚：`/tmp/lc.php`（LoadConfiguration standalone，php 侧 bool(true) bool(true)）。
+另记：容器 config 绑定问题为表象——真根即上（bootstrap 在 LoadConfiguration 炸，config 从未 instance）。
 
 **artisan 当前层（T016b 本案）**：`Class "illuminate\log\logmanager" not found`（LogServiceProvider(49)→loadClass→includeFile 文件跑了但类没落账）。**最小复现已固化**：`phpx -r 'require "vendor/autoload.php"; var_dump(class_exists("Illuminate\\Log\\LogManager"));'` → phpx false / php true。**已探明的机制**：fetch_class 的 autoload reduce 里，composer 闭包返回 `{{:unwind,_},_,it2}` 且 **it2 的 classes 计数倒退**（125→124——unwind 携带陈旧 interp，把 include 期间注册的类回滚掉）＝ deferred「class_exists→autoload 注册进被丢弃 interp」的真身。下一步：沿 unwind 产地追（嫌疑：call_cb/call_function 的 return-unwind 或 fatal_violation catch 携带 call 前 interp 的路径；在 include 返回点打印 classes 计数二分定位）。
 **环境注意**：OrbStack 会僵死（docker 命令也挂）→ osascript quit + open -a OrbStack + docker start phpbeam-mysql；机器高载时 fast lane 也会到 5 分钟。
