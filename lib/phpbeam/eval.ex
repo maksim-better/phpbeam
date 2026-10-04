@@ -436,7 +436,8 @@ defmodule PhpBeam.Eval do
       scope = env && env.scope_class
 
       cond do
-        vis == :private and scope != nil and scope != method.class and scope != class_key ->
+        vis == :private and scope != nil and scope != method.class and scope != class_key and
+            scope != Map.get(method, :owner) ->
           "Call to private method #{display_class(interp, method.class || class_key)}::#{method.name}() from scope #{display_class(interp, scope)}"
 
         scope == nil ->
@@ -450,12 +451,17 @@ defmodule PhpBeam.Eval do
           # call a protected method its child declares)
           visible =
             if vis == :private,
-              do: scope in [method.class, class_key],
+              do: scope in [method.class, class_key, Map.get(method, :owner)],
               else:
                 scope_in_chain?(interp, scope, method.class || class_key) or
                   scope_in_chain?(interp, method.class || class_key, scope) or
                   scope_in_chain?(interp, scope, class_key || method.class) or
-                  trait_used_by?(interp, scope, class_key || method.class)
+                  trait_used_by?(interp, scope, class_key || method.class) or
+                  # trait methods compiled into their owner: the owner scope
+                  # (and its chain) sees them protected (Date::safeCreateDateTimeZone
+                  # called from Carbon\Carbon's flattened ctor)
+                  scope_in_chain?(interp, scope, Map.get(method, :owner)) or
+                  scope_in_chain?(interp, Map.get(method, :owner), scope)
 
           # php compiles trait methods INTO the using class — a trait scope
           # sees the using class's protected members (EnumeratesValues →
@@ -2441,19 +2447,28 @@ defmodule PhpBeam.Eval do
     first = hd(parts)
     rest = tl(parts)
 
+    # php compiles trait methods INTO the using class: inside a trait scope,
+    # self/parent resolve against the runtime using class (called_class) —
+    # Carbon's Date trait does parent::__construct → DateTime
+    effective_scope =
+      case env && env.scope_class && interp.classes[env.scope_class] do
+        %{kind: :trait} -> env.called_class || env.scope_class
+        _ -> env && env.scope_class
+      end
+
     key =
       cond do
         fq == true ->
           Enum.join(parts, "\\")
 
-        first == "self" and env != nil and env.scope_class ->
-          join_maybe(env.scope_class, rest)
+        first == "self" and effective_scope ->
+          join_maybe(effective_scope, rest)
 
         first == "static" and env != nil ->
           join_maybe(env.called_class || env.scope_class, rest)
 
-        first == "parent" and env != nil and env.scope_class ->
-          parent = parent_key(interp, env.scope_class)
+        first == "parent" and effective_scope ->
+          parent = parent_key(interp, effective_scope)
           if parent, do: join_maybe(parent, rest), else: Enum.join(parts, "\\")
 
         alias_key = Map.get(interp.uses.normal, String.downcase(first)) ->

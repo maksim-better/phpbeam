@@ -261,6 +261,8 @@ defmodule PhpBeam.Eval.Assign do
               case key do
                 {:int, _} -> key
                 {:string, _} -> key
+                # object keys ride through (WeakMap offsets are objects)
+                {:object, _} -> key
                 _ -> :null
               end
 

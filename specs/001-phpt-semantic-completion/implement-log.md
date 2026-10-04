@@ -81,11 +81,11 @@
 
 - [x] T015-p3 + T017-p3 artisan 六连修（一波一 commit）：①isset? 全调用点（6 处）unwind 传播（coalesce/nullsafe/isset/empty/index；empty 的 else 重排 + index 的 if 壳重建两度失手）；②`new static::$prop(...)` 解析（表达式类源——`::`+var 手构 static_prop，rest 须吃 `::` 与 var 两 token；此前的 `Some not found` 是 coalesce 断路的级联假象）；③**签名兼容 self 展开**（php: 父签名 self=声明类，子类宽型兼容——展开为前导 `\` 绝对形走 types_equiv 解析；name 已含全名防双前缀、`=~` 不能进 guard 两坑）；④iterator_to_array 非 traversable 对象 TypeError（措辞 `Traversable|array`）+ dt_state 点访问 Map.get 化；⑤**原生接口 parent 链**（Iterator/IteratorAggregate extends Traversable——is_a? 走通，Some 属 Traversable）；⑥**trait 作用域可见性**（trait 方法编译期并入用类——trait scope 见用类 protected；trait_used_by? 深链含祖先 traits）。附带发现：native_error 在 catch 语境未物化成异常对象（$e 绑到消息串，ita 探针对着，登记待查） | tests: 差分 56（self 兼容）IDENTICAL、nx/ita/some-ok 探针过；门禁全量 PASS（412） | commit: 本 commit
 
+- [x] T015-p4 Z0 本体连修（13GB→已灭）：①**owner 章**——trait 方法编译期并入用类：merge_trait_methods 终态给展平方法盖 `owner:`（用类 FQ），fenv.scope_class 改用 owner（php 语义：self::/parent:: 按声明处编译类链而非运行时 LSB——否则 Carbon\Carbon 的 parent:: 永指自身→环）；②私/保护可见性补 owner 关系（trait 私有=用类私有；`true→` 兜底臂的可见性列表加 owner——**同措辞双臂陷阱**：专臂修了兜底臂仍在报错）；③**WeakMap 原生类**（v1 强存 props "wk<objid>" 键；Throwable 方法注入器把它覆写→跳过名单；引擎 index-assign 的 k 折叠加 `{:object,_}` 直通；offsetExists 的 `PArray.get 缺键回 :null 非 nil` 谓词）；④`method_exists(str,str)` 补 autoload（php 语义）。**13GB 循环已灭**（cs 从 7.8M 降到正常；artisan 到 LogManager 层）| tests: pv/pt/pp/wm/me 探针全同；差分 56；fast lane PASS（docker 僵死致 DB 例假红，OrbStack 重启+容器复活后过） | commit: 本 commit
+
 ### 恢复点（下会话从这里继续）
 
-**13GB 循环（T015 本体）已精确复现**：artisan 至 Carbon `Traits/Date.php`，循环三角 **1108↔1157↔1345**（魔术 `__get`→`getLocalMacro('get'.…)`→`executeCallableWithContext` 链），watchdog 240s 内 mem→**16GB**；objs=116/fns=1491/cls=225/inc=160 全稳定、out=13 稳定 → **非对象/注册表泄漏，是巨型 binary 或数组在 env/statics 累积**。前人在 interp.ex:842 留了 10 万语句 TRACE 哨兵（stderr，回头门控成 env 开关）。
-排查建议：对 statics（`static $formats` 每调用重算？）与 `localizedFormats`/macro 注册表的增长下手；用 :erlang.process_info binary 高水位（binary_memory）区分 binary vs term 泄漏；Carbon Traits/Date.php 的 mixin 展开与 LocalFactory 注册路径。
-
-**zend-exit 剩 11 分解**（上轮记录仍有效）：exit 参数弃用警告族（null/float/named-arg）、ast_print ×4（assert AST dump 含 exit）、disabling ×2（startup 警告 `in Unknown on line 0`）、die_string_cast（TypeError 措辞）、exit_as_function（FCC）。
-**附带债**：native_error 在 catch 未物化（$e 绑消息串）；require 实参优先级（`require X or die` 应解析为 require(X or die)——rq6 探针）；interp.ex:842 TRACE 门控。
+**artisan 当前层（T016b 本案）**：`Class "illuminate\log\logmanager" not found`（LogServiceProvider(49)→loadClass→includeFile 文件跑了但类没落账）。**最小复现已固化**：`phpx -r 'require "vendor/autoload.php"; var_dump(class_exists("Illuminate\\Log\\LogManager"));'` → phpx false / php true。**已探明的机制**：fetch_class 的 autoload reduce 里，composer 闭包返回 `{{:unwind,_},_,it2}` 且 **it2 的 classes 计数倒退**（125→124——unwind 携带陈旧 interp，把 include 期间注册的类回滚掉）＝ deferred「class_exists→autoload 注册进被丢弃 interp」的真身。下一步：沿 unwind 产地追（嫌疑：call_cb/call_function 的 return-unwind 或 fatal_violation catch 携带 call 前 interp 的路径；在 include 返回点打印 classes 计数二分定位）。
+**环境注意**：OrbStack 会僵死（docker 命令也挂）→ osascript quit + open -a OrbStack + docker start phpbeam-mysql；机器高载时 fast lane 也会到 5 分钟。
+**zend-exit 剩 11 分解**（同前）。附带债：native_error catch 未物化；require 实参优先级；TRACE 哨兵门控；WeakMap 弱语义/迭代键形、offsetGet 缺键应抛 Error（deferred 登记）。
 

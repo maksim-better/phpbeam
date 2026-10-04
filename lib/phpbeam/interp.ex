@@ -836,10 +836,14 @@ defmodule PhpBeam.Interp do
 
     :erlang.put(:stmt_ctr, n)
 
-    if rem(n, 100_000) == 0 do
+    # memory/runaway probe (old hunt leftover, now env-gated): PHPX_TRACE=N
+    # prints a sentinel every N statements with depth/binary counters
+    if (tr = System.get_env("PHPX_TRACE")) && rem(n, String.to_integer(tr)) == 0 do
+      bin = div(:erlang.memory(:binary) || 0, 1_048_576)
+
       IO.puts(
         :stderr,
-        "TRACE #{current_file(interp)}:#{interp.cur_line} mem=#{div(elem(:erlang.process_info(self(), :memory), 1), 1_048_576)}MB out=#{length(interp.out)} objs=#{map_size(interp.objects)} fns=#{map_size(interp.functions)} cls=#{map_size(interp.classes)} inc=#{map_size(interp.included)}"
+        "TRACE #{current_file(interp)}:#{interp.cur_line} cs=#{length(interp.call_stack)} mem=#{div(elem(:erlang.process_info(self(), :memory), 1), 1_048_576)}MB bin=#{bin}MB"
       )
     end
 

@@ -212,7 +212,18 @@ defmodule PhpBeam.Builtin.VarFns do
 
   defp method_exists_v([{:string, c}, {:string, m} | _], i) do
     key = PhpBeam.Eval.resolve_class_string(c, i)
-    {:ok, {:bool, PhpBeam.Classes.find_method(i, key, m) != nil}, i}
+
+    # php: method_exists() triggers the autoloader — Laravel's boot probes
+    # method_exists(static::class, …) on classes composer hasn't loaded yet
+    i2 =
+      if PhpBeam.Classes.get_class(i, key) == nil and i.autoload_fns != [] do
+        {_k, it2} = PhpBeam.Eval.fetch_class(i, key, c)
+        it2
+      else
+        i
+      end
+
+    {:ok, {:bool, PhpBeam.Classes.find_method(i2, key, m) != nil}, i2}
   end
 
   defp method_exists_v(_, i), do: {:ok, {:bool, false}, i}

@@ -43,6 +43,21 @@ defmodule PhpBeam.Eval.Finalize do
   defp terminal({:unwind, {:parse_error, msg, file, line}}, _env, interp),
     do: {Interp.parse_error_out(interp, "syntax error, " <> msg, file, line), 255, interp}
 
+  # double-wrapped unwinds (a bug signature) degrade to exit-0 rather than
+  # crash the final render — logged once at most per process
+  defp terminal(other, _env, interp) do
+    case :erlang.get(:dbl_unwind_logged) do
+      true ->
+        :ok
+
+      _ ->
+        :erlang.put(:dbl_unwind_logged, true)
+        IO.puts(:stderr, "phpx: double-wrapped unwind reached terminal: #{inspect(other, limit: 6)}")
+    end
+
+    Interp.finish(interp, 0)
+  end
+
   # set_exception_handler: the handler replaces the Uncaught render; the
   # script then terminates (probed php 8.4: exit code 0, no further output)
   defp exception_handler_terminal(cb, val, env, interp) do

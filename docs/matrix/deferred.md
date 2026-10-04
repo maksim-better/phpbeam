@@ -205,3 +205,11 @@ DEFER D3 pgsql（活库差分/equery 活测/大对象…） | ext-pgsql,ext-pdo 
 DEFER D4 mysqli（by-ref 执行期重读/stmt_fetch 写回/multi-async 12…） | ext-mysqli | 根因: 见 D4 批1/批2 节 | 再入: X2-ext-mysqli | 登记: 2026-09-30
 DEFER 工具链（MIX_REBAR3 流程/http_test 孤儿进程…） | （构建域，无目录关联） | 根因: 见工具链节 | 再入: 持续 | 登记: 2026-09-30
 DEFER T006 log_errors stderr 副本通道 | lang,strings,func,classes,basic,output | 根因: A1 warn 管线缺 log 通道 | 再入: Z 相错误协议类分诊 | 登记: 2026-10-03
+
+## T015/T016 间发现（2026-10-04，spec 001）
+
+- [ ] **WeakMap v1 边界**：强引用存储（弱回收需存活钩子）；foreach 键形非对象（迭代器近似）；offsetGet 缺键 php 抛 Error（v1 返 null）
+- [ ] native_error 在 catch 语境未物化（$e 绑到消息字符串而非异常对象——ita 探针对着）
+- [ ] `require X or die` 优先级：php 解析为 require(X or die)；我们解析为 (require X) or die（rq6 探针差分）
+- [ ] interp.ex 的 10 万语句 TRACE 哨兵（旧狩猎遗留）应门控为 env 开关
+- [ ] zend-exit 剩 11：exit 参数弃用警告族、ast_print ×4（assert AST dump）、disabling ×2（startup 警告）、die_string_cast（TypeError 措辞）、exit_as_function（FCC）

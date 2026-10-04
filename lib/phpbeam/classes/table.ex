@@ -387,10 +387,24 @@ defmodule PhpBeam.Classes.Table do
       {:error, "Trait \"#{bad}\" not found"}
     else
       merged = merge_trait_methods(class, trait_keys, adaptions, interp)
+      # php merges trait PROPERTIES into the using class too (Carbon's
+      # Options::$localMacros must read as declared-null from $this — NOT
+      # fall through to __get). Class's own props win; among traits the
+      # first declarer wins; same-name re-declaration is idempotent.
+      merged_props =
+        (class.props || []) ++
+          Enum.flat_map(trait_keys, fn tkey ->
+            case Map.get(interp.classes, tkey) do
+              %{props: props} when is_list(props) -> props
+              _ -> []
+            end
+          end)
+        |> Enum.uniq_by(fn p -> String.downcase(p.name) end)
+
       # thread the trait-loaded interp back: link_checks' signature
       # compatibility resolves types against the DECLARING class (the trait)
       # — those classes must be visible
-      {:ok, %{class | methods: merged, traits: trait_keys}, interp}
+      {:ok, %{class | methods: merged, props: merged_props, traits: trait_keys}, interp}
     end
   end
 
@@ -480,13 +494,29 @@ defmodule PhpBeam.Classes.Table do
       end
       |> Enum.uniq_by(&elem(&1, 0))
 
-    Enum.reduce(excluded_aliases, acc0, fn {alias_key, am}, acc ->
-      if Map.has_key?(class.methods, alias_key) or Map.has_key?(acc, alias_key) do
-        acc
-      else
-        Map.put(acc, alias_key, am)
-      end
+    merged =
+      Enum.reduce(excluded_aliases, acc0, fn {alias_key, am}, acc ->
+        if Map.has_key?(class.methods, alias_key) or Map.has_key?(acc, alias_key) do
+          acc
+        else
+          Map.put(acc, alias_key, am)
+        end
+      end)
+
+    # php compiles trait methods INTO the using class: self::/parent:: inside
+    # a flattened method resolve against the USING class's chain — NOT the
+    # runtime LSB child (called_class stays Illuminate\Support\Carbon while
+    # Carbon\Carbon's ctor must parent:: into DateTime, not re-enter itself)
+    own = class_owner_key(class)
+
+    Map.new(merged, fn {k, v} ->
+      if Map.has_key?(class.methods, k), do: {k, v}, else: {k, Map.put(v, :owner, own)}
     end)
+  end
+
+  defp class_owner_key(%{ns: ns, name: name}) do
+    base = if String.contains?(name, "\\"), do: name, else: Enum.join(ns ++ [name], "\\")
+    String.downcase(base)
   end
 
   defp insteadof_excluded?(mname, tkey, adaptions, interp) do
@@ -1215,6 +1245,7 @@ defmodule PhpBeam.Classes.Table do
     base = %{
       "stdclass" => native_stdclass(),
       "closure" => native_closure_class(),
+      "weakmap" => native_weakmap_class(),
       "reflectionclass" => patch_reflection_class(native_reflection_class()),
       "reflectionmethod" => patch_reflection_method(native_reflection_method_class()),
       "reflectionparameter" => native_reflection_parameter_class(),
@@ -1352,7 +1383,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection sqlite3 sqlite3result sqlite3stmt pdo pdostatement pdoexception simplexmlelement domdocument domelement domnode domtext domattr domnodelist domxpath domexception domdocumentfragment xmlparser curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
+      if key in ~w(throwable stdclass closure weakmap datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection sqlite3 sqlite3result sqlite3stmt pdo pdostatement pdoexception simplexmlelement domdocument domelement domnode domtext domattr domnodelist domxpath domexception domdocumentfragment xmlparser curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
@@ -3044,6 +3075,84 @@ defmodule PhpBeam.Classes.Table do
 
   # minimal native Closure: composer's ClassLoader uses Closure::bind()
   # (scope stripping only — our closures already carry their capture context)
+  # WeakMap (v1: STRONG storage keyed "wk<objid>" in props — the weak
+  # reaping needs liveness hooks; registered in docs/matrix/deferred.md.
+  # foreach key shape (object keys) approximated: iterator yields values).
+  defp native_weakmap_class do
+    wk_key = fn {:object, id} -> {:string, "wk#{id}"} end
+
+    %__MODULE__{
+      name: "WeakMap",
+      kind: :class,
+      parent: nil,
+      interfaces: ["arrayaccess", "countable", "traversable"],
+      consts: %{},
+      props: [],
+      methods: %{
+        "__construct" => native_fn("__construct", fn obj, _a, i -> {:ok, {:null, obj}, i} end),
+        "offsetexists" =>
+          native_fn("offsetExists", fn obj, args, i ->
+            case args do
+              [{:object, _} = ref | _] ->
+                v = PArray.get(obj.props, wk_key.(ref))
+                {:ok, {{:bool, v != nil and v != :null}, obj}, i}
+
+              _ ->
+                {:ok, {{:bool, false}, obj}, i}
+            end
+          end),
+        "offsetget" =>
+          native_fn("offsetGet", fn obj, args, i ->
+            case args do
+              [{:object, _} = ref | _] ->
+                case PArray.get(obj.props, wk_key.(ref)) do
+                  nil -> {:ok, {:null, obj}, i}
+                  v -> {:ok, {v, obj}, i}
+                end
+
+              _ ->
+                {:ok, {:null, obj}, i}
+            end
+          end),
+        "offsetset" =>
+          native_fn("offsetSet", fn obj, args, i ->
+            case args do
+              [{:object, _} = ref, v | _] ->
+                case PArray.put(obj.props, wk_key.(ref), v) do
+                  {:ok, p2} -> {:ok, {:null, %{obj | props: p2}}, i}
+                  _ -> {:ok, {:null, obj}, i}
+                end
+
+              _ ->
+                {:ok, {:null, obj}, i}
+            end
+          end),
+        "offsetunset" =>
+          native_fn("offsetUnset", fn obj, args, i ->
+            case args do
+              [{:object, _} = ref | _] ->
+                case PArray.delete(obj.props, wk_key.(ref)) do
+                  {:ok, p2} -> {:ok, {:null, %{obj | props: p2}}, i}
+                  _ -> {:ok, {:null, obj}, i}
+                end
+
+              _ ->
+                {:ok, {:null, obj}, i}
+            end
+          end),
+        "count" =>
+          native_fn("count", fn obj, _a, i ->
+            n =
+              obj.props
+              |> PArray.to_pairs()
+              |> Enum.count(fn {k, _} -> is_binary(k) and String.starts_with?(k, "wk") end)
+
+            {:ok, {{:int, n}, obj}, i}
+          end)
+      }
+    }
+  end
+
   defp native_closure_class do
     %__MODULE__{
       name: "Closure",

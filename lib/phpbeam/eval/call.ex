@@ -964,12 +964,14 @@ defmodule PhpBeam.Eval.Call do
     else
       mkey = obj.class <> "::" <> String.downcase(method.name)
 
+      # scope_class = the class where the method was COMPILED (for trait
+      # methods: the using class — owner; php binds self::/parent:: there)
       fenv = %Env{
         function: method.name,
         statics_key: mkey,
         this: obj_ref,
         called_class: obj.class,
-        scope_class: method.class || obj.class
+        scope_class: Map.get(method, :owner) || method.class || obj.class
       }
 
       ckey = method.class || obj.class
