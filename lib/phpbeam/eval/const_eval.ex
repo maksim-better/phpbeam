@@ -1284,6 +1284,21 @@ defmodule PhpBeam.Eval.ConstEval do
       "SORT_STRING" ->
         {:ok, {:int, 2}}
 
+      "SORT_LOCALE_STRING" ->
+        {:ok, {:int, 5}}
+
+      "SORT_NATURAL" ->
+        {:ok, {:int, 6}}
+
+      "SORT_FLAG_CASE" ->
+        {:ok, {:int, 8}}
+
+      "SORT_ASC" ->
+        {:ok, {:int, 4}}
+
+      "SORT_DESC" ->
+        {:ok, {:int, 3}}
+
       "COUNT_RECURSIVE" ->
         {:ok, {:int, 1}}
 

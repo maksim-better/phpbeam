@@ -115,7 +115,8 @@ defmodule PhpBeam.Eval.Assign do
 
         case PhpBeam.Classes.find_prop(interp, key, name) do
           {:ok, prop} when prop.static? ->
-            skey = static_props_key(key)
+            # family-shared storage: resolve to the DECLARING class's slot
+            skey = static_props_key(Eval.static_declaring_key(interp, key, name))
             statics = Map.get(interp.statics, skey, %{})
             {env, put_in(interp.statics[skey], Map.put(statics, prop.name, v))}
 

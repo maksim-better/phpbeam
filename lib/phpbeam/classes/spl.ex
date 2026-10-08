@@ -297,7 +297,7 @@ defmodule PhpBeam.Classes.Spl do
     case it_cur(obj) do
       {name, _path} ->
         dir = Map.get(st(obj), "dir") || ""
-        st_put(obj, "path", join_path(dir, name))
+        st_put(st_put(obj, "path", join_path(dir, name)), "cur_name", name)
 
       nil ->
         obj
@@ -470,6 +470,21 @@ defmodule PhpBeam.Classes.Spl do
 
             {:ok, {{:bool, File.dir?(cur)}, obj}, i}
           end),
+          nfn("getsubpath", fn obj, _a, i ->
+            {:ok, {{:string, Map.get(st(obj), "sub_base") || ""}, obj}, i}
+          end),
+          nfn("getsubpathname", fn obj, _a, i ->
+            base = Map.get(st(obj), "sub_base") || ""
+            name = Map.get(st(obj), "cur_name") || ""
+
+            p =
+              cond do
+                base == "" -> name
+                true -> base <> "/" <> name
+              end
+
+            {:ok, {{:string, p}, obj}, i}
+          end),
           nfn("getchildren", fn obj, _a, i ->
             case it_cur(obj) do
               {_n, path} when path != "" ->
@@ -477,10 +492,23 @@ defmodule PhpBeam.Classes.Spl do
                 co = Eval.get_object(i2, {:object, cref})
                 entries = read_dir_entries(path, Bitwise.band(fs_flags(obj), 4096) != 0)
 
+                # recursive sub-path context: children report getSubPath()
+                # relative to the ROOT iterator (php native semantics —
+                # Symfony's current() builds on getSubPath/getSubPathname)
+                parent_sub = Map.get(st(obj), "sub_base") || ""
+                cur_name = Map.get(st(obj), "cur_name") || ""
+
+                child_sub =
+                  cond do
+                    parent_sub == "" -> cur_name
+                    true -> parent_sub <> "/" <> cur_name
+                  end
+
                 co2 =
                   st_put(co, "dir", path)
                   |> st_put("flags", fs_flags(obj))
                   |> st_put("pairs", entries)
+                  |> st_put("sub_base", child_sub)
                   |> then(&st_put(&1, "pos", 0))
                   |> dir_entry_refresh()
 
@@ -1714,7 +1742,7 @@ defmodule PhpBeam.Classes.Spl do
             {:ok, {{:bool, File.dir?(st(obj)["path"] || "")}, obj}, i}
           end),
           nfn("islink", fn obj, _a, i ->
-            {:ok, {{:bool, File.symlink?(st(obj)["path"] || "")}, obj}, i}
+            {:ok, {{:bool, symlink_path?(st(obj)["path"] || "")}, obj}, i}
           end),
           nfn("exists", fn obj, _a, i ->
             {:ok, {{:bool, File.exists?(st(obj)["path"] || "")}, obj}, i}
@@ -1750,4 +1778,14 @@ defmodule PhpBeam.Classes.Spl do
 
     shell(name, :class, methods, [])
   end
+  # Elixir has no File.symlink?/1 — read the file info type directly
+  defp symlink_path?(path) when is_binary(path) do
+    case :file.read_link_info(String.to_charlist(path)) do
+      {:ok, {:file_info, type: :symlink}} -> true
+      _ -> false
+    end
+  end
+
+  defp symlink_path?(_), do: false
+
 end

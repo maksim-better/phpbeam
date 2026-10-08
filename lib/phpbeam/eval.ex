@@ -377,7 +377,14 @@ defmodule PhpBeam.Eval do
           {:ok, prop} when prop.static? ->
             case static_prop_violation(interp, key, prop, env) do
               nil ->
-                statics = Map.get(interp.statics, static_props_key(key), %{})
+                # family-shared storage: resolve to the DECLARING class's slot
+                statics =
+                  Map.get(
+                    interp.statics,
+                    static_props_key(static_declaring_key(interp, key, name)),
+                    %{}
+                  )
+
                 {{:val, Map.get(statics, prop.name, prop.default)}, env, interp}
 
               msg ->
@@ -566,6 +573,46 @@ defmodule PhpBeam.Eval do
   end
 
   def static_props_key(class_key), do: {:static_props, class_key}
+
+  # php static props: ONE storage slot for the whole inheritance family
+  # (inherited statics are shared until a child redeclares). Container::$instance
+  # written from Application::setInstance must be read by Container::getInstance —
+  # resolve storage to the DECLARING class, not the lexical sender.
+  def static_declaring_key(interp, key, name) do
+    down = String.downcase(name)
+
+    declared_here? = fn k ->
+      case PhpBeam.Classes.get_class(interp, k) do
+        nil ->
+          false
+
+        c ->
+          Enum.any?(c.props || [], fn p ->
+            p.static? and String.downcase(p.name) == down
+          end)
+      end
+    end
+
+    walk_decl = fn
+      k, _w when k == nil ->
+        nil
+
+      k, w ->
+        if declared_here?.(k), do: k, else: w.(parent_key_of(interp, k), w)
+    end
+
+    case walk_decl.(key, walk_decl) do
+      nil -> key
+      decl -> decl
+    end
+  end
+
+  defp parent_key_of(interp, key) do
+    case PhpBeam.Classes.get_class(interp, key) do
+      %{parent: p} when is_binary(p) -> p
+      _ -> nil
+    end
+  end
 
   # `A::$x` uses the literal variable name; only `A::$$x` dereferences
   def static_prop_name({:var, v}, _env, _interp), do: String.downcase(v)
