@@ -30,18 +30,25 @@ defmodule PhpBeam.Eval do
       # $GLOBALS['wp_object_cache'])
       {{:val, globals_array(interp)}, env, interp}
     else
-      case Env.lookup(env, interp, name) do
-        {:ok, v} ->
-          {{:val, deref(v, interp)}, env, interp}
+      if name == "this" and not match?({:object, _}, env && env.this) do
+        # php 8: reading $this with no bound object is an ERROR in every
+        # context (probed: plain fn / closure / static method / top level);
+        # isset($this) stays false via the isset path (it never evals the var)
+        {{:unwind, {:fatal, "Using $this when not in object context"}}, env, interp}
+      else
+        case Env.lookup(env, interp, name) do
+          {:ok, v} ->
+            {{:val, deref(v, interp)}, env, interp}
 
-        {:static, key, sname} ->
-          {{:val, deref(Map.get(interp.statics[key], sname), interp)}, env, interp}
+          {:static, key, sname} ->
+            {{:val, deref(Map.get(interp.statics[key], sname), interp)}, env, interp}
 
-        :undefined ->
-          case EvalError.warn(env, interp, "Undefined variable $#{name}") do
-            {:cont, _, i2} -> {{:val, :null}, env, i2}
-            {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
-          end
+          :undefined ->
+            case EvalError.warn(env, interp, "Undefined variable $#{name}") do
+              {:cont, _, i2} -> {{:val, :null}, env, i2}
+              {:unwind, u, _, i2} -> {{:unwind, u}, env, i2}
+            end
+        end
       end
     end
   end
