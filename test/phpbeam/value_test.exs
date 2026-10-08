@@ -115,7 +115,8 @@ defmodule PhpBeam.ValueTest do
 
   test "string arithmetic" do
     assert arith(:+, s("1abc"), i(1)) == {:ok, i(2)}
-    assert {:error, %{kind: :type_error}} = arith(:+, s("abc"), i(1))
+    # tag-only error: the eval layer renders php wording with operand names
+    assert {:error, :unsupported_operand} = arith(:+, s("abc"), i(1))
     assert arith(:+, s("  42  "), i(1)) == {:ok, i(43)}
     assert arith(:+, s("1e2"), i(0)) == {:ok, f(100.0)}
     assert arith(:+, s("1abc"), i(1)) != {:leading, i(1)}

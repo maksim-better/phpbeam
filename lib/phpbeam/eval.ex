@@ -2185,13 +2185,13 @@ defmodule PhpBeam.Eval do
         {:ok, {:string, php_to_string(l) <> php_to_string(r)}}
 
       :+ ->
-        arith(:+, l, r)
+        arith(:+, l, r, interp)
 
       :- ->
-        arith(:-, l, r)
+        arith(:-, l, r, interp)
 
       :* ->
-        arith(:*, l, r)
+        arith(:*, l, r, interp)
 
       :/ ->
         value_or_throw(Value.divide(l, r), interp)
@@ -2255,16 +2255,49 @@ defmodule PhpBeam.Eval do
     end
   end
 
-  defp arith(op, {:array, a}, {:array, b}) when op == :+ do
+  defp arith(op, {:array, a}, {:array, b}, _interp) when op == :+ do
     {:ok, {:array, PArray.union(a, b)}}
   end
 
-  defp arith(op, l, r) do
+  defp arith(op, l, r, interp) do
     case Value.arith(op, l, r) do
-      {:ok, v} -> {:ok, v}
-      {:error, %Error{} = err} -> throw_error(err)
+      {:ok, v} ->
+        {:ok, v}
+
+      {:error, :unsupported_operand} ->
+        # php 8.4: "Unsupported operand types: Exception + int" — LEFT
+        # operand's CLASS NAME (objects) / gettype otherwise, operator
+        # glyph, RIGHT operand's type
+        left =
+          case l do
+            {:object, _} = oref -> display_class(interp, get_object(interp, oref).class)
+            _ -> operand_name(l)
+          end
+
+        msg =
+          "Unsupported operand types: " <> left <> " " <> op_glyph(op) <> " " <> operand_name(r)
+
+        throw_error(%PhpBeam.Error{kind: :type_error, message: msg})
+
+      {:error, %Error{} = err} ->
+        throw_error(err)
     end
   end
+
+  defp op_glyph(:+), do: "+"
+  defp op_glyph(:-), do: "-"
+  defp op_glyph(:*), do: "*"
+
+  # php describes the LEFT operand by CLASS NAME for objects, gettype
+  # otherwise (probed: Exception + int / array + int)
+  defp operand_name({:object, _}), do: "object"
+  defp operand_name({:array, _}), do: "array"
+  defp operand_name({:string, _}), do: "string"
+  defp operand_name({:int, _}), do: "int"
+  defp operand_name({:float, _}), do: "float"
+  defp operand_name({:bool, _}), do: "bool"
+  defp operand_name(:null), do: "null"
+  defp operand_name(_), do: "mixed"
 
   # float→int implicit conversion deprecation (parity with PHP 8)
   defp lossy_warn({:float, f}, interp) when trunc(f) != f do

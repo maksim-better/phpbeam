@@ -541,15 +541,15 @@ defmodule PhpBeam.Value do
     case classify_string_number(s) do
       {:numeric, n} -> {:num, n}
       {:leading, n} -> {:leading, n}
-      :non_numeric -> {:error, Error.type_error("Unsupported operand types: string")}
+      # error rendering (with operand names + operator) happens at the CALLER
+      # where both sides and the operator are in scope (php 8.4:
+      # "Unsupported operand types: Exception + int")
+      :non_numeric -> {:error, :unsupported_operand}
     end
   end
 
-  def arith_operand({:array, _}),
-    do: {:error, Error.type_error("Unsupported operand types: array")}
-
-  def arith_operand({:object, _}),
-    do: {:error, Error.type_error("Unsupported operand types: object")}
+  def arith_operand({:array, _}), do: {:error, :unsupported_operand}
+  def arith_operand({:object, _}), do: {:error, :unsupported_operand}
 
   # reference cells are dereferenced by the caller before arithmetic; a bare
   # cell falling through here treats as null (0), never a crash
