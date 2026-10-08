@@ -116,7 +116,12 @@
 
 - [x] T017-p17 六目录纳入 + 箭头捕获误警修正：arrow/closures/list/anon/numeric_strings/multibyte 六分片入基线（62 例/44 败，总账 468@19）；箭头自动捕获**未定义变量发 Warning**（arrow-002 oracle 对齐）——首版两处误警被 05_funcs 差分当场抓获：①赋值目标是写不是读（`$a + $n = 5` 的 $n）→ arrow_vars 排除 target var（复合目标保留内部读）；②by-ref use 定义时未定义**合法**（自引用闭包 use (&$fact)）→ by-ref 臂静默 | tests: 05_funcs/arrow002 IDENTICAL；fast PASS | commits: 0dea9da + c555201
 
+- [x] T017-p18 Closure::fromCallable 真实现：callable 归一化为引擎 FCC 形（[obj,"m"]→method_fcc / [Cls,"m"]与"Cls::m"→static_fcc / 裸名→string；旧恒等实现把数组原样返回→调用 function_clause）。basic 用例从 internal error 推进到正常输出流。**遗留**：`{:fcc, inner}` 包装语义（echo/插值路径 call_value:136 function_clause——inner 为 static_fcc 时某处再包一层）——下一迭代主攻 | tests: fast PASS（closures 分片基线未动） | commit: 2374678
+
 ### 恢复点（下会话从这里继续）
+
+**T017-p19 主攻**：`{:fcc, inner}` 双层包装——fromCallable 返回 {:static_fcc,...} 后，某处（echo/concat 的 call_value:136）收到 `{:fcc, {:static_fcc,...}}` 再包一层。下手点：grep `{:fcc,` 的**构造点**（parser value_fcc eval 路径），看 fromCallable 的返回值如何流经 eval（native 返回值应直通不包装）；修正后 closures 10 例 + basic 全语义对齐。
+**沿用**：list-by-ref 族 11 例（引用大单元）；vendor DBG 残留还原；基线 468@19。
 
 **下一批**：closures(10)/list(11，list-by-ref 族=引用大单元前哨)/anon(7) 的类级分诊；deferred 弹药（`\int` unqualified、assert AST 导出、typed-prop 未初始化、箭头警告位置/可变变量名）。
 **基线**：468 @ 19 分片。
