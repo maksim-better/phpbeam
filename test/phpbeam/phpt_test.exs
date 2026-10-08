@@ -44,7 +44,14 @@ suites = [
   {"zend-list", "Zend/tests/list"},
   {"zend-anon", "Zend/tests/anon"},
   {"zend-numeric-strings", "Zend/tests/numeric_strings"},
-  {"zend-multibyte", "Zend/tests/multibyte"}
+  {"zend-multibyte", "Zend/tests/multibyte"},
+  {"zend-nullable", "Zend/tests/nullable_types"},
+  {"zend-object-types", "Zend/tests/object_types"},
+  {"zend-use-const", "Zend/tests/use_const"},
+  {"zend-use-function", "Zend/tests/use_function"},
+  {"zend-variadic", "Zend/tests/variadic"},
+  {"zend-constants", "Zend/tests/constants"},
+  {"zend-offsets", "Zend/tests/offsets"}
 ]
 
 # PHPT_DIRS="lang,basic" limits the compiled suites to those dir_ids

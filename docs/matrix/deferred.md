@@ -236,3 +236,10 @@ DEFER T006 log_errors stderr 副本通道 | lang,strings,func,classes,basic,outp
 - [ ] **fromCallable 作用域绑定**：类内 fromCallable 私有方法 FCC 的可见性按**创建方 scope**（php Closure 绑定 scope+this）——现 global 判定致 "Call to private method from global scope"（basic 后段 + rebinding/lsb/reflection 同族）。方向：Closure::fromCallable 走 eval 层特判（参照 Closure::bind 的 skip 分支），method_fcc 加 scoped 变体
 - [ ] cc_basic 尾部：PublicInvocable __invoke arm 已补（验证）；non_static_statically 的 TypeError 措辞
 - [ ] call_value args 契约统一收口：string/array 臂已 arg_values；static_fcc 臂经 dispatch wrap_args ✓——{:arg,…} 泄漏已灭（mf3 IDENTICAL）
+
+## Z 相第三批分诊（2026-10-09，七目录 53 例基线：nullable2/obj-types11/use-const7/use-fn10/variadic8/consts2/offsets13）
+
+- [ ] **by-ref 参数隐式创建变量**：`function test(&...$args)` 调用未定义变量应静默创建（php 语义——by-ref 实参永不未定义警告；write_back_refs 只覆盖已 lookup 的）——variadic/by_ref 全族 + list-by-ref 同单元
+- [ ] offsets/ 目录 13 例：容器偏移行为（appending/array_container/ArrayAccess_behaviour——对象偏移读写矩阵）
+- [ ] use-function/ 10 例：条件函数声明 + use 冲突语义
+- [ ] object_types/ 11 例：对象类型参数的完整矩阵
