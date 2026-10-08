@@ -126,7 +126,12 @@
 
 - [x] T017-p19-c string 臂先求值再调用（a49d344）：wrap_args(AST) 把 AST 包成 lit_val 当值——echo 打出结构字面（`{:arg,…}` 泄漏正主）；改 arg_values 先求值。mf3 IDENTICAL、cc_basic 推进 9 行；fast PASS。**fromCallable 作用域绑定**（类内私有方法 FCC 按创建方 scope 判可见性）登记 deferred——下一专项（basic 后段 + rebinding/lsb/reflection 同族 3-4 例）
 
+- [x] T017-p19-d 收尾：scoped 尝试**回滚**（fast PASS 恢复——改动引入 `{:arg,…}` AST 泄漏进 echo，basic 多行退化，git checkout 两文件还原）。**现场已固化**（下次迭代直接续）：①eval 层 Closure::fromCallable 特判（eval.ex static_call 头）→ eval_closure_from_callable（call.ex，{kind,line} scope 快照）→ call_value 的 {:method_fcc_scoped}/{:static_fcc_scoped} 两臂 + invoke_fcc_scoped/visibility_violation/scope_violation——**代码骨架已在台账上文 git 历史 2374678..a49d344 间可找回**；②已知坑：fromCallable 的 args 是 **{:arg, ast, byref, name} 包装**（需剥一层）、eval 需全限定 PhpBeam.Eval.eval（call.ex 无 import）、wrap_args 接收 vals 而非 AST；③scoped 后 echo 路径出现 AST 打印=某 arm 返回值槽被 wrap 后结构污染——先跑 `-r 'require inc; $o=new Foo; $fn=$o->closePrivateValid(); echo $fn("x");'` 二分。
+
 ### 恢复点（下会话从这里继续）
+
+**建议**：fromCallable scoped 语义复杂度高（closure 绑定域），**转 Z 相主体节奏**（下一批 arrow/closures 的其他子目录或 X1 大目录），把本项挂 deferred 与 list-by-ref 同批（都属「引用/绑定」语义单元）。
+**沿用**：基线 468@19；vendor DBG 还原清单。
 
 **p19-d 主攻**：Closure::fromCallable 的作用域绑定——eval 层特判（参照 Closure::bind 的 skip 分支 call.ex:14），method_fcc 加 scoped 变体（{:method_fcc_scoped, oref, m, scope_class, this}），dispatch 时 cb_scope_ok? 按创建方 scope。完成后 basic 全通 + rebinding/lsb/reflection 三例预计连带。
 **沿用**：list-by-ref 11 例；vendor DBG 还原；基线 468@19。
