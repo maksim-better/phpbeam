@@ -105,7 +105,12 @@
 
 - [x] T017-p12 **PHP 8.4 属性钩子落地**：parser prop_member 识别 hook 块（get/set、参数表、`=>` 箭头 / `{...}` 块体 / `;` 简写）；decl 传 prop_hooks → register 注入 prop + merge_prop_hooks 挂 get_hook/set_hook；引擎读写路径分派（hook 体在类作用域、`$value` 绑定、**箭头 set 的返回值=存储值**——oracle 探针钉死；块形式体自写 backing）。hook_guard {obj,name} 防递归——**每出口必须移除**（首版泄漏：set 跑一次后 get 永久静默，当场抓获）。Symfony 8 http-foundation Request 依赖此特性（include 成功）。附带 trait_exists/enum_exists 补 autoload（php 语义同 class_exists）。环境插曲：OrbStack 整体僵死（docker exec 全挂）→ pkill 重启 + 容器 start 恢复，queue_timeout 假红消失 | tests: ph2/ph3/ph4/ph5 IDENTICAL（ph1 差异 = 引擎整体缺 typed-prop 未初始化读检查，登记非 hook 特有）；fast PASS | commit: fbdb814
 
+- [x] T017-p13 收尾：探针清除、fast PASS（14285ae）。**Request trait 链确诊（X 相级单元）**：apply_traits_pair → fetch_class → composer loadClass(include 完成) → **classes 不增**（canbeprecognitive 141→141；对照：macroable 同路径 143 注册成功；spl_autoload_call 场景同一 trait 成功）——嫌疑 = **include 注册上下文线程化**（fetch_class 的 nil_env/global 剥离 interp 与返回 it2 的写回有一层丢失/被 TCO 吞）。此单元挂到 X 相 closure：预计要在 fetch_class/autoload 上下文做一次系统性审计（连同 T016b 的 125→124 倒退同根）。
+**调试工艺最后一条**：`System.get_env("X") and str` 在 X="1" 时 badbool（get_env 返字符串）——探针一律 `!= nil`；本迭代 4 次被吞编译错误/陈旧二进制误导，均因 build 输出被重定向——已内化为强制检查。
+
 ### 恢复点（下会话从这里继续）
+
+**优先级建议**（下迭代抉择）：①继续 artisan 洋葱（Request trait 注册上下文审计——X 相级，2-3 迭代）；②转 Z 相主体（zend-<sub> 批次，量最大但机械）；③typed-prop 未初始化读检查（ph1 揭示的整体缺口）。建议 ②——Z 相是主线判据的正文，Laravel 侧线已到收益递减段，且 trait 注册上下文审计留到 X2 数据库目录（mysqli 也要）一并做。
 
 **T017-p13 线索**：artisan 到 SetRequestForConsole 的 `Request::create()`——`use Illuminate\Http\Request` 别名 + 类加载链（composer loader 加载 Request.php 时其 trait `CanBePrecognitive` 的注册链）。快速回路：`phpx -r 'require "vendor/autoload.php"; require ".../Illuminate/Http/Request.php"; var_dump(class_exists("Illuminate\\Http\\Request", false));'`。
 **收尾清单（沿用）**：vendor DBG 残留还原；DEBUG_BACKTRACE_IGNORE_ARGS 常量；closure 帧进 uncaught 栈；typed-prop 未初始化读检查（ph1 揭示，整体缺口）；Pdo.query_mysql 对 DBConnection.ConnectionError 无臂（case_clause 内错——环境恢复后不再触发但臂应补）。
