@@ -108,7 +108,12 @@
 - [x] T017-p13 收尾：探针清除、fast PASS（14285ae）。**Request trait 链确诊（X 相级单元）**：apply_traits_pair → fetch_class → composer loadClass(include 完成) → **classes 不增**（canbeprecognitive 141→141；对照：macroable 同路径 143 注册成功；spl_autoload_call 场景同一 trait 成功）——嫌疑 = **include 注册上下文线程化**（fetch_class 的 nil_env/global 剥离 interp 与返回 it2 的写回有一层丢失/被 TCO 吞）。此单元挂到 X 相 closure：预计要在 fetch_class/autoload 上下文做一次系统性审计（连同 T016b 的 125→124 倒退同根）。
 **调试工艺最后一条**：`System.get_env("X") and str` 在 X="1" 时 badbool（get_env 返字符串）——探针一律 `!= nil`；本迭代 4 次被吞编译错误/陈旧二进制误导，均因 build 输出被重定向——已内化为强制检查。
 
+- [x] T017-p14 **Z 相主体启动**：catch 原生错误物化（find_catch 绑定前 {:native_error,...} → materialize 成真对象——php catch 永远给对象；泛适修复，全引擎 Error 被 catch 场景）；四 Zend 子目录纳入（zend-throw 2/ast 2/typehints 4/gh15976 5 → 基线 425@13 分片）；分诊五缺口登记 deferred（算术措辞带操作数类型、assert AST 导出、`\int` unqualified fatal、enum/类名保留字检查、typed-prop 未初始化读） | tests: throw/001 体语义对齐（余算术措辞）；fast 前已验证；基线录制绿 | commit: 195699d
+
 ### 恢复点（下会话从这里继续）
+
+**Z 相节奏确立**：每迭代纳入 3-6 个小子目录 → 首录 → 分诊 → 修最大普适类 → 收缩提交。**下一批候选**（zend-*/ 子目录按大小序）：arrow_functions(8)/closures(11)/list(11)/anon(16)/numeric_strings(8)/multibyte(8) 一批 ~54 例。**deferred 五缺口**是这批分诊的直接弹药——优先修「算术措辞带操作数」（两例立收）。
+**基线现况**：425 失败 @ 13 分片（401 + throw2/ast2/typehints4/gh15976 5 = 13 新例中 13 失败——exit 分片此前 12）。
 
 **优先级建议**（下迭代抉择）：①继续 artisan 洋葱（Request trait 注册上下文审计——X 相级，2-3 迭代）；②转 Z 相主体（zend-<sub> 批次，量最大但机械）；③typed-prop 未初始化读检查（ph1 揭示的整体缺口）。建议 ②——Z 相是主线判据的正文，Laravel 侧线已到收益递减段，且 trait 注册上下文审计留到 X2 数据库目录（mysqli 也要）一并做。
 
