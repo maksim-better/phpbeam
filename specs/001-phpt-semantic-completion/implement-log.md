@@ -128,7 +128,12 @@
 
 - [x] T017-p19-d 收尾：scoped 尝试**回滚**（fast PASS 恢复——改动引入 `{:arg,…}` AST 泄漏进 echo，basic 多行退化，git checkout 两文件还原）。**现场已固化**（下次迭代直接续）：①eval 层 Closure::fromCallable 特判（eval.ex static_call 头）→ eval_closure_from_callable（call.ex，{kind,line} scope 快照）→ call_value 的 {:method_fcc_scoped}/{:static_fcc_scoped} 两臂 + invoke_fcc_scoped/visibility_violation/scope_violation——**代码骨架已在台账上文 git 历史 2374678..a49d344 间可找回**；②已知坑：fromCallable 的 args 是 **{:arg, ast, byref, name} 包装**（需剥一层）、eval 需全限定 PhpBeam.Eval.eval（call.ex 无 import）、wrap_args 接收 vals 而非 AST；③scoped 后 echo 路径出现 AST 打印=某 arm 返回值槽被 wrap 后结构污染——先跑 `-r 'require inc; $o=new Foo; $fn=$o->closePrivateValid(); echo $fn("x");'` 二分。
 
+- [x] T017-p20 七目录纳入：nullable/object-types/use-const/use-function/variadic/constants/offsets——90 例 53 败入基线（**总账 521@26 分片**）；分诊三大类：**by-ref 参数隐式创建变量**（variadic/by_ref 全族——php by-ref 实参永不未定义警告，write_back_refs 需补未 lookup 的隐式创建）、offsets 容器偏移矩阵 13 例、object_types 参数矩阵 11 例；fast PASS | commit: 05b8b36
+
 ### 恢复点（下会话从这里继续）
+
+**下一批候选（Z 主体延续）**：constants(19)/float_to_int(19)/prop_const_expr(20)/constants 之外的中目录——或按 deferred 弹药优先：by-ref 隐式创建（variadic 全族+list_reference 11 例**同单元一次修**）。
+**基线**：521 @ 26 分片（总纳入 ~1,120 例）。
 
 **建议**：fromCallable scoped 语义复杂度高（closure 绑定域），**转 Z 相主体节奏**（下一批 arrow/closures 的其他子目录或 X1 大目录），把本项挂 deferred 与 list-by-ref 同批（都属「引用/绑定」语义单元）。
 **沿用**：基线 468@19；vendor DBG 还原清单。
