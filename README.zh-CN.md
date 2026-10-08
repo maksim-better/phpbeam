@@ -1,8 +1,8 @@
-# phpbeam — PHP on the BEAM
+# phpbeam — 跑在 BEAM 上的 PHP
 
 [English](README.md) | **简体中文**
 
-用 Elixir 实现、运行在 Erlang 虚拟机（BEAM）上的 **PHP 8.4 子集树遍历解释器**。它是"**在 BEAM 上跑 WordPress**"计划的第一阶段：语言管线（词法 → 语法 → 求值）已完整落地，所有语义决定都以**真实 PHP 8.4 逐字节对拍**来锚定——先是差分测试，再是 PHP 官方测试套件（`.phpt`）。
+一个用 Elixir 编写、运行在 Erlang 虚拟机（BEAM）上的 **PHP 8.4** 树遍历解释器。验收标准是**与真实 PHP 语义等价**：每一项声明都以**对真实 PHP 8.4 逐字节测量**为准——先差分测试，再 php-src 官方测试套件（`.phpt`）。终态是 **BEAM 上的完整 PHP 运行时**——任意 PHP 8.4 程序以完全一致的可观测行为运行（验收定义与阶段计划见 PLAN.md）。
 
 ```
 $ ./phpx test/cases/13_showcase.php
@@ -15,88 +15,54 @@ caught: Division by zero
 interpolation: 3 items for ~€26.74
 ```
 
-## 现状一览
+## 现状速览
 
 | 指标 | 数值 |
 | --- | --- |
-| php-src 官方测试（tests/{lang,strings,func,classes,basic,output}） | **273 / 697 通过**（可见性执法已落地；Zend 套件回归修复中，见 PLAN.md） |
-| WordPress 内置函数需求覆盖（按调用频次） | **93%**（346 个内置；真 MySQL 走 MyXQL） |
-| 对本机 PHP 8.4 的差分用例（stdout 逐字节） | 19/19 |
-| wp-load.php | 无配置：错误页**逐字节一致**；带 wp-config + 真 MySQL：完整跑通 exit 0 |
-| 代码量 | 约 1.6 万行 Elixir，13 个内置模块 |
+| 已纳入的 php-src 官方用例（tests/{lang,strings,func,classes,basic,output,security,run-test} + Zend/tests/exit） | **348 / 760 通过**（按目录分片基线；失败三选一：修复/豁免/顺延——见 PLAN.md） |
+| 全套件目标 | **20,766 例**（Zend/tests + 已实现扩展目录，分阶段纳入；`scripts/criterion.sh` 机械判定） |
+| 已实现内建函数 | **约 1,040 个**，覆盖 std/date/mbstring/SPL/hash/xml/openssl/curl/sockets/数据库（PDO+mysqli+pgsql+sqlite3）/zlib/zip/phar/posix/进程执行 族 |
+| 对本机 PHP 8.4 的差分用例（stdout+stderr 逐字节） | **54** 个（`test/cases/*.php`） |
+| Laravel 冒烟 | `artisan` 贯穿 composer autoload、DI 容器、config 装载（Symfony Finder 链）、Carbon，进入 Kernel 命令分发 |
+| 代码量 | 约 2.5 万行 Elixir；30+ 内建/类模块 |
 
 ## 快速开始
 
 ```console
-$ mix deps.get && mix escript.build   # 生成 ./phpx
-$ ./phpx script.php                   # 运行脚本（include/require 可用）
+$ mix deps.get && mix escript.build   # 构建 ./phpx（git 依赖走 SSH；网络受阻见 PLAN.md）
+$ ./phpx script.php                   # 运行脚本（$argv/$argc 已播种；include/require 可用）
 $ ./phpx -r 'echo "hi ", PHP_INT_MAX, "\n";'
-$ ./phpx --repl                       # 状态持久化 REPL
-$ mix test                            # 单测 + 差分 + .phpt 三层
-$ mix test --exclude phpt             # 快速开发循环
+$ ./phpx --repl                       # 持久 REPL
+$ ./phpx serve <docroot> --port=8080  # HTTP SAPI（$_GET/$_POST/$_FILES/$_COOKIE、keep-alive）
+
+$ scripts/gate.sh --lane fast         # 构建 + 非 phpt 套件全绿（日常门禁）
+$ scripts/gate.sh --lane dirs -- lang # 只跑改动相关的 phpt 分片
+$ scripts/gate.sh --lane full         # 全部已纳入分片 + 分片和自检
+$ scripts/gate.sh --record            # 重录失败基线（仅绿套件后使用）
+
+$ mix test                            # 单测 + 差分 + phpt 套件
+$ mix test --exclude phpt             # 快速开发回路
 ```
 
-`.phpt` 套件需要一份解压的 php-src 源码树（默认 `~/Downloads/php-8.4.24`，用 `PHP_SRC` 环境变量改指向）。
+`.phpt` 套件需要解包的 php-src 树（默认 `~/Downloads/php-8.4.25`，可用 `PHP_SRC` 覆盖），以及 oracle 二进制 `/opt/homebrew/bin/php`（开发机为 8.4.17）。失败基线在 `tmp/baseline/<dir>.txt`（gitignored），只允许收缩。
 
 ## 已验证的语义
 
-正确性不是宣称的，是**测出来的**——对 `/opt/homebrew/bin/php`（8.4.2）和 php-src 8.4.24 官方语料逐字节比对：
+正确性不是宣称出来的——是**测量**出来的，对 `/opt/homebrew/bin/php` 与 php-src 语料逐字节：
 
-- **警告与错误渲染和 PHP 8.4 完全一致**：`\nWarning: Undefined variable $x in /real/path.php on line 3`、带真实调用栈（含实参列表）的多行未捕获错误 `#0 /app/wp-load.php(5): require()`、链接期引擎 fatal（无 Uncaught 包装）——全部经探针与差分用例验证。
-- **语言**：完整 PHP 8 运算符优先级、`match`、`list()` 解构、闭包/箭头函数、trait（`insteadof`/`as`）、命名空间、`include`/`require`(_once)（吃完整表达式操作数，`require_once ABSPATH . 'wp-settings.php'`）、调用方作用域的 `eval()`、逐文件栈的 `__FILE__`/`__DIR__`。
-- **类型与值**：PHP 8 类型杂耍（松散相等矩阵、数字字符串、`"az"++`）、slot 保序的有序哈希数组、int64 键规范化与自动索引、逐字节一致的 `var_dump`/`print_r`/`var_export`/JSON。
-- **面向对象**：单继承、接口、trait、后期静态绑定、魔术方法、写穿透的对象句柄——以及**链接期严格性**：abstract 强制、可见性收窄、static 冲突、`final` 重写、签名兼容性检查（`Declaration of D::f(array $a) must be compatible with A::f($a)`）。
-- **Throwable**：原生 Exception/Error 层次、`DivisionByZeroError`、内置抛出的 `ValueError`、带真实栈帧的 `Uncaught Error:` 格式。
-- **函数**：约 220 个内置（字符串/数学/数组/文件/输出缓冲/序列化/正则）；高阶分派（`array_map`、`usort` 族引用写回、`preg_replace_callback`）、`func_get_args()` 族、引用语义（`$a = &$b`、`foreach as &$v`、`&` 参数）。
-- **PCRE**：完整 `preg_*` 族直跑原生 PCRE——命名组（`$m['year']`）、`PREG_OFFSET_CAPTURE`、`PATTERN_ORDER`/`SET_ORDER`、`$N`/`${N}`/`$name` 替换反引用、`preg_split` 标志。
-- **I/O 与状态**：include_path 解析的 include/require、字符串类文件函数（`file_get_contents`、`file_put_contents`、`scandir` 等）、输出缓冲（`ob_*` 族连警告一起捕获）、带可见性修饰属性名和最短往返浮点的 `serialize`/`unserialize`、数组游标（`current`/`next`/`key`/…）。
+- **错误与诊断与 PHP 8.4 渲染一致**：stdout 显示副本 + stderr `log_errors` 副本、`PHP Deprecated:`/`PHP Fatal error:` 前缀、带真实调用栈的多行未捕获错误、保留字 `exit`/`die` 在声明位的解析错误措辞（源码写 `die` 也渲染规范名 `exit`）。
+- **语言**：完整运算符优先级（含 `and`/`or` 短路）、`match`、一等可调用语法、闭包身份语义（拷贝后 `$f === $f`；生成器工厂）、trait（`insteadof`/`as`，`self`/`parent` 按声明处编译类绑定、owner 作用域可见性）、枚举、按声明序的只读/提升属性、命名空间、`@include` 抑制、`new static::$prop(...)`。
+- **OOP**：单继承、接口（含原生 `Iterator`/`IteratorAggregate` → `Traversable` 链）、trait 抽象方法作为**用类**的要求、签名兼容的 `self`/`static` 展开、静态属性家族共享存储（每声明类一槽，php 语义）。
+- **SPL 与迭代器**：ArrayObject/ArrayIterator、DLL/堆/优先队列族、SplFileInfo 族，以及迭代器家族——`IteratorIterator`、`FilterIterator`（accept 驱动、活对象 `$this->current()`）、`DirectoryIterator`/`FilesystemIterator`/`RecursiveDirectoryIterator`（裸 readdir 序、`getSubPath`/`getSubPathname`）、`GlobIterator`、`RecursiveIteratorIterator`（LEAVES_ONLY/SELF_FIRST/CHILD_FIRST）——足以让 Symfony Finder 启动。
+- **运行时**：进程执行（`proc_open` 带描述符管道、`exec`/`system`/`passthru`/`shell_exec`）、流与过滤器链及 `php://` 族、真文件会话、INI 层（286 条注册表、`-c/-n/-d`、`.user.ini`）、CLI `$argv`/`argc` 与 `$_SERVER` 镜像。
+- **客户端与存储**：PDO（mysql/sqlite）+ mysqli（prepared 协议）+ pgsql、zlib/zip/phar、openssl（AES/RSA/X509）、curl（file+http(s)）、gen_tcp 上的 sockets、`WeakMap`。
 
-## 正确性如何保证
+## 正确性如何被强制
 
-三层，全部由 `mix test` 驱动：
+三层：
 
 1. **单元测试**：词法、语法、值模型、有序数组。
-2. **差分测试**（`test/cases/*.php`）：每个用例在本机 PHP 和 phpx 上各跑一遍，**stdout 必须逐字节一致**——警告、错误文本、行号，全部。
-3. **php-src 官方验收 harness**（`test/phpbeam/phpt_test.exs`）：php-8.4.24 发行版约 700 个 `.phpt` 用例，按 `run-tests.php` 语义执行（PHP 式 trim、逐条照抄的 `expectf_to_regex` 代码表）。失败带分诊标签（`undef_fn`、`parse_error`、`mismatch`……），每个里程碑攻最大的一桶。
+2. **差分测试**（`test/cases/*.php`）：每个用例在本机 PHP 与 phpx 上各跑一遍；**stdout 必须逐字节一致**（错误路径用例连 stderr 一起比）。
+3. **php-src 官方验收 harness**（`test/phpbeam/phpt_test.exs`）：`.phpt` 用例按 `run-tests.php` 语义运行。纳入分阶段（先 Zend/tests，再扩展目录）；每批分诊为**修复 / 豁免（`docs/matrix/exempt.md`）/ 顺延（`docs/matrix/deferred.md`）**——没有静默跳过。`scripts/criterion.sh` 把冻结判据（失败集 ⊆ 豁免集）变成机械检查。
 
-## 架构
-
-```
-lib/phpbeam/
-├── lexer.ex        # PHP 8 词法：HTML/PHP 模式、heredoc、插值扫描
-├── parser.ex       # 递归下降 → AST；每条语句携带行号
-├── interp.ex       # 语句执行；警告/fatal、文件栈、调用栈
-├── eval.ex         # 表达式、左值、调用分派（含高阶 preg/排序）
-├── classes.ex      # 类模型、链接期继承检查、原生 Throwable
-├── value.ex        # zval 等价物：全部类型杂耍规则、浮点格式化
-├── parray.ex       # 有序哈希数组（slot 单调递增）+ 内部游标
-├── pattern.ex      # preg_* 引擎（原生 :re），命名组编号扫描器
-├── render.ex       # var_dump / print_r / var_export（与 PHP 逐字节一致）
-├── env.ex          # 作用域：局部/static/捕获 + 每帧实参快照
-├── builtin/        # 11 个注册表模块：string、math、array、var、file、
-│                   # ob、runtime/ini、serialize、cursor、preg
-└── cli.ex          # phpx CLI + 持久化 REPL
-```
-
-**关键设计**：
-
-- **控制流即值**：`return`/`break`/`throw` 以 `{:unwind, signal}` 元组穿透并始终携带最新解释器状态——static 变量、对象注册表、输出缓存在异常路径上不丢（用 Elixir 异常会丢弃累积状态）。
-- **解释器状态线程化，绝不共享**：`{result, env, interp}` 贯穿一切；副作用（警告、ob 写入、实参求值）必须返回新状态，否则静默丢失——本项目用血泪修掉的一整族 bug。
-- **对象是句柄**：`{:object, id}` 指向 `interp.objects`；属性写穿透注册表，所有持有者立即可见——免费获得 PHP 引用语义。
-- **错误带位置**：语句包行号，`Interp.cur_line` + 文件栈喂给每条警告/fatal；函数调用压帧（含渲染后的实参），支撑 PHP 8.4 风格的未捕获栈。
-- **PCRE 就是 PCRE**：Erlang 的 `:re` 底层就是 PCRE，模式体只做定界符/修饰符翻译即直通。
-
-## 通往 WordPress 的路线
-
-对着 WordPress 真实源码（它调用的每一个函数）量出来的：
-
-1. ✅ 语言核心、include 链、preg_*、serialize、输出缓冲——**WP 内置需求已覆盖 80%**
-2. ▶ 字符串/杂项内置扫尾（`is_callable`、`parse_url`、`md5`、`ord`/`chr`、`compact` 等）→ 约 85%
-3. ◻ resource 流（`fopen`/`fread`/`fseek`……需要 resource 值类型）、`trigger_error`、date/time 族
-4. ◻ SPL（`ArrayObject`、迭代器）、session、`filter_var`
-5. ◻ 基于Elixir 数据库驱动的 `mysqli`/PDO——真实站点的门槛
-6. ◻ 性能：PHP→Elixir AST 编译后端（词法/语法/值模型全复用）——树遍历比 php-src 慢 1~2 个数量级
-
-## 许可证
-
-[MIT](LICENSE)
+纪律：一模块一提交，过 `scripts/gate.sh` 门禁；失败基线只收缩；oracle 变更时的机器钉常量（php 版本、libcurl、sqlite）记入 `docs/matrix/drift.md`。实时计划见 **PLAN.md**，模块契约见 **ARCHITECTURE_DESIGN.md**。
