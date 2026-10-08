@@ -89,7 +89,12 @@
 
 - [x] T017-p5 闭包身份修复：`$f=fn();$g=$f;$f===$g` 恒 false（php true）——runtime 元组第 2 位铸 unique_integer、strict_eq 加闭包子句、8 处宽度匹配 + call_value/closure_state 位置解构随迁（call_value 漏改首跑 function_clause 当场抓获） | tests: ci/stp/stp2 全同；fast PASS | commit: 58f768f
 
+- [x] T017-p6 SPL 迭代器家族（八类）+ 五笔顺手修：IteratorIterator（快照驱动+IteratorAggregate unwrap）、FilterIterator（**接受期写回注册表**——$this->current() 读活对象而非 detached 副本；**valid 短路**防全-false 死循环；Map.new 后者覆盖——common 方法必须在前）、DirectoryIterator（current()===$this、裸 readdir 序——php 不排序）、FilesystemIterator（flags 位 4096/256/16/32 探针钉值）、RecursiveDirectoryIterator、GlobIterator（glob→regex）、RecursiveIteratorIterator（**走 inner iterator 的 getChildren**——current() 快照没有递归性，php RII 语义）、RecursiveIterator iface。顺手：**DateTime::ATOM 类 const 键形修复**（`{"X"}` 1-元组键 vs 查找用裸串——不可达 const）；$_ENV 空数组种子（oracle GPCS——count($_ENV) 可用无警告）；iterator_count 读 dt_state["pairs"]；SplFileInfo::getPathname；FS/RII 常量族 | tests: it1/it1b/g2/g4/g5/g6 六探针 byte-identical；fast PASS；基线重录 412@9 分片（稳定） | commit: b1743a6
+
 ### 恢复点（下会话从这里继续）
+
+**lc 锚现状**：`/tmp/lc.php`（LoadConfiguration standalone）进到 Finder 构建链后在 **FileTypeFilterIterator 构造处**卡住——`parent::__construct($iterator)` 收到 **int 1**（=Finder 的 ONLY_FILES 常量，本该是第二参）。两种嫌疑：①提升属性（promoted `private int $mode`）的 ctor 参数绑定错位；②调用点 `$iterator` 变量求值先被污染（更早的迭代器链返回了 1）。下一迭代从「打印 Finder 该调用点的两实参求值」下手（FilesystemIterator/自建 FilterIterator 已就绪，工具链齐）。
+**本单元新增债**（deferred 待录）：IteratorIterator rewind 快照（php 惰性）；FilterIterator 基类 accept 抽象未 fatal；DirectoryIterator seek/clone。
 
 **artisan 洋葱当前层（已定位到根）**：`LoadConfiguration` bootstrap → Symfony Finder 扫 config 目录 → **SPL 迭代器家族缺失**——`FilterIterator`/`IteratorIterator`/`FilesystemIterator`/`RecursiveDirectoryIterator`/`GlobIterator` 全无（`class_exists` 全 false；含 FileTypeFilterIterator extends \FilterIterator 注册即 fatal "Class filteriterator not found"）。**下一单元＝SPL 迭代器家族模块**（B5 债，X1-ext-spl 也要）：以 IteratorIterator（包装 inner Traversable，转发 current/key/next/rewind/valid）、FilterIterator（子类 override accept()；引擎驱动循环调 accept）、FilesystemIterator/RecursiveDirectoryIterator（目录扫 + SplFileInfo 产出）、GlobIterator（glob 模式）为骨架；Finder 另需 SplFileInfo 的 isFile/isDir/getFilename/getPathname 真目录语义（B5 里 SplFileInfo 族已有底子）。差分锚：`/tmp/lc.php`（LoadConfiguration standalone，php 侧 bool(true) bool(true)）。
 另记：容器 config 绑定问题为表象——真根即上（bootstrap 在 LoadConfiguration 炸，config 从未 instance）。
