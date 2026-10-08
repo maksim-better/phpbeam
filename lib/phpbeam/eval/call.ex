@@ -219,26 +219,26 @@ defmodule PhpBeam.Eval.Call do
     end
   end
 
-  def call_cb(cb, call_args, env, interp)
+  def call_cb(cb, call_args, env, interp), do: call_cb_dispatch(cb, call_args, env, interp)
 
-  def call_cb({:closure, _, _, _, _, _, _, _, _} = closure_value, call_args, env, interp),
+  defp call_cb_dispatch({:closure, _, _, _, _, _, _, _, _} = closure_value, call_args, env, interp),
     do: call_value(closure_value, wrap_args(call_args), env, interp)
 
-  def call_cb({:closure, _, _, _, _, _} = closure_ast, call_args, env, interp) do
+  defp call_cb_dispatch({:closure, _, _, _, _, _} = closure_ast, call_args, env, interp) do
     case eval(closure_ast, env, interp) do
       {{:val, v}, e2, i2} -> call_value(deref(v, i2), call_args, e2, i2)
       unw -> unw
     end
   end
 
-  def call_cb({:string, fname}, call_args, env, interp) do
+  defp call_cb_dispatch({:string, fname}, call_args, env, interp) do
     call_named([fname], String.downcase(fname), false, wrap_args(call_args), env, interp)
   end
 
-  def call_cb({:fcc, inner}, call_args, env, interp),
-    do: call_cb(inner, call_args, env, interp)
+  defp call_cb_dispatch({:fcc, inner}, call_args, env, interp),
+    do: call_cb_dispatch(inner, call_args, env, interp)
 
-  def call_cb({:method_fcc, obj_ref, mname}, call_args, env, interp) do
+  defp call_cb_dispatch({:method_fcc, obj_ref, mname}, call_args, env, interp) do
     eval(
       {:method_call, {:lit_val, obj_ref}, {:lit_name, mname}, wrap_args(call_args), false},
       env,
@@ -246,7 +246,7 @@ defmodule PhpBeam.Eval.Call do
     )
   end
 
-  def call_cb({:static_fcc, key, mname}, call_args, env, interp) do
+  defp call_cb_dispatch({:static_fcc, key, mname}, call_args, env, interp) do
     eval(
       {:static_call, {:cname, false, [key]}, {:lit_name, mname}, wrap_args(call_args)},
       env,
@@ -254,7 +254,7 @@ defmodule PhpBeam.Eval.Call do
     )
   end
 
-  def call_cb({:array, arr}, call_args, env, interp) do
+  defp call_cb_dispatch({:array, arr}, call_args, env, interp) do
     case PArray.values(arr) do
       [{:object, _} = obj_ref, {:string, m}] ->
         # php: unreachable-via-call_user_func* callbacks raise a catchable
@@ -294,7 +294,7 @@ defmodule PhpBeam.Eval.Call do
     end
   end
 
-  def call_cb(_, _call_args, env, interp) do
+  defp call_cb_dispatch(_, _call_args, env, interp) do
     {{:unwind, {:fatal, "Value not callable"}}, env, interp}
   end
 
