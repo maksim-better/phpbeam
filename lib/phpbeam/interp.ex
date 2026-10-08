@@ -825,6 +825,16 @@ defmodule PhpBeam.Interp do
 
   def exec_stmts([], env, interp, :ok), do: {:ok, env, interp}
 
+  def exec_stmts([s | _] = stmts, nil, interp, :ok) do
+    if System.get_env("PHPX_FI_DBG") do
+      first = hd(stmts)
+      line = elem(first, 1)
+      IO.puts(:stderr, "DBG nil-env stmts at #{PhpBeam.Interp.current_file(interp)}:#{line} stmt=#{inspect(elem(first, 2), limit: 4)}")
+    end
+
+    exec_stmts(stmts, %PhpBeam.Env{}, interp, :ok)
+  end
+
   def exec_stmts([], env, interp, {:unwind, u}), do: {{:unwind, u}, env, interp}
 
   # once unwound, stop executing the remaining statements
@@ -1541,8 +1551,12 @@ defmodule PhpBeam.Interp do
         end
 
       {{:unwind, _} = uw, e2, i2} ->
-        case run_finally_raw(finally, e2, i2) do
-          {:ok, e3, i3} -> {uw, e3, i3}
+        # the finally body runs in the TRY'S OWN scope — a return-unwind
+        # carries env=nil BY CONVENTION (php: finally still sees the
+        # function's variables, Container::build's `finally { array_pop(...) }`
+        # executed with the closure's nil env and crashed)
+        case run_finally_raw(finally, env, i2) do
+          {:ok, e3, i3} -> {uw, e2, i3}
           other -> other
         end
     end
