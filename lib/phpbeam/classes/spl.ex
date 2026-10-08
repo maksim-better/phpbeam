@@ -175,11 +175,12 @@ defmodule PhpBeam.Classes.Spl do
                 {:ok, {:null, st_put(obj, "inner", inner)}, i2}
 
               _ ->
-                {:unwind,
-                 {:php_throw,
-                  {:native_error, "TypeError",
-                   "IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable"}},
-                 i}
+                throw_payload =
+                  {:php_throw,
+                   {:native_error, "TypeError",
+                    "IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable"}}
+
+                {{:unwind, throw_payload}, obj, i}
             end
           end),
           nfn("getinneriterator", fn obj, _a, i ->
@@ -569,20 +570,34 @@ defmodule PhpBeam.Classes.Spl do
           nfn("__construct", fn obj, a, i ->
             case a do
               [{:object, _} = inner | rest] ->
-                mode =
-                  case Enum.at(rest, 0) do
-                    {:int, n} when n in [1, 2] -> n
-                    _ -> 0
-                  end
+                {inner1, i1} = ii_inner(inner, i)
 
-                {:ok, {:null, st_put(st_put(obj, "inner", inner), "mode", mode)}, i}
+                # probed php: non-recursive inner → InvalidArgumentException
+                # "An instance of RecursiveIterator or IteratorAggregate creating it is required"
+                if PhpBeam.Classes.is_a?(i1, obj_class(i1, inner1), "recursiveiterator") do
+                  mode =
+                    case Enum.at(rest, 0) do
+                      {:int, n} when n in [1, 2] -> n
+                      _ -> 0
+                    end
+
+                  {:ok, {:null, st_put(st_put(obj, "inner", inner1), "mode", mode)}, i1}
+                else
+                  throw_payload =
+                    {:php_throw,
+                     {:native_error, "InvalidArgumentException",
+                      "An instance of RecursiveIterator or IteratorAggregate creating it is required"}}
+
+                  {{:unwind, throw_payload}, obj, i1}
+                end
 
               _ ->
-                {:unwind,
-                 {:php_throw,
-                  {:native_error, "TypeError",
-                   "RecursiveIteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable"}},
-                 i}
+                throw_payload =
+                  {:php_throw,
+                   {:native_error, "TypeError",
+                    "RecursiveIteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable"}}
+
+                {{:unwind, throw_payload}, obj, i}
             end
           end),
           nfn("rewind", fn obj, _a, i ->

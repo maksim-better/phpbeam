@@ -202,12 +202,19 @@ defmodule PhpBeam.Classes.Table do
                  {:expr_stmt, {:assign, {:prop, {:var, "this"}, {:lit_name, name}}, {:var, name}}}}
               end)
 
-            plain_params =
-              Enum.map(promoted, fn {:param_promoted, _pvis, _ro, name, t, d, br, var} ->
-                {:param, name, t, d, br, var}
+            # php keeps DECLARATION ORDER — promoted params stay where the
+            # author wrote them ($a, private int $mode → [$a, $mode], NOT
+            # promoted-first; probed: swapping reorders positional binding)
+            new_params =
+              Enum.map(params, fn
+                {:param_promoted, _pvis, _ro, name, t, d, br, var} ->
+                  {:param, name, t, d, br, var}
+
+                p ->
+                  p
               end)
 
-            {vis, st?, ab?, fi?, br?, "__construct", plain_params ++ plain, assigns ++ body, line}
+            {vis, st?, ab?, fi?, br?, "__construct", new_params, assigns ++ body, line}
           end
 
         m ->

@@ -330,6 +330,14 @@ defmodule PhpBeam.Eval.Call do
           # propagate with the method's interp: side effects (objects, output)
           # made before the throw must survive
           {{:unwind, _} = u, _, it2} -> {u, env, it2}
+
+          other ->
+            IO.puts(
+              :stderr,
+              "DBG ctor-res size=#{tuple_size(other)} #{inspect(other, limit: 10)}"
+            )
+
+            other
         end
     end
   end
