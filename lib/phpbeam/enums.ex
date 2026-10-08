@@ -10,12 +10,28 @@ defmodule PhpBeam.Enums do
   # class decl struct lives in the table module (Classes is only a facade)
   alias PhpBeam.Classes.Table
 
+  defp kind_article("enum"), do: "an"
+  defp kind_article(_), do: "a"
+
   def register(decl, interp) do
     key = Classes.full_key_of(decl.name, interp)
 
     if Map.has_key?(interp.classes, key) do
       {:ok, PhpBeam.Interp.warn(interp, "Cannot declare enum #{decl.name} twice")}
     else
+      # PHP 8.4: `_` as an enum name is deprecated (probed wording) — the
+      # parser collects it, we emit the live warning here
+      interp =
+        Enum.reduce(decl[:deprecated_names] || [], interp, fn {kind, line}, it ->
+          PhpBeam.Interp.warn_level_at(
+            it,
+            "Deprecated",
+            "Using \"_\" as #{kind_article(kind)} #{kind} name is deprecated since 8.4",
+            PhpBeam.Eval.eval_file(it),
+            line
+          )
+        end)
+
       class = build(decl, key, interp)
       interp2 = %{interp | classes: Map.put(interp.classes, key, class)}
 

@@ -85,6 +85,36 @@ defmodule PhpBeam.Parser do
 
   defp reject_exit_die!(_, _), do: :ok
 
+  # php 8.4 reserved class-like names (probed matrix): type names fatal at
+  # declaration — `Cannot use "bool" as an enum name as it is reserved` —
+  # while array/callable/static die as plain parse errors upstream
+  @reserved_class_names ~w(bool int float string iterable object mixed null false true)
+
+  defp reject_reserved_name!([{:name, l, n} | _], kind) when n in @reserved_class_names,
+    do:
+      raise(
+        ParseError,
+        message:
+          "@fatal Cannot use \"#{n}\" as #{kind_article(kind)} #{kind} name as it is reserved",
+        line: l
+      )
+
+  defp reject_reserved_name!(_, _), do: :ok
+
+  # `_` as a class-like name is deprecated since 8.4 (probed wording) —
+  # a RUNTIME warning, so the parser collects it into members and register()
+  # emits it with a live interp
+  defp deprecated_name_member(ts, kind) do
+    case ts do
+      [{:name, l, "_"} | _] -> [{:deprecated_name, {kind, l}}]
+      _ -> []
+    end
+  end
+
+  defp kind_article("enum"), do: "an"
+  defp kind_article("interface"), do: "an"
+  defp kind_article(_), do: "a"
+
   defp take_ident([{k, _, v} | rest]) when k == :name, do: {v, rest}
 
   defp take_ident([{_, l, v} | _]),
@@ -338,12 +368,14 @@ defmodule PhpBeam.Parser do
 
   defp class_stmt(mods, [{_, _, kind} | rest]) do
     reject_exit_die!(rest, "identifier")
+    reject_reserved_name!(rest, kind)
+    dep_member = deprecated_name_member(rest, kind)
     {name, rest2} = take_ident(rest)
     {extends, rest3} = optional_extends(kind, rest2)
     {implements, rest4} = optional_implements(kind, rest3)
 
     rest5 = expect_op(rest4, "{")
-    {members, rest6} = class_members(rest5, [], name)
+    {members, rest6} = class_members(rest5, dep_member, name)
     rest7 = expect_op(rest6, "}")
 
     decl = %{
@@ -357,6 +389,7 @@ defmodule PhpBeam.Parser do
       consts: List.flatten(Keyword.get_values(members, :consts)),
       props: List.flatten(Keyword.get_values(members, :props)),
       prop_hooks: List.flatten(Keyword.get_values(members, :prop_hooks)),
+      deprecated_names: List.flatten(Keyword.get_values(members, :deprecated_name)),
       methods: List.flatten(Keyword.get_values(members, :methods)),
       uses: Keyword.get_values(members, :uses)
     }
@@ -367,6 +400,8 @@ defmodule PhpBeam.Parser do
   # `enum Name [: string] { use Trait; case A; case B = "b"; const/methods }`
   defp enum_stmt(mods, [{_, _, "enum"} | rest]) do
     reject_exit_die!(rest, "identifier")
+    reject_reserved_name!(rest, "enum")
+    dep_member = deprecated_name_member(rest, "enum")
     {name, rest2} = take_ident(rest)
 
     {backing, rest3} =
@@ -381,7 +416,7 @@ defmodule PhpBeam.Parser do
 
     {implements, rest4} = optional_implements("enum", rest3)
     rest5 = expect_op(rest4, "{")
-    {members, rest6} = class_members(rest5, [], name)
+    {members, rest6} = class_members(rest5, dep_member, name)
     rest7 = expect_op(rest6, "}")
 
     decl = %{
@@ -393,8 +428,10 @@ defmodule PhpBeam.Parser do
       implements: implements,
       consts: List.flatten(Keyword.get_values(members, :consts)),
       props: [],
+      prop_hooks: [],
       methods: List.flatten(Keyword.get_values(members, :methods)),
       cases: List.flatten(Keyword.get_values(members, :cases)),
+      deprecated_names: List.flatten(Keyword.get_values(members, :deprecated_name)),
       uses: Keyword.get_values(members, :uses)
     }
 
@@ -2549,6 +2586,7 @@ defmodule PhpBeam.Parser do
       consts: List.flatten(Keyword.get_values(members, :consts)),
       props: List.flatten(Keyword.get_values(members, :props)),
       prop_hooks: List.flatten(Keyword.get_values(members, :prop_hooks)),
+      deprecated_names: [],
       methods: List.flatten(Keyword.get_values(members, :methods)),
       uses: Keyword.get_values(members, :uses)
     }

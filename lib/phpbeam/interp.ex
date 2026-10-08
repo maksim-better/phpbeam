@@ -151,6 +151,9 @@ defmodule PhpBeam.Interp do
     else
       {:error, {:fatal_check, msg}, line} ->
         fname = file || "Command line code"
+        # probed php 8.4.17: compile-time fatals render BOTH channels like
+        # parse errors — display copy on stdout, PHP-prefixed log on stderr
+        IO.write(:stderr, "PHP Fatal error:  #{msg} in #{fname} on line #{line}\n")
         {"\nFatal error: #{msg} in #{fname} on line #{line}\n", 255, interp2_stub()}
 
       {:error, msg, line} ->
@@ -507,6 +510,15 @@ defmodule PhpBeam.Interp do
       interp
     else
       if (error_reporting_int(interp) &&& type) != 0 do
+        # probed php 8.4.17: log_errors=1 (default) writes a PHP-prefixed
+        # copy of EVERY displayed diagnostic to stderr — parse fatals and
+        # uncaught errors already do this on their render paths
+        log_on = Map.get(interp.ini, "log_errors", "1") |> to_string() |> String.downcase()
+
+        if log_on in ~w(1 on true yes) do
+          IO.write(:stderr, "PHP #{prefix}:  #{msg} in #{file} on line #{line}\n")
+        end
+
         interp
         |> display("\n#{prefix}: #{msg} in #{file} on line #{line}\n")
         |> Map.update!(:warnings, &(&1 + 1))

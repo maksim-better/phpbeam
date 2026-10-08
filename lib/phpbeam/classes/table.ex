@@ -47,11 +47,16 @@ defmodule PhpBeam.Classes.Table do
       implements: implements,
       consts: consts,
       props: props,
-      prop_hooks: prop_hooks,
+      prop_hooks: prop_hooks0,
+      deprecated_names: deprecated_names0,
       methods: methods,
       uses: uses,
       modifiers: mods
     } = decl
+
+    # anonymous-class decls (and older parsers) may omit the newer fields
+    prop_hooks = Map.get(decl, :prop_hooks, prop_hooks0)
+    deprecated_names = Map.get(decl, :deprecated_names, deprecated_names0)
 
     # PHP 8.4 property hooks: each {:prop_hooks, entry, hooks} member both
     # declares its property and attaches get/set bodies to it
@@ -99,6 +104,17 @@ defmodule PhpBeam.Classes.Table do
           )
           |> merge_prop_hooks(prop_hooks)
 
+        interp =
+          Enum.reduce(deprecated_names, interp, fn {kind, line}, it ->
+            PhpBeam.Interp.warn_level_at(
+              it,
+              "Deprecated",
+              "Using \"_\" as #{kind_article(kind)} #{kind} name is deprecated since 8.4",
+              PhpBeam.Eval.eval_file(it),
+              line
+            )
+          end)
+
         case apply_traits(class, uses, interp) do
           {:ok, class2, it} ->
             interp2 = %{it | classes: Map.put(it.classes, key, class2)}
@@ -120,6 +136,10 @@ defmodule PhpBeam.Classes.Table do
   # attach get/set hook bodies ({params, body}; body nil = `get;` shorthand)
   # onto their property maps — hooked props were injected into the props list
   # by register()
+  defp kind_article("enum"), do: "an"
+  defp kind_article("interface"), do: "an"
+  defp kind_article(_), do: "a"
+
   defp merge_prop_hooks(class, []), do: class
 
   defp merge_prop_hooks(class, prop_hooks) do
