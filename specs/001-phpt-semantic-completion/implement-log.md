@@ -124,7 +124,12 @@
 
 - [x] T017-p19-b call_value array 臂去双包（335f177）：wrap_args DOUBLE-PACK probe 实证 args 已是 AST——call_value({:array}) 直传 dispatch（dispatch 臂自会包装）。**string-FCC 链残余**：`Function that exists{:arg,…}` ——bar(" OK".PHP_EOL) 的返回/求值路径仍把 AST 当值打出（call_named 返回槽污染疑点）；且 cc_basic 尾部 PublicInvocable __invoke 实例 arm 已补。基线 468@19（closures 7）。
 
+- [x] T017-p19-c string 臂先求值再调用（a49d344）：wrap_args(AST) 把 AST 包成 lit_val 当值——echo 打出结构字面（`{:arg,…}` 泄漏正主）；改 arg_values 先求值。mf3 IDENTICAL、cc_basic 推进 9 行；fast PASS。**fromCallable 作用域绑定**（类内私有方法 FCC 按创建方 scope 判可见性）登记 deferred——下一专项（basic 后段 + rebinding/lsb/reflection 同族 3-4 例）
+
 ### 恢复点（下会话从这里继续）
+
+**p19-d 主攻**：Closure::fromCallable 的作用域绑定——eval 层特判（参照 Closure::bind 的 skip 分支 call.ex:14），method_fcc 加 scoped 变体（{:method_fcc_scoped, oref, m, scope_class, this}），dispatch 时 cb_scope_ok? 按创建方 scope。完成后 basic 全通 + rebinding/lsb/reflection 三例预计连带。
+**沿用**：list-by-ref 11 例；vendor DBG 还原；基线 468@19。
 
 **T019-b 收口路径**：①单点 `phpx -r 'function bar(){return "B";} $f="bar"; echo $f(" OK");'`——若打 AST 即最小复现（call_named 返回槽污染）→ 修；②PublicInvocable __invoke arm 验证；③closures 剩 7 例清点。
 **工具链提醒**：cc_basic.php 是从 phpt 提取的 body 文件（会因源树清理丢失——重生成命令在 quickstart/台账均有）。
