@@ -120,7 +120,12 @@
 
 - [x] T017-p19 探针收尾（fast PASS，无代码变更提交——clean tree）。**colon-scheme 线索精确化**：`Closure::fromCallable("Foo::publicStaticFunction")` → static_fcc("foo","publicstaticfunction") → 调用时报 `Call to undefined method Foo::publicfunction()`——**方法名在错误里呈全小写**=我们的 downcase 在 FCC 形里提前丢失原拼写？方法表键本就 downcase 应命中——疑 static_fcc 的 eval({:static_call,...}) 把 key 当**显示名**再 resolve 时二次处理。下一迭代从「phpx -r 'require inc; Closure::fromCallable("Foo::publicStaticFunction"); $f("x");'」单点追。
 
+- [x] T017-p19 收尾：call_value 可调用值形状补全（string/array/__invoke 三臂 + 静默兜底 fatal——**兜底必须放子句族末尾**，插中间截获 static_fcc 被当场抓获）；fast PASS（d0177a1）。closures 分片 10→7（basic 推进到尾部、部分语义差异剩）。**剩余差异点（下一迭代）**：①`{:arg,…}` AST 泄漏进输出流（string-FCC 调用链 wrap_args 双包——`Function that exists{:arg,…}` 现场）；②rebinding/lsb/reflection 三例的绑定语义；③`{:fcc,inner}` 的 invoke_fcc arg 求值路径在 FCC-after-fromCallable 场景的参数形态混用（call_value 家族现在同时接 AST/vals 两种 args——**契约分裂**，需统一）。
+
 ### 恢复点（下会话从这里继续）
+
+**p19-b 线索**：`{:arg,…}` AST 打进输出 = wrap_args 对**已求值 vals** 再包一层后某处 php_to_string 了结构。查 call_value({:string}) → call_named(wrap_args(args)) 中 args 的真实形态（do_call {:var} 臂传 AST；concat 路径传 vals？）——统一 call_value 的 args 契约为 AST（各臂内部 arg_values）。
+**沿用**：list-by-ref 11 例；vendor DBG 还原；基线 468@19。
 
 **closures 10 例收尾路径**：colon-scheme 1 例（上述）→ basic 全通 → 其余 9 例（lsb/rebinding/non_static/reflection/error/instantiate/gc/gh19653×2）逐个 probe 对齐。
 **沿用**：list-by-ref 11 例；vendor DBG 还原；基线 468@19。
