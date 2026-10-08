@@ -31,6 +31,7 @@ defmodule PhpBeam.Eval do
       {{:val, globals_array(interp)}, env, interp}
     else
       if name == "this" and not match?({:object, _}, env && env.this) do
+        :ok
         # php 8: reading $this with no bound object is an ERROR in every
         # context (probed: plain fn / closure / static method / top level);
         # isset($this) stays false via the isset path (it never evals the var)
