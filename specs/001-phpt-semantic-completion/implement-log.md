@@ -91,7 +91,12 @@
 
 - [x] T017-p6 SPL 迭代器家族（八类）+ 五笔顺手修：IteratorIterator（快照驱动+IteratorAggregate unwrap）、FilterIterator（**接受期写回注册表**——$this->current() 读活对象而非 detached 副本；**valid 短路**防全-false 死循环；Map.new 后者覆盖——common 方法必须在前）、DirectoryIterator（current()===$this、裸 readdir 序——php 不排序）、FilesystemIterator（flags 位 4096/256/16/32 探针钉值）、RecursiveDirectoryIterator、GlobIterator（glob→regex）、RecursiveIteratorIterator（**走 inner iterator 的 getChildren**——current() 快照没有递归性，php RII 语义）、RecursiveIterator iface。顺手：**DateTime::ATOM 类 const 键形修复**（`{"X"}` 1-元组键 vs 查找用裸串——不可达 const）；$_ENV 空数组种子（oracle GPCS——count($_ENV) 可用无警告）；iterator_count 读 dt_state["pairs"]；SplFileInfo::getPathname；FS/RII 常量族 | tests: it1/it1b/g2/g4/g5/g6 六探针 byte-identical；fast PASS；基线重录 412@9 分片（稳定） | commit: b1743a6
 
+- [x] T017-p7 提升属性参数序 + RII 校验 + ctor throw 形状：**promoted 参数按声明序**（table.ex desugar 曾 promoted 前置→`__construct($a, private int $mode)` 位置实参错位——php 探针钉死声明序；FileTypeFilterIterator 收 mode 当迭代器即此根）；RII 构造校验（非 RecursiveIterator inner → InvalidArgumentException 精确措辞，php 拒收 ex1 实证）；native ctor throw 改 `{{:unwind,payload},obj,interp}` 三元（旧语句三元撞 call_constructor case——括号手术三翻车后用临时变量定型）。未竟：uncaught 栈缺 ctor 帧（ex1 差分仅此）；Symfony RDI 子类链（ignoreFirstRewind/自定义 current）在 lc 深处仍现 {pathname,:null} 对——最小复现 ifr 却 IDENTICAL，需带全 Finder 上下文再猎 | tests: pp1/ifr/ex1(除栈帧)/六探针；fast PASS | commit: c7dc3cf
+
 ### 恢复点（下会话从这里继续）
+
+**lc 锚下一层（T017-p8 线索）**：Symfony `RecursiveDirectoryIterator`（finder 子类：`private bool $ignoreFirstRewind = true` + 自定义 rewind 首跳 + 自定义 current() new SplFileInfo）在 Finder 链里产出 `{pathname, :null}` 对（排除过滤器的 pair 值 null）。**ifr 最小复现 IDENTICAL**——说明孤立机制没问题，分歧在 Finder 全链（多实例/求值序/子路径状态）。下迭代直接在 finder 子类上带真实 config 目录复现（排除 Exclude 过滤器，仅 Symfony RDI + foreach），对拍 php 逐项。
+**ecosystem note**：IteratorIterator 快照 vs php 惰性——Symfony LazyIterator 的 fn() => searchInDirectory 延迟执行依赖快照时机，若后续差分踩到再改真惰性驱动。
 
 **lc 锚现状**：`/tmp/lc.php`（LoadConfiguration standalone）进到 Finder 构建链后在 **FileTypeFilterIterator 构造处**卡住——`parent::__construct($iterator)` 收到 **int 1**（=Finder 的 ONLY_FILES 常量，本该是第二参）。两种嫌疑：①提升属性（promoted `private int $mode`）的 ctor 参数绑定错位；②调用点 `$iterator` 变量求值先被污染（更早的迭代器链返回了 1）。下一迭代从「打印 Finder 该调用点的两实参求值」下手（FilesystemIterator/自建 FilterIterator 已就绪，工具链齐）。
 **本单元新增债**（deferred 待录）：IteratorIterator rewind 快照（php 惰性）；FilterIterator 基类 accept 抽象未 fatal；DirectoryIterator seek/clone。
