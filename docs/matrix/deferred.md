@@ -223,3 +223,10 @@ DEFER T006 log_errors stderr 副本通道 | lang,strings,func,classes,basic,outp
 - [ ] enum 名检查：`_` 弃用警告 + 保留字 fatal（gh15976/enum-names；class/interface/trait-names 同族=类名保留字表）
 - [ ] typed-prop 未初始化读检查（ph1 揭示的整体缺口）
 - [ ] leaks.phpt 的 `Caught` 缺失（嵌套 try/catch 流控小差异）
+
+## Z 相第二批分诊（2026-10-09，六目录 44 例基线：arrow5/closures10/list11/anon7/numeric5/multibyte6）
+
+- [ ] **箭头未定义警告位置/名字细节**：oracle 报定义行，我们报调用行（003 的 `$$var` 警告名成 "$"——可变变量 free_vars 收集）；捕获应延后到 CALL 时读才精确（需 cell 未定义标记）
+- [ ] **list-by-ref 解包语义**：`list(&$a, list(&$b)) = $arr` 引用格绑定 + var_dump 的 `&int(1)` 标记 + 写回影响数组（list_reference 族 11 例——H0「返回引用真语义」一族，an-reference 大单元的前哨）
+- [ ] closures/anon/numeric/multibyte 的类级差异待分诊（44-已知约 35 例）
+- [ ] DEBUG_BACKTRACE_IGNORE_ARGS 常量（沿用）

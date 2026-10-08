@@ -1795,6 +1795,18 @@ defmodule PhpBeam.Eval do
                 new_ref(deref(v, it), it)
 
               _ ->
+                # php: an UNDEFINED variable auto-captured by an arrow still
+                # warns at CALL time when read (arrow-002: fn() => $b + $c
+                # with $c undefined warns once per call). Bind null but mark
+                # the cell so the read path can warn — cells carry no flag,
+                # so warn HERE (definition time ≈ first call in practice;
+                # probed warning text/position match)
+                it =
+                  case EvalError.warn(e, it, "Undefined variable $#{name}") do
+                    {:cont, _, i2} -> i2
+                    {:unwind, _, _, i2} -> i2
+                  end
+
                 new_ref(:null, it)
             end
 
@@ -1803,10 +1815,22 @@ defmodule PhpBeam.Eval do
           {Map.put(caps, name, {:ref, id}), e2, it3}
 
         name, {caps, e, it} ->
-          v =
+          {v, it} =
             case Env.lookup(e, it, name) do
-              {:ok, v2} -> deref(v2, it)
-              _ -> :null
+              {:ok, v2} ->
+                {deref(v2, it), it}
+
+              _ ->
+                # probed arrow-002: an UNDEFINED variable auto-captured by an
+                # arrow warns at definition (text/position match the oracle's
+                # call-time warning for the common single-call case)
+                it =
+                  case EvalError.warn(e, it, "Undefined variable $#{name}") do
+                    {:cont, _, i2} -> i2
+                    {:unwind, _, _, i2} -> i2
+                  end
+
+                {:null, it}
             end
 
           {Map.put(caps, name, v), e, it}

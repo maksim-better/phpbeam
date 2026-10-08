@@ -38,7 +38,13 @@ suites = [
   {"zend-throw", "Zend/tests/throw"},
   {"zend-ast", "Zend/tests/ast"},
   {"zend-typehints", "Zend/tests/typehints"},
-  {"zend-gh15976", "Zend/tests/gh15976"}
+  {"zend-gh15976", "Zend/tests/gh15976"},
+  {"zend-arrow", "Zend/tests/arrow_functions"},
+  {"zend-closures", "Zend/tests/closures"},
+  {"zend-list", "Zend/tests/list"},
+  {"zend-anon", "Zend/tests/anon"},
+  {"zend-numeric-strings", "Zend/tests/numeric_strings"},
+  {"zend-multibyte", "Zend/tests/multibyte"}
 ]
 
 # PHPT_DIRS="lang,basic" limits the compiled suites to those dir_ids
