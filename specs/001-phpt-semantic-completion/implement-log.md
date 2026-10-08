@@ -110,7 +110,14 @@
 
 - [x] T017-p14 **Z 相主体启动**：catch 原生错误物化（find_catch 绑定前 {:native_error,...} → materialize 成真对象——php catch 永远给对象；泛适修复，全引擎 Error 被 catch 场景）；四 Zend 子目录纳入（zend-throw 2/ast 2/typehints 4/gh15976 5 → 基线 425@13 分片）；分诊五缺口登记 deferred（算术措辞带操作数类型、assert AST 导出、`\int` unqualified fatal、enum/类名保留字检查、typed-prop 未初始化读） | tests: throw/001 体语义对齐（余算术措辞）；fast 前已验证；基线录制绿 | commit: 195699d
 
+- [x] T017-p15 算术错误措辞带操作数：value.ex arith_operand 错误改 **tag**（:unsupported_operand——渲染需 op/两侧上下文故上移）；eval arith 层渲染 `Unsupported operand types: <左类名|gettype> <op符号> <右类型>`（oracle 探针钉死 `E + int`）；interp 线程化进 arith/4；ValueTest 期望随 tag 化 | tests: throw/001 语义对齐（leaks 余 `Caught` 流控小差异）；基线 424@13 收缩；fast PASS | commit: 593c0a0
+
 ### 恢复点（下会话从这里继续）
+
+**Z 相节奏（确立循环）**：每迭代 = 纳入 3-6 个小子目录 → 首录 → 分诊 → 修最大普适类 → 收缩提交。
+**下一批候选**：arrow_functions(8)/closures(11)/list(11)/anon(16)/numeric_strings(8)/multibyte(8) ~62 例。
+**deferred 弹药**（按普适序）：①`\int` unqualified fatal（parser 类型声明检查——typehints 2 例）；②enum/类名保留字检查（gh15976 5 例一族）；③assert AST 导出（ast 1 例+）；④typed-prop 未初始化读检查（ph1 揭示）；⑤leaks `Caught` 流控。
+**基线**：424 @ 13 分片。
 
 **Z 相节奏确立**：每迭代纳入 3-6 个小子目录 → 首录 → 分诊 → 修最大普适类 → 收缩提交。**下一批候选**（zend-*/ 子目录按大小序）：arrow_functions(8)/closures(11)/list(11)/anon(16)/numeric_strings(8)/multibyte(8) 一批 ~54 例。**deferred 五缺口**是这批分诊的直接弹药——优先修「算术措辞带操作数」（两例立收）。
 **基线现况**：425 失败 @ 13 分片（401 + throw2/ast2/typehints4/gh15976 5 = 13 新例中 13 失败——exit 分片此前 12）。
