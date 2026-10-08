@@ -114,7 +114,12 @@
 
 - [x] T017-p16 保留字矩阵 + `_` 弃用 + log_errors stderr 三连：①类名保留字矩阵 oracle 钉死（bool/int/float/string/iterable/object/mixed/null/false/true → `Cannot use "X" as a <kind> name as it is reserved` 编译期 fatal（@fatal 通道）；array/callable/static 是词法 parse error）；②`_` 弃用（parser 收集 deprecated_name 成员 → class 走 Classes.register、**enum 走 Enums.register 独立路径**两处都发活警告——enum 曾静默因忘接）；③**log_errors stderr 副本通道全量补齐**（T006 债清偿——每条显示诊断一条 `PHP <前缀>:  msg in file on line N` stderr，log_errors 门控）；④匿名类 decl 补 prop_hooks/deprecated_names 字段（缺键 badmatch——21_m24 回归当场抓获，工程教训：**register 新增解构键必须同步 anon decl**） | tests: e1/cu/e2/case21 IDENTICAL；基线 424@13；fast PASS | commit: ee28f31
 
+- [x] T017-p17 六目录纳入 + 箭头捕获误警修正：arrow/closures/list/anon/numeric_strings/multibyte 六分片入基线（62 例/44 败，总账 468@19）；箭头自动捕获**未定义变量发 Warning**（arrow-002 oracle 对齐）——首版两处误警被 05_funcs 差分当场抓获：①赋值目标是写不是读（`$a + $n = 5` 的 $n）→ arrow_vars 排除 target var（复合目标保留内部读）；②by-ref use 定义时未定义**合法**（自引用闭包 use (&$fact)）→ by-ref 臂静默 | tests: 05_funcs/arrow002 IDENTICAL；fast PASS | commits: 0dea9da + c555201
+
 ### 恢复点（下会话从这里继续）
+
+**下一批**：closures(10)/list(11，list-by-ref 族=引用大单元前哨)/anon(7) 的类级分诊；deferred 弹药（`\int` unqualified、assert AST 导出、typed-prop 未初始化、箭头警告位置/可变变量名）。
+**基线**：468 @ 19 分片。
 
 **下一批候选不变**：arrow_functions(8)/closures(11)/list(11)/anon(16)/numeric_strings(8)/multibyte(8) ~62 例。**deferred 余项**：`\int` unqualified（typehints 2）、assert AST 导出、typed-prop 未初始化读、leaks `Caught`。
 **基线**：424 @ 13 分片。
