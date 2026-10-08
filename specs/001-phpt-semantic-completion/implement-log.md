@@ -101,7 +101,12 @@
 
 - [x] T017-p10 收尾：探针清除、fast PASS（27b6000）。**新确诊债（deferred 级）**：bc.php 链上出现 **env=nil 的 var 读取**——栈：exec_stmts(853)→stmt_line(885)→expr_stmt(928)→call_builtin(403)→arg eval→prop eval→var$this，env 贯穿为 nil ⇒ **某条语句把 nil env 当 :ok 线程化**（return-unwind 约定 env=nil 的残余泄漏——上层收到 {:unwind} 后某处又当值继续）。这不是 $this 守卫的错（守卫语义正确），是 nil-env 线程化泄漏的正主。修复方向：audit interp.ex 所有 return unwind 出口 + exec_stmts 的 goto-resume 路径，确保 :ok 分支永不携带 nil env。
 
+- [x] T017-p11 **finally-env 根因修复**：try_stmt 的 unwind 臂把 `e2`（return-unwind 约定携带 nil）直接喂给 finally 语句——Container::build 的 `finally { array_pop($this->buildStack) }` 即在此炸穿（nil-env 读 $this 全链症状的正主）。修为 finally 体用 **try 语句自身的 env**（php 语义：finally 在 try 作用域执行、看得到函数变量），信号按原 env 槽传播。bc.php（bootstrap 四级 + build(closure) 全链）与 php **IDENTICAL**；artisan 穿过 config/LogManager/Carbon 到 **`Class "Request" not found`**（AliasLoader 的 class_alias 机制——下一层） | tests: bc IDENTICAL；fast PASS | commit: ab0674b
+
 ### 恢复点（下会话从这里继续）
+
+**T017-p12 线索**：`Class "Request" not found`（SetRequestForConsole）——php 的 AliasLoader 在 composer autoload 时把 `Request`/`Route` 等短名 class_alias 到 FQCN；我们 php 侧 `class_alias` 已有（B6 实现过）但 AliasLoader 的注册器链（spl_autoload_register 的 loader 检查 `$aliases` 映射）可能没触发。从 `phpx -r 'require autoload; var_dump(class_exists("Request"));'` 起查（php true）。
+**收尾清单**：laravel-smoke vendor DBG 残留还原（Container/LoadConfiguration 有 .bak；Application.php 的 BOOT 两行、EntryParser.php 的 BAD-STATE 行需手撤）；DEBUG_BACKTRACE_IGNORE_ARGS 常量补；closure 帧进 uncaught 栈（ex1/tb 差分）。
 
 **T017-p11**：①**nil-env 线程化泄漏**（上述，根因级）——修完 bc.php 应到 "done"，artisan 过 build('env')；②laravel-smoke vendor DBG 残留待还原（备份 /tmp/{Container,LoadConfiguration}.php.bak，Application.php/EntryParser.php 无备份需手撤 DBG 行）；③DEBUG_BACKTRACE_IGNORE_ARGS 常量缺失（php 调试块用）。
 **工具链提示**：rebuild 后必须显式 grep error（编译错误会被重定向吞）；artisan 单跑 ~5 分钟（Carbon 重），用 `phpx /tmp/bc.php`（~3 秒）做快速回路。
