@@ -103,7 +103,13 @@
 
 - [x] T017-p11 **finally-env 根因修复**：try_stmt 的 unwind 臂把 `e2`（return-unwind 约定携带 nil）直接喂给 finally 语句——Container::build 的 `finally { array_pop($this->buildStack) }` 即在此炸穿（nil-env 读 $this 全链症状的正主）。修为 finally 体用 **try 语句自身的 env**（php 语义：finally 在 try 作用域执行、看得到函数变量），信号按原 env 槽传播。bc.php（bootstrap 四级 + build(closure) 全链）与 php **IDENTICAL**；artisan 穿过 config/LogManager/Carbon 到 **`Class "Request" not found`**（AliasLoader 的 class_alias 机制——下一层） | tests: bc IDENTICAL；fast PASS | commit: ab0674b
 
+- [x] T017-p12 **PHP 8.4 属性钩子落地**：parser prop_member 识别 hook 块（get/set、参数表、`=>` 箭头 / `{...}` 块体 / `;` 简写）；decl 传 prop_hooks → register 注入 prop + merge_prop_hooks 挂 get_hook/set_hook；引擎读写路径分派（hook 体在类作用域、`$value` 绑定、**箭头 set 的返回值=存储值**——oracle 探针钉死；块形式体自写 backing）。hook_guard {obj,name} 防递归——**每出口必须移除**（首版泄漏：set 跑一次后 get 永久静默，当场抓获）。Symfony 8 http-foundation Request 依赖此特性（include 成功）。附带 trait_exists/enum_exists 补 autoload（php 语义同 class_exists）。环境插曲：OrbStack 整体僵死（docker exec 全挂）→ pkill 重启 + 容器 start 恢复，queue_timeout 假红消失 | tests: ph2/ph3/ph4/ph5 IDENTICAL（ph1 差异 = 引擎整体缺 typed-prop 未初始化读检查，登记非 hook 特有）；fast PASS | commit: fbdb814
+
 ### 恢复点（下会话从这里继续）
+
+**T017-p13 线索**：artisan 到 SetRequestForConsole 的 `Request::create()`——`use Illuminate\Http\Request` 别名 + 类加载链（composer loader 加载 Request.php 时其 trait `CanBePrecognitive` 的注册链）。快速回路：`phpx -r 'require "vendor/autoload.php"; require ".../Illuminate/Http/Request.php"; var_dump(class_exists("Illuminate\\Http\\Request", false));'`。
+**收尾清单（沿用）**：vendor DBG 残留还原；DEBUG_BACKTRACE_IGNORE_ARGS 常量；closure 帧进 uncaught 栈；typed-prop 未初始化读检查（ph1 揭示，整体缺口）；Pdo.query_mysql 对 DBConnection.ConnectionError 无臂（case_clause 内错——环境恢复后不再触发但臂应补）。
+**工具链**：OrbStack 僵死处置 = `pkill -9 -f OrbStack; open -a OrbStack; docker start phpbeam-mysql`（docker 命令挂 4 分钟即为此症）。
 
 **T017-p12 线索**：`Class "Request" not found`（SetRequestForConsole）——php 的 AliasLoader 在 composer autoload 时把 `Request`/`Route` 等短名 class_alias 到 FQCN；我们 php 侧 `class_alias` 已有（B6 实现过）但 AliasLoader 的注册器链（spl_autoload_register 的 loader 检查 `$aliases` 映射）可能没触发。从 `phpx -r 'require autoload; var_dump(class_exists("Request"));'` 起查（php true）。
 **收尾清单**：laravel-smoke vendor DBG 残留还原（Container/LoadConfiguration 有 .bak；Application.php 的 BOOT 两行、EntryParser.php 的 BAD-STATE 行需手撤）；DEBUG_BACKTRACE_IGNORE_ARGS 常量补；closure 帧进 uncaught 栈（ex1/tb 差分）。
