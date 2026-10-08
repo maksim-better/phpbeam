@@ -60,6 +60,29 @@ defmodule PhpBeam.Eval.Call do
     end
   end
 
+  # a variable whose VALUE is a plain callable string ("fn" / "Cls::fn") or
+  # an [obj/class, method] array — Closure::fromCallable('BAR') hands back
+  # exactly this shape; call_value had no arms for it (function_clause)
+  def call_value({:string, f}, args, env, interp) do
+    case String.split(f, "::") do
+      [cls, m] ->
+        call_cb_dispatch(
+          {:static_fcc, String.downcase(cls), String.downcase(m)},
+          args,
+          env,
+          interp
+        )
+
+      _ ->
+        call_named([f], String.downcase(f), false, wrap_args(args), env, interp)
+    end
+  end
+
+  def call_value({:array, arr}, args, env, interp) do
+    call_cb_dispatch({:array, arr}, wrap_args(args), env, interp)
+  end
+
+
   def call_named(parts, name, fq, args, env, interp) do
     case resolve_function(name, fq, interp) do
       {:user, _params, _body, _def_file, _def_line, _ns, _uses} = fn_def ->
@@ -1261,4 +1284,22 @@ defmodule PhpBeam.Eval.Call do
       _ -> key
     end
   end
+# defensive: any other value's call attempt is a php "Value not callable"
+  # fatal rather than an engine crash
+  def call_value({:object, _} = oref, args, env, interp) do
+    case PhpBeam.Classes.find_method(interp, get_object(interp, oref).class, "__invoke") do
+      nil ->
+        {{:unwind, {:fatal, "Value not callable"}}, env, interp}
+
+      m ->
+        call_php_method(oref, m, args, env, interp)
+    end
+  end
+
+  def call_value(other, _args, env, interp) do
+    {{:unwind, {:fatal, "Value not callable"}}, env, interp}
+  end
+
 end
+
+  
