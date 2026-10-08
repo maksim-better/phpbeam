@@ -93,7 +93,12 @@
 
 - [x] T017-p7 提升属性参数序 + RII 校验 + ctor throw 形状：**promoted 参数按声明序**（table.ex desugar 曾 promoted 前置→`__construct($a, private int $mode)` 位置实参错位——php 探针钉死声明序；FileTypeFilterIterator 收 mode 当迭代器即此根）；RII 构造校验（非 RecursiveIterator inner → InvalidArgumentException 精确措辞，php 拒收 ex1 实证）；native ctor throw 改 `{{:unwind,payload},obj,interp}` 三元（旧语句三元撞 call_constructor case——括号手术三翻车后用临时变量定型）。未竟：uncaught 栈缺 ctor 帧（ex1 差分仅此）；Symfony RDI 子类链（ignoreFirstRewind/自定义 current）在 lc 深处仍现 {pathname,:null} 对——最小复现 ifr 却 IDENTICAL，需带全 Finder 上下文再猎 | tests: pp1/ifr/ex1(除栈帧)/六探针；fast PASS | commit: c7dc3cf
 
+- [x] T017-p8 静态属性家族共享 + Finder 全链跑通：**static props 槽按声明类解析**（`static_declaring_key` 沿父链找声明者——php 家族单槽语义；此前 Application::setInstance 写 Application 槽、Container::getInstance 读自己的槽→null→`new static` 造出裸 Container→resourcePath 未定义——即 config 回退根之一）；RDI `getSubPath/getSubPathname`（sub_base 随 getChildren 传递——Symfony current() 依赖，sr1/sr2 IDENTICAL）；symlink 探测走 :file.read_link_info（Elixir 无 File.symlink?）；SORT_NATURAL/LOCALE_STRING/FLAG_CASE/ASC/DESC 常量。**lc 锚到达 helpers.php resourcePath**（Finder 全链+config 装载完成） | tests: sr1/sr2/ifr/stfam IDENTICAL；fast PASS | commit: 95240c4
+
 ### 恢复点（下会话从这里继续）
+
+**artisan vs lc 分叉（T017-p9）**：直跑 `phpx /tmp/lc.php`（require autoload → new Application → LoadConfiguration::bootstrap）已过 config 到 helpers；但 **`phpx artisan --version` 仍报 `Target class [config] does not exist`**——artisan 走 bootstrap/app.php → ApplicationBuilder::withProviders() 链，config instance 发生在 KERNEL handle 时的 bootstrappers——php 下 make('config') 前必有 instance——疑我们链上某处 instance 写入未达（或者 withProviders 先于 bootstrap 执行了 make）。下迭代：对 artisan 打 Container::build('config') 调用点的 php 帧（engine 层打 call_stack 文件行——参照 DBG ii-pos 手法），比对 php 的等价帧。
+**遗下债**：ex1 uncaught 栈缺 ctor 帧；IteratorIterator 快照 vs 惰性（LazyIterator 时机）。
 
 **lc 锚下一层（T017-p8 线索）**：Symfony `RecursiveDirectoryIterator`（finder 子类：`private bool $ignoreFirstRewind = true` + 自定义 rewind 首跳 + 自定义 current() new SplFileInfo）在 Finder 链里产出 `{pathname, :null}` 对（排除过滤器的 pair 值 null）。**ifr 最小复现 IDENTICAL**——说明孤立机制没问题，分歧在 Finder 全链（多实例/求值序/子路径状态）。下迭代直接在 finder 子类上带真实 config 目录复现（排除 Exclude 过滤器，仅 Symfony RDI + foreach），对拍 php 逐项。
 **ecosystem note**：IteratorIterator 快照 vs php 惰性——Symfony LazyIterator 的 fn() => searchInDirectory 延迟执行依赖快照时机，若后续差分踩到再改真惰性驱动。
