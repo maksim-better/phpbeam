@@ -64,17 +64,31 @@ defmodule PhpBeam.Eval.Call do
   # an [obj/class, method] array — Closure::fromCallable('BAR') hands back
   # exactly this shape; call_value had no arms for it (function_clause)
   def call_value({:string, f}, args, env, interp) do
+    # args arrive as raw AST — EVALUATE them first (wrap_args would wrap the
+    # AST itself as lit_val and echo would print the structure verbatim)
     case String.split(f, "::") do
       [cls, m] ->
-        call_cb_dispatch(
-          {:static_fcc, String.downcase(cls), String.downcase(m)},
-          args,
-          env,
-          interp
-        )
+        case arg_values(args, env, interp) do
+          {:ok, vals, interp2} ->
+            call_cb_dispatch(
+              {:static_fcc, String.downcase(cls), String.downcase(m)},
+              vals,
+              env,
+              interp2
+            )
+
+          {:unwind, _} = u ->
+            u
+        end
 
       _ ->
-        call_named([f], String.downcase(f), false, wrap_args(args), env, interp)
+        case arg_values(args, env, interp) do
+          {:ok, vals, interp2} ->
+            call_named([f], String.downcase(f), false, wrap_args(vals), env, interp2)
+
+          {:unwind, _} = u ->
+            u
+        end
     end
   end
 

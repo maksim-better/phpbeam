@@ -230,3 +230,9 @@ DEFER T006 log_errors stderr 副本通道 | lang,strings,func,classes,basic,outp
 - [ ] **list-by-ref 解包语义**：`list(&$a, list(&$b)) = $arr` 引用格绑定 + var_dump 的 `&int(1)` 标记 + 写回影响数组（list_reference 族 11 例——H0「返回引用真语义」一族，an-reference 大单元的前哨）
 - [ ] closures/anon/numeric/multibyte 的类级差异待分诊（44-已知约 35 例）
 - [ ] DEBUG_BACKTRACE_IGNORE_ARGS 常量（沿用）
+
+## Z 相 closures 分片分诊（2026-10-09，10 例 → 7 剩）
+
+- [ ] **fromCallable 作用域绑定**：类内 fromCallable 私有方法 FCC 的可见性按**创建方 scope**（php Closure 绑定 scope+this）——现 global 判定致 "Call to private method from global scope"（basic 后段 + rebinding/lsb/reflection 同族）。方向：Closure::fromCallable 走 eval 层特判（参照 Closure::bind 的 skip 分支），method_fcc 加 scoped 变体
+- [ ] cc_basic 尾部：PublicInvocable __invoke arm 已补（验证）；non_static_statically 的 TypeError 措辞
+- [ ] call_value args 契约统一收口：string/array 臂已 arg_values；static_fcc 臂经 dispatch wrap_args ✓——{:arg,…} 泄漏已灭（mf3 IDENTICAL）
