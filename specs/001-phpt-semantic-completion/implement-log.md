@@ -99,7 +99,12 @@
 
 - [x] T017-p10 `$this` 未绑定读取 → Error：php 8 探针四上下文（普通函数/闭包/静态方法/顶层）全 Fatal `Using $this when not in object context`（isset($this)=false 走 isset 路径不受影响；`??` 也 Fatal）——eval({:var,"this"}) 守卫 `not match?({:object,_}, env.this)` 即 Fatal。容器 build(closure) 链上出现 fn=nil 的 env 读 $this（帧栈：resolve→isBuildable@Container:1117）——**isBuildable 以 function=nil 的 env 执行**（某条方法分派路径漏建 fenv.function 或 globalize 串入），已在台账固化待查 | tests: tb 探针语义对齐（仅差闭包帧进栈的已知债）；fast PASS | commit: a0127df
 
+- [x] T017-p10 收尾：探针清除、fast PASS（27b6000）。**新确诊债（deferred 级）**：bc.php 链上出现 **env=nil 的 var 读取**——栈：exec_stmts(853)→stmt_line(885)→expr_stmt(928)→call_builtin(403)→arg eval→prop eval→var$this，env 贯穿为 nil ⇒ **某条语句把 nil env 当 :ok 线程化**（return-unwind 约定 env=nil 的残余泄漏——上层收到 {:unwind} 后某处又当值继续）。这不是 $this 守卫的错（守卫语义正确），是 nil-env 线程化泄漏的正主。修复方向：audit interp.ex 所有 return unwind 出口 + exec_stmts 的 goto-resume 路径，确保 :ok 分支永不携带 nil env。
+
 ### 恢复点（下会话从这里继续）
+
+**T017-p11**：①**nil-env 线程化泄漏**（上述，根因级）——修完 bc.php 应到 "done"，artisan 过 build('env')；②laravel-smoke vendor DBG 残留待还原（备份 /tmp/{Container,LoadConfiguration}.php.bak，Application.php/EntryParser.php 无备份需手撤 DBG 行）；③DEBUG_BACKTRACE_IGNORE_ARGS 常量缺失（php 调试块用）。
+**工具链提示**：rebuild 后必须显式 grep error（编译错误会被重定向吞）；artisan 单跑 ~5 分钟（Carbon 重），用 `phpx /tmp/bc.php`（~3 秒）做快速回路。
 
 **T017-p11 线索（isBuildable env 串扰）**：`$this` Fatal 的 env.function=nil + current_file=Container:1117（isBuildable 体）+ 帧栈=resolve→isBuildable。下手点：grep `lib/phpbeam/eval/call.ex` 与 interp.ex 里**所有构造 %Env{} 却漏 `function:` 字段**的路径（call_static_method 非 static 臂 / magic_static_call / resolve 的 FCC 调用 / Env.globalize 串入方法体）；再跑 bc.php 确认 isBuildable 拿到 function="isbuildable"。 artisan 链此时应能过 build('env') 到下一层。
 **工具链提示**：laravel-smoke vendor DBG 残留仍在（备份 /tmp/{Container,LoadConfiguration}.php.bak）；`mix escript.build` 的编译错误会被 `>/dev/null 2>&1` 吞——**任何 rebuild 后必须显式 grep error**（本迭代两次被陈旧二进制误导）。
