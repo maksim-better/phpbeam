@@ -95,7 +95,12 @@
 
 - [x] T017-p8 静态属性家族共享 + Finder 全链跑通：**static props 槽按声明类解析**（`static_declaring_key` 沿父链找声明者——php 家族单槽语义；此前 Application::setInstance 写 Application 槽、Container::getInstance 读自己的槽→null→`new static` 造出裸 Container→resourcePath 未定义——即 config 回退根之一）；RDI `getSubPath/getSubPathname`（sub_base 随 getChildren 传递——Symfony current() 依赖，sr1/sr2 IDENTICAL）；symlink 探测走 :file.read_link_info（Elixir 无 File.symlink?）；SORT_NATURAL/LOCALE_STRING/FLAG_CASE/ASC/DESC 常量。**lc 锚到达 helpers.php resourcePath**（Finder 全链+config 装载完成） | tests: sr1/sr2/ifr/stfam IDENTICAL；fast PASS | commit: 95240c4
 
+- [x] T017-p9 语法/正则三修：①**`!` 操作数=完整表达式**（php yacc 语义 `!$x = f()` → `!($x=f())`——Container::rebound 的 `if (! $callbacks = …)` 与 HandleExceptions::handleShutdown 同模式；unary 里遗留的旧 `!` 子句抢先吞掉新臂（双子句陷阱第二次咬人）且 `@` 臂连带失踪——`@$x['k']` 解析回归被 parser_test 当场抓获）；②**switch case 标签=完整常量表达式**（`self::STATE`——Dotenv EntryParser 状态机死因；const_eval_quiet 只认字面量→所有类常量标签落 default）；③**括号定界符嵌套配对扫描+转义状态消费成对反斜杠**（Dotenv Lexer 的 `((..)|(..))A` 无定界符形态——php 以 `(` 为定界符；首版只数深度不看转义对，`\\)` 误判转义）；LOG_*/SORT_* 常量族 | tests: bang/rb/hs/sw1/dx 全 IDENTICAL；fast PASS | commit: 5c7d4ec
+
 ### 恢复点（下会话从这里继续）
+
+**artisan 当前层（T017-p10）**：`make('env')` → `build(Closure)`（Container:1143 `return $concrete($this, $this->getLastParameterOverride())`）执行 env 绑定闭包时冒出 **`Undefined variable $error`**（HandleExceptions:240 的 `$error['type']`——但该链所有闭包都不含 $error 变量 ⇒ 疑**FCC/闭包调用的作用域串扰**：闭包体在错误词法 env 下执行，读到别处 handleShutdown 的 $error）。复现已固化：`/tmp/bc.php`（LEV+LC+HandleExceptions 后 `$app->build(fn() => "x")`）——php 侧 "done"，phpx 侧炸同一链。下一步：最小化 bc.php（去掉 bootstrap 逐个减），或 engine 层 dump 闭包调用时的 env.vars 键集合。
+**工具链**：laravel-smoke vendor 有 DBG 残留（Container.php 的 MAKE-CONFIG、LoadConfiguration 的 CONFIG-INSTANCED、Application 的 BOOT probe、EntryParser 的 BAD-STATE——备份在 /tmp/{Container,LoadConfiguration}.php.bak）；phpx 仍缺 `DEBUG_BACKTRACE_IGNORE_ARGS` 常量（deferred）。
 
 **artisan vs lc 分叉（T017-p9）**：直跑 `phpx /tmp/lc.php`（require autoload → new Application → LoadConfiguration::bootstrap）已过 config 到 helpers；但 **`phpx artisan --version` 仍报 `Target class [config] does not exist`**——artisan 走 bootstrap/app.php → ApplicationBuilder::withProviders() 链，config instance 发生在 KERNEL handle 时的 bootstrappers——php 下 make('config') 前必有 instance——疑我们链上某处 instance 写入未达（或者 withProviders 先于 bootstrap 执行了 make）。下迭代：对 artisan 打 Container::build('config') 调用点的 php 帧（engine 层打 call_stack 文件行——参照 DBG ii-pos 手法），比对 php 的等价帧。
 **遗下债**：ex1 uncaught 栈缺 ctor 帧；IteratorIterator 快照 vs 惰性（LazyIterator 时机）。
