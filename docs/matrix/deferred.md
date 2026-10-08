@@ -213,3 +213,13 @@ DEFER T006 log_errors stderr 副本通道 | lang,strings,func,classes,basic,outp
 - [ ] `require X or die` 优先级：php 解析为 require(X or die)；我们解析为 (require X) or die（rq6 探针差分）
 - [ ] interp.ex 的 10 万语句 TRACE 哨兵（旧狩猎遗留）应门控为 env 开关
 - [ ] zend-exit 剩 11：exit 参数弃用警告族、ast_print ×4（assert AST dump）、disabling ×2（startup 警告）、die_string_cast（TypeError 措辞）、exit_as_function（FCC）
+
+## Z 相首批分诊（2026-10-08，zend-throw/ast/typehints/gh15976 13 例基线）
+
+- [ ] **算术错误措辞带操作数类型**：php 8.4 `Unsupported operand types: Exception + int`（左类名+op+右类型）；value.ex arith_operand 错误无上下文——API 需带 op/左右 gettype（throw/001、leaks 两例）
+- [ ] assert 消息的 zend_ast 表达式导出：`assert(false && ($a **= 2))` 的操作数文本（ast/zend-pow-assign；A1 的 zend_ast_export 债的具体化）
+- [ ] `\int` 限定类型声明 → Fatal `Type declaration 'int' must be unqualified`（parser 接受 \int——typehints/fully_qualified_scalar、namespace_relative_scalar）
+- [ ] `?Foo` or_null 类型参数解析（typehints/or_null、bug76198）
+- [ ] enum 名检查：`_` 弃用警告 + 保留字 fatal（gh15976/enum-names；class/interface/trait-names 同族=类名保留字表）
+- [ ] typed-prop 未初始化读检查（ph1 揭示的整体缺口）
+- [ ] leaks.phpt 的 `Caught` 缺失（嵌套 try/catch 流控小差异）

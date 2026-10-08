@@ -34,7 +34,11 @@ suites = [
   {"output", "tests/output"},
   {"security", "tests/security"},
   {"run-test", "tests/run-test"},
-  {"zend-exit", "Zend/tests/exit"}
+  {"zend-exit", "Zend/tests/exit"},
+  {"zend-throw", "Zend/tests/throw"},
+  {"zend-ast", "Zend/tests/ast"},
+  {"zend-typehints", "Zend/tests/typehints"},
+  {"zend-gh15976", "Zend/tests/gh15976"}
 ]
 
 # PHPT_DIRS="lang,basic" limits the compiled suites to those dir_ids

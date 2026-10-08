@@ -1596,12 +1596,21 @@ defmodule PhpBeam.Interp do
 
   defp find_catch([{types, var, body} | rest], val, e, i) do
     if catch_matches?(types, val, e, i) do
+      # a native engine error thrown as {:native_error, class, msg} must
+      # materialize into a real exception OBJECT before binding (php:
+      # catch ($e) gives an object with ->getMessage(), never a string)
+      {bound_val, i1} =
+        case val do
+          {:native_error, _class, _msg} -> Eval.materialize_native(val, i)
+          other -> {other, i}
+        end
+
       {e2, i2} =
         if var do
-          {:ok, e2, i2} = Env.bind_var(e, i, var, val)
+          {:ok, e2, i2} = Env.bind_var(e, i1, var, bound_val)
           {e2, i2}
         else
-          {e, i}
+          {e, i1}
         end
 
       {:caught, exec_stmts(body, e2, i2)}
