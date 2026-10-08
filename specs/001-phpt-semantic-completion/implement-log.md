@@ -118,7 +118,12 @@
 
 - [x] T017-p18 Closure::fromCallable 真实现：callable 归一化为引擎 FCC 形（[obj,"m"]→method_fcc / [Cls,"m"]与"Cls::m"→static_fcc / 裸名→string；旧恒等实现把数组原样返回→调用 function_clause）。basic 用例从 internal error 推进到正常输出流。**遗留**：`{:fcc, inner}` 包装语义（echo/插值路径 call_value:136 function_clause——inner 为 static_fcc 时某处再包一层）——下一迭代主攻 | tests: fast PASS（closures 分片基线未动） | commit: 2374678
 
+- [x] T017-p19 探针收尾（fast PASS，无代码变更提交——clean tree）。**colon-scheme 线索精确化**：`Closure::fromCallable("Foo::publicStaticFunction")` → static_fcc("foo","publicstaticfunction") → 调用时报 `Call to undefined method Foo::publicfunction()`——**方法名在错误里呈全小写**=我们的 downcase 在 FCC 形里提前丢失原拼写？方法表键本就 downcase 应命中——疑 static_fcc 的 eval({:static_call,...}) 把 key 当**显示名**再 resolve 时二次处理。下一迭代从「phpx -r 'require inc; Closure::fromCallable("Foo::publicStaticFunction"); $f("x");'」单点追。
+
 ### 恢复点（下会话从这里继续）
+
+**closures 10 例收尾路径**：colon-scheme 1 例（上述）→ basic 全通 → 其余 9 例（lsb/rebinding/non_static/reflection/error/instantiate/gc/gh19653×2）逐个 probe 对齐。
+**沿用**：list-by-ref 11 例；vendor DBG 还原；基线 468@19。
 
 **T017-p19 主攻**：`{:fcc, inner}` 双层包装——fromCallable 返回 {:static_fcc,...} 后，某处（echo/concat 的 call_value:136）收到 `{:fcc, {:static_fcc,...}}` 再包一层。下手点：grep `{:fcc,` 的**构造点**（parser value_fcc eval 路径），看 fromCallable 的返回值如何流经 eval（native 返回值应直通不包装）；修正后 closures 10 例 + basic 全语义对齐。
 **沿用**：list-by-ref 族 11 例（引用大单元）；vendor DBG 残留还原；基线 468@19。
