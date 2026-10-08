@@ -3290,8 +3290,33 @@ defmodule PhpBeam.Classes.Table do
           |> Map.put(:static?, true),
         "fromcallable" => %{
           native_fn("fromCallable", fn _obj, args, i ->
-            [cb | _] = args
-            {:ok, {cb, nil}, i}
+            # normalize the callable to an engine FCC shape so later calls
+            # dispatch through call_cb's family (array → static/method fcc,
+            # "Cls::m" string → static fcc, bare "fn" stays a string name)
+            case List.first(args) do
+              {:string, s} ->
+                case String.split(s, "::") do
+                  [cls, m] -> {:ok, {{:static_fcc, String.downcase(cls), String.downcase(m)}, nil}, i}
+                  _ -> {:ok, {{:string, s}, nil}, i}
+                end
+
+              {:array, parr} ->
+                vals = parr |> PArray.to_pairs() |> Enum.map(fn {_, v} -> v end)
+
+                case vals do
+                  [{:object, _} = oref, {:string, m} | _] ->
+                    {:ok, {{:method_fcc, oref, String.downcase(m)}, nil}, i}
+
+                  [{:string, cls}, {:string, m} | _] ->
+                    {:ok, {{:static_fcc, String.downcase(cls), String.downcase(m)}, nil}, i}
+
+                  _ ->
+                    {:ok, {parr, nil}, i}
+                end
+
+              other ->
+                {:ok, {other, nil}, i}
+            end
           end)
           | static?: true
         },
