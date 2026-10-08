@@ -725,7 +725,10 @@ defmodule PhpBeam.Interp do
         {{:string, "SERVER_SOFTWARE"}, {:string, "phpbeam/phpx"}}
       ])
 
-    %{interp | globals: Map.put(interp.globals, "_SERVER", {:array, server})}
+    # php defines $_ENV as an EMPTY array unless variables_order carries E
+    # (probed: this oracle runs GPCS — count($_ENV) works, no warning).
+    # phpdotenv's EnvConstAdapter isset()s it during Laravel bootstrap.
+    %{interp | globals: Map.put(interp.globals, "_SERVER", {:array, server}) |> Map.put("_ENV", {:array, PArray.new()})}
   end
 
   # ───────────────────────── stream resources ─────────────────────────

@@ -1341,9 +1341,17 @@ defmodule PhpBeam.Builtin.B6 do
         obj = Eval.get_object(i, oref)
 
         n =
-          case obj.dt_state && obj.dt_state["arr"] do
-            %PArray{} = inner -> PArray.size(inner)
-            _ -> PArray.size(obj.props)
+          cond do
+            # count()able SPL iterators (GlobIterator etc.) stage their
+            # elements under dt_state["pairs"]
+            is_map(obj.dt_state) and is_list(obj.dt_state["pairs"]) ->
+              length(obj.dt_state["pairs"])
+
+            is_map(obj.dt_state) and match?(%PArray{}, obj.dt_state["arr"]) ->
+              PArray.size(obj.dt_state["arr"])
+
+            true ->
+              PArray.size(obj.props)
           end
 
         {:ok, {:int, n}, i}

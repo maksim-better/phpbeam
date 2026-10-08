@@ -1322,6 +1322,14 @@ defmodule PhpBeam.Classes.Table do
       "spltempfileobject" => PhpBeam.Classes.Spl.classes()["spltempfileobject"],
       "splobserver" => PhpBeam.Classes.Spl.classes()["splobserver"],
       "splsubject" => PhpBeam.Classes.Spl.classes()["splsubject"],
+      "iteratoriterator" => PhpBeam.Classes.Spl.classes()["iteratoriterator"],
+      "filteriterator" => PhpBeam.Classes.Spl.classes()["filteriterator"],
+      "directoryiterator" => PhpBeam.Classes.Spl.classes()["directoryiterator"],
+      "filesystemiterator" => PhpBeam.Classes.Spl.classes()["filesystemiterator"],
+      "recursivedirectoryiterator" => PhpBeam.Classes.Spl.classes()["recursivedirectoryiterator"],
+      "globiterator" => PhpBeam.Classes.Spl.classes()["globiterator"],
+      "recursiveiteratoriterator" => PhpBeam.Classes.Spl.classes()["recursiveiteratoriterator"],
+      "recursiveiterator" => PhpBeam.Classes.Spl.classes()["recursiveiterator"],
       "reflectionfiber" => PhpBeam.Classes.Reflection2.classes()["reflectionfiber"],
       "datetime" => native_datetime_class(),
       "datetimeimmutable" => native_datetimeimmutable_class(),
@@ -1385,7 +1393,7 @@ defmodule PhpBeam.Classes.Table do
       # only the exception hierarchy gets Throwable's methods — stdClass
       # would otherwise inherit its constructor (and its message/code props),
       # and DateTime carries its own native methods
-      if key in ~w(throwable stdclass closure weakmap datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection sqlite3 sqlite3result sqlite3stmt pdo pdostatement pdoexception simplexmlelement domdocument domelement domnode domtext domattr domnodelist domxpath domexception domdocumentfragment xmlparser curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
+      if key in ~w(throwable stdclass closure weakmap datetime datetimeimmutable datetimezone dateinterval dateperiod generator reflectionclass reflectionmethod reflectionparameter reflectionnamedtype reflectionattribute reflectionfunctionabstract reflectionfunction reflectionobject reflectionproperty reflectionclassconstant reflectionuniontype reflectionintersectiontype reflectionenum reflectionenumunitcase reflectionenumbackedcase reflectiongenerator reflectionfiber arrayobject arrayiterator iteratoriterator filteriterator directoryiterator filesystemiterator recursivedirectoryiterator globiterator recursiveiteratoriterator recursiveiterator spldoublylinkedlist splstack splqueue splheap splminheap splmaxheap splpriorityqueue splfixedarray splobjectstorage splfileinfo splfileobject spltempfileobject splobserver splsubject gmp roundingmode deflatecontext inflatecontext ziparchive phar phardata pharfileinfo pharexception socket ftpconnection sqlite3 sqlite3result sqlite3stmt pdo pdostatement pdoexception simplexmlelement domdocument domelement domnode domtext domattr domnodelist domxpath domexception domdocumentfragment xmlparser curlhandle curlmultihandle curlsharehandle curlfile curlstringfile opensslassymmetrickey opensslcertificate opensslcertificatesigningrequest sessionhandler sessionhandlerinterface) do
         acc
       else
         put_in(acc, [key, Access.key!(:methods)], members)
@@ -1527,18 +1535,18 @@ defmodule PhpBeam.Classes.Table do
       parent: nil,
       interfaces: [],
       consts: %{
-        {"ATOM"} => {:string, "Y-m-d\\TH:i:sP"},
-        {"COOKIE"} => {:string, "l, d-M-Y H:i:s T"},
-        {"ISO8601"} => {:string, "Y-m-d\\TH:i:sO"},
-        {"RFC822"} => {:string, "D, d M y H:i:s O"},
-        {"RFC850"} => {:string, "l, d-M-y H:i:s T"},
-        {"RFC1036"} => {:string, "D, d M y H:i:s O"},
-        {"RFC1123"} => {:string, "D, d M Y H:i:s O"},
-        {"RFC2822"} => {:string, "D, d M Y H:i:s O"},
-        {"RFC3339"} => {:string, "Y-m-d\\TH:i:sP"},
-        {"RFC3339_EXTENDED"} => {:string, "Y-m-d\\TH:i:s.vP"},
-        {"RSS"} => {:string, "D, d M Y H:i:s O"},
-        {"W3C"} => {:string, "Y-m-d\\TH:i:sP"}
+        "ATOM" => {:string, "Y-m-d\\TH:i:sP"},
+        "COOKIE" => {:string, "l, d-M-Y H:i:s T"},
+        "ISO8601" => {:string, "Y-m-d\\TH:i:sO"},
+        "RFC822" => {:string, "D, d M y H:i:s O"},
+        "RFC850" => {:string, "l, d-M-y H:i:s T"},
+        "RFC1036" => {:string, "D, d M y H:i:s O"},
+        "RFC1123" => {:string, "D, d M Y H:i:s O"},
+        "RFC2822" => {:string, "D, d M Y H:i:s O"},
+        "RFC3339" => {:string, "Y-m-d\\TH:i:sP"},
+        "RFC3339_EXTENDED" => {:string, "Y-m-d\\TH:i:s.vP"},
+        "RSS" => {:string, "D, d M Y H:i:s O"},
+        "W3C" => {:string, "Y-m-d\\TH:i:sP"}
       },
       props: [],
       methods:

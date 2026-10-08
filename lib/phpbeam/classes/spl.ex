@@ -34,7 +34,668 @@ defmodule PhpBeam.Classes.Spl do
       "splobserver" => iface("SplObserver", ["update"]),
       "splsubject" => iface("SplSubject", ["attach", "detach", "notify"])
     }
+    |> Map.merge(iterator_family_classes())
   end
+
+  ## ───────────────── iterator family (IteratorIterator/FilterIterator/DirectoryIterator/FilesystemIterator/Recursive*/GlobIterator) ─────────────────
+
+  # probed php 8.4 (2026-10-08): DirectoryIterator key=int position,
+  # current()===$this (incl . and ..); FilesystemIterator default flags
+  # SKIP_DOTS|KEY_AS_PATHNAME|CURRENT_AS_FILEINFO (key=pathname,
+  # current=SplFileInfo); RII modes LEAVES_ONLY=0/SELF_FIRST=1/CHILD_FIRST=2.
+  # V1 bounds (deferred): IteratorIterator snapshots the inner iterator at
+  # rewind() (php drives lazily); DirectoryIterator seek/clone unsupported.
+  defp iterator_family_classes do
+    %{
+      "iteratoriterator" => iterator_iterator_class(),
+      "filteriterator" => filter_iterator_class(),
+      "directoryiterator" => directory_iterator_class(),
+      "filesystemiterator" => filesystem_iterator_class(),
+      "recursivedirectoryiterator" => recursive_directory_iterator_class(),
+      "globiterator" => glob_iterator_class(),
+      "recursiveiteratoriterator" => recursive_iterator_iterator_class(),
+      "recursiveiterator" => iface("RecursiveIterator", ["haschildren", "getchildren"])
+    }
+  end
+
+  defp shell_p(name, kind, methods, ifaces, parent) do
+    struct(Table,
+      name: name,
+      kind: kind,
+      parent: parent,
+      interfaces: ifaces,
+      consts: %{},
+      props: [],
+      methods: methods,
+      file: ""
+    )
+  end
+
+  # drive an inner Traversable to completion via the Iterator protocol —
+  # returns {pairs, interp} (pairs = [{key, value}] in iteration order)
+  defp drive_iter(i, inner_ref, acc) do
+    call_m = fn name, args, ia ->
+      case Table.find_method(ia, obj_class(ia, inner_ref), name) do
+        nil -> {{:val, :null}, nil, ia}
+        m -> Eval.call_php_method(inner_ref, m, args, nil, ia)
+      end
+    end
+
+    case call_m.("rewind", [], i) do
+      {{:unwind, _}, _, i2} ->
+        {Enum.reverse(acc), i2}
+
+      {_, _, i2} ->
+        drive_step(call_m, inner_ref, acc, i2)
+    end
+  end
+
+  defp drive_step(call_m, inner_ref, acc, i) do
+    case call_m.("valid", [], i) do
+      {{:val, v}, _e1, i2} ->
+        if Value.truthy?(v) do
+          {k, i3} =
+            case call_m.("key", [], i2) do
+              {{:val, k}, _e2, i3} -> {k, i3}
+              {_, _, i3} -> {:null, i3}
+            end
+
+          {cur, i4} =
+            case call_m.("current", [], i3) do
+              {{:val, cur}, _e3, i4} -> {cur, i4}
+              {_, _, i4} -> {:null, i4}
+            end
+
+          {_, _, i5} = call_m.("next", [], i4)
+          drive_step(call_m, inner_ref, [{k, cur} | acc], i5)
+        else
+          {Enum.reverse(acc), i2}
+        end
+
+      {_, _, i2} ->
+        {Enum.reverse(acc), i2}
+    end
+  end
+
+  defp obj_class(i, {:object, _} = ref), do: Eval.get_object(i, ref).class
+
+  # Traversable = Iterator OR IteratorAggregate (php unwraps the latter via
+  # getIterator() — Symfony's LazyIterator idiom)
+  defp ii_inner(inner0, i) do
+    if PhpBeam.Classes.is_a?(i, obj_class(i, inner0), "iteratoraggregate") do
+      case Table.find_method(i, obj_class(i, inner0), "getiterator") do
+        nil ->
+          {inner0, i}
+
+        m ->
+          case Eval.call_php_method(inner0, m, [], nil, i) do
+            {{:val, {:object, _} = real}, _e, i2} -> {real, i2}
+            {_, _e, i2} -> {inner0, i2}
+          end
+      end
+    else
+      {inner0, i}
+    end
+  end
+
+  defp it_pairs(obj), do: Map.get(st(obj), "pairs") || []
+  defp it_pos(obj), do: Map.get(st(obj), "pos") || 0
+
+  defp it_cur(obj) do
+    pairs = it_pairs(obj)
+    Enum.at(pairs, it_pos(obj))
+  end
+
+  defp common_iter_methods(current_fn) do
+    [
+      nfn("valid", fn obj, _a, i ->
+        {:ok, {{:bool, it_cur(obj) != nil}, obj}, i}
+      end),
+      nfn("key", fn obj, _a, i ->
+        case it_cur(obj) do
+          {k, _v} -> {:ok, {k, obj}, i}
+          nil -> {:ok, {:null, obj}, i}
+        end
+      end),
+      nfn("current", current_fn),
+      nfn("next", fn obj, _a, i ->
+        {:ok, {:null, st_put(obj, "pos", it_pos(obj) + 1)}, i}
+      end)
+    ]
+  end
+
+  defp iterator_iterator_class do
+    methods =
+      Map.new(
+        [
+          nfn("__construct", fn obj, a, i ->
+            case a do
+              [{:object, _} = inner0 | _] ->
+                {inner, i2} = ii_inner(inner0, i)
+                {:ok, {:null, st_put(obj, "inner", inner)}, i2}
+
+              _ ->
+                {:unwind,
+                 {:php_throw,
+                  {:native_error, "TypeError",
+                   "IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable"}},
+                 i}
+            end
+          end),
+          nfn("getinneriterator", fn obj, _a, i ->
+            case st(obj)["inner"] do
+              nil -> {:ok, {:null, obj}, i}
+              ref -> {:ok, {ref, obj}, i}
+            end
+          end),
+          nfn("rewind", fn obj, _a, i ->
+            case drive_iter(i, st(obj)["inner"], []) do
+              {pairs, i2} ->
+                {:ok, {:null, st_put(st_put(obj, "pairs", pairs), "pos", 0)}, i2}
+
+              other ->
+                other
+            end
+          end)
+        ] ++
+          common_iter_methods(fn obj, _a, i ->
+            case it_cur(obj) do
+              {_k, v} -> {:ok, {v, obj}, i}
+              nil -> {:ok, {:null, obj}, i}
+            end
+          end),
+        fn m -> {String.downcase(m.name), m} end
+      )
+
+    shell("IteratorIterator", :class, methods, ["iterator", "traversable"])
+  end
+
+  # FilterIterator: abstract accept(); subclasses override it in userland —
+  # find_method resolves to the USER method (subclass wins), our native
+  # accept stub only serves a non-overridden base (php would fatal; v1
+  # returns true defensively, registered in deferred)
+  defp filter_iterator_class do
+    accept_of = fn i, obj ->
+      case Table.find_method(i, obj.class, "accept") do
+        nil ->
+          {{:val, {:bool, true}}, nil, i}
+
+        m ->
+          Eval.call_php_method({:object, obj.__ref__}, m, [], nil, i)
+      end
+    end
+
+    advance = fn obj, i -> filter_advance(accept_of, obj, i, {:object, obj.__ref__}) end
+
+    methods =
+      Map.new(
+        # common first: Map.new keeps the LAST duplicate, overrides must win
+        common_iter_methods(fn obj, _a, i ->
+          case it_cur(obj) do
+            {_k, v} -> {:ok, {v, obj}, i}
+            nil -> {:ok, {:null, obj}, i}
+          end
+        end) ++
+          [
+            nfn("accept", fn obj, _a, i -> {:ok, {{:bool, it_cur(obj) != nil}, obj}, i} end),
+            nfn("rewind", fn obj, _a, i ->
+              case drive_iter(i, st(obj)["inner"], []) do
+                {pairs, i2} ->
+                  obj0 = st_put(st_put(obj, "pairs", pairs), "pos", 0)
+                  i2a = put_obj(i2, {:object, obj.__ref__}, obj0)
+                  {obj1, i3} = advance.(obj0, i2a)
+                  {:ok, {:null, obj1}, i3}
+
+                other ->
+                  other
+              end
+            end),
+            nfn("next", fn obj, _a, i ->
+              obj0 = st_put(obj, "pos", it_pos(obj) + 1)
+              i2a = put_obj(i, {:object, obj.__ref__}, obj0)
+              {obj1, i2} = advance.(obj0, i2a)
+              {:ok, {:null, obj1}, i2}
+            end)
+          ],
+        fn m -> {String.downcase(m.name), m} end
+      )
+
+    shell_p("FilterIterator", :class, methods, ["iterator", "traversable"], "iteratoriterator")
+  end
+
+  # accept-skip: advance until accept() is truthy — accept is only consulted
+  # while a current element exists (php: valid() short-circuits past the end;
+  # calling accept on nothing would loop forever on all-false filters).
+  # EVERY pos mutation writes the object back to the registry BEFORE the
+  # user accept runs: $this->current() inside accept reads the live object,
+  # not the detached native copy.
+  defp filter_advance(accept_of, obj, i, self_ref) do
+    case it_cur(obj) do
+      nil ->
+        {obj, i}
+
+      _cur ->
+        case accept_of.(i, obj) do
+          {{:val, v}, _e, i2} ->
+            if Value.truthy?(v) do
+              {obj, i2}
+            else
+              obj2 = st_put(obj, "pos", it_pos(obj) + 1)
+              filter_advance(accept_of, obj2, put_obj(i2, self_ref, obj2), self_ref)
+            end
+
+          {_, _, i2} ->
+            {obj, i2}
+        end
+    end
+  end
+
+  # entries = [{name, path}] — DirectoryIterator.current() returns $this and
+  # the object's own "path" tracks the current entry (php: $v === $di)
+  defp dir_entry_refresh(obj) do
+    case it_cur(obj) do
+      {name, _path} ->
+        dir = Map.get(st(obj), "dir") || ""
+        st_put(obj, "path", join_path(dir, name))
+
+      nil ->
+        obj
+    end
+  end
+
+  defp join_path(dir, name) do
+    cond do
+      dir == "" -> name
+      String.ends_with?(dir, "/") -> dir <> name
+      true -> dir <> "/" <> name
+    end
+  end
+
+  defp read_dir_entries(dir, skip_dots?) do
+    case File.ls(dir) do
+      {:ok, names} ->
+        # raw readdir order — php DirectoryIterator does NOT sort (probed:
+        # a.txt/sort-free byte order matches the OS directory stream)
+        base = if skip_dots?, do: names, else: [".", ".."] ++ names
+        Enum.map(base, &{&1, join_path(dir, &1)})
+
+      _ ->
+        []
+    end
+  end
+
+  defp directory_iterator_class do
+    methods =
+      Map.new(
+        [
+          nfn("__construct", fn obj, a, i ->
+            dir = a |> Enum.at(0, {:string, "."}) |> dt_s()
+            entries = read_dir_entries(dir, false)
+            obj0 = st_put(st_put(obj, "dir", dir), "pairs", entries)
+            {:ok, {:null, dir_entry_refresh(st_put(obj0, "pos", 0))}, i}
+          end),
+          nfn("rewind", fn obj, _a, i ->
+            dir = Map.get(st(obj), "dir") || "."
+            entries = read_dir_entries(dir, false)
+            obj0 = st_put(st_put(obj, "pairs", entries), "pos", 0)
+            {:ok, {:null, dir_entry_refresh(obj0)}, i}
+          end),
+          nfn("isdot", fn obj, _a, i ->
+            name = Path.basename(st(obj)["path"] || "")
+            {:ok, {{:bool, name in [".", ".."]}, obj}, i}
+          end)
+        ] ++
+          common_iter_methods(fn obj, _a, i ->
+            # probed: current() === the iterator itself
+            {:ok, {{:object, obj.__ref__}, obj}, i}
+          end) ++
+          [
+            nfn("getfilename", fn obj, _a, i ->
+              {:ok, {{:string, Path.basename(st(obj)["path"] || "")}, obj}, i}
+            end)
+          ],
+        fn m -> {String.downcase(m.name), m} end
+      )
+
+    shell_p("DirectoryIterator", :class, methods, ["iterator", "traversable", "seekable"], "splfileinfo")
+  end
+
+  defp fs_flags(obj), do: Map.get(st(obj), "flags") || 4096
+
+  defp fs_key(obj, {name, path}) do
+    if Bitwise.band(fs_flags(obj), 256) != 0, do: {:string, name}, else: {:string, path}
+  end
+
+  defp fs_current(obj, i) do
+    cond do
+      Bitwise.band(fs_flags(obj), 16) != 0 ->
+        {{:object, obj.__ref__}, i}
+
+      Bitwise.band(fs_flags(obj), 32) != 0 ->
+        case it_cur(obj) do
+          {_n, path} -> {{:string, path}, i}
+          nil -> {:null, i}
+        end
+
+      true ->
+        case it_cur(obj) do
+          {_n, path} ->
+            {{:object, fref}, i2} = Eval.make_instance(i, "splfileinfo")
+            fo = Eval.get_object(i2, {:object, fref})
+            i3 = put_obj(i2, {:object, fref}, st_put(fo, "path", path))
+            {{:object, fref}, i3}
+
+          nil ->
+            {:null, i}
+        end
+    end
+  end
+
+  defp filesystem_iterator_class do
+    methods =
+      Map.new(
+        [
+          nfn("__construct", fn obj, a, i ->
+            dir = a |> Enum.at(0, {:string, "."}) |> dt_s()
+
+            flags =
+              case Enum.at(a, 1) do
+                {:int, n} -> n
+                _ -> 4096
+              end
+
+            entries = read_dir_entries(dir, Bitwise.band(flags, 4096) != 0)
+            obj0 = st_put(st_put(st_put(obj, "dir", dir), "flags", flags), "pairs", entries)
+            {:ok, {:null, dir_entry_refresh(st_put(obj0, "pos", 0))}, i}
+          end),
+          nfn("rewind", fn obj, _a, i ->
+            dir = Map.get(st(obj), "dir") || "."
+            entries = read_dir_entries(dir, Bitwise.band(fs_flags(obj), 4096) != 0)
+            obj0 = st_put(st_put(obj, "pairs", entries), "pos", 0)
+            {:ok, {:null, dir_entry_refresh(obj0)}, i}
+          end),
+          nfn("setflags", fn obj, a, i ->
+            case a do
+              [{:int, n} | _] -> {:ok, {:null, st_put(obj, "flags", n)}, i}
+              _ -> {:ok, {:null, obj}, i}
+            end
+          end),
+          nfn("getflags", fn obj, _a, i -> {:ok, {{:int, fs_flags(obj)}, obj}, i} end),
+          nfn("current", fn obj, _a, i -> {v, i2} = fs_current(obj, i); {:ok, {v, obj}, i2} end),
+          nfn("key", fn obj, _a, i ->
+            case it_cur(obj) do
+              pair when is_tuple(pair) -> {:ok, {fs_key(obj, pair), obj}, i}
+              nil -> {:ok, {:null, obj}, i}
+            end
+          end),
+          nfn("next", fn obj, _a, i ->
+            {:ok, {:null, dir_entry_refresh(st_put(obj, "pos", it_pos(obj) + 1))}, i}
+          end),
+          nfn("valid", fn obj, _a, i ->
+            {:ok, {{:bool, it_cur(obj) != nil}, obj}, i}
+          end)
+        ],
+        fn m -> {String.downcase(m.name), m} end
+      )
+
+    shell_p("FilesystemIterator", :class, methods, ["iterator", "traversable", "seekable"], "directoryiterator")
+    |> Map.put(:consts, fs_consts())
+  end
+
+  defp fs_consts do
+    %{
+      "SKIP_DOTS" => {:int, 4096},
+      "KEY_AS_PATHNAME" => {:int, 0},
+      "CURRENT_AS_FILEINFO" => {:int, 0},
+      "KEY_AS_FILENAME" => {:int, 256},
+      "CURRENT_AS_SELF" => {:int, 16},
+      "CURRENT_AS_PATHNAME" => {:int, 32},
+      "FOLLOW_SYMLINKS" => {:int, 512},
+      "UNIX_PATHS" => {:int, 8192},
+      "OTHER_MODE_MASK" => {:int, 3840}
+    }
+  end
+
+  defp recursive_directory_iterator_class do
+    methods =
+      Map.new(
+        [
+          nfn("haschildren", fn obj, _a, i ->
+            cur =
+              case it_cur(obj) do
+                {_n, path} -> path
+                nil -> ""
+              end
+
+            {:ok, {{:bool, File.dir?(cur)}, obj}, i}
+          end),
+          nfn("getchildren", fn obj, _a, i ->
+            case it_cur(obj) do
+              {_n, path} when path != "" ->
+                {{:object, cref}, i2} = Eval.make_instance(i, "recursivedirectoryiterator")
+                co = Eval.get_object(i2, {:object, cref})
+                entries = read_dir_entries(path, Bitwise.band(fs_flags(obj), 4096) != 0)
+
+                co2 =
+                  st_put(co, "dir", path)
+                  |> st_put("flags", fs_flags(obj))
+                  |> st_put("pairs", entries)
+                  |> then(&st_put(&1, "pos", 0))
+                  |> dir_entry_refresh()
+
+                i3 = put_obj(i2, {:object, cref}, co2)
+                {:ok, {{:object, cref}, obj}, i3}
+
+              _ ->
+                {:ok, {:null, obj}, i}
+            end
+          end)
+        ],
+        fn m -> {String.downcase(m.name), m} end
+      )
+
+    shell_p(
+      "RecursiveDirectoryIterator",
+      :class,
+      Map.merge(filesystem_iterator_class().methods, methods),
+      ["iterator", "traversable", "seekable", "recursiveiterator"],
+      "filesystemiterator"
+    )
+  end
+
+  defp glob_iterator_class do
+    methods =
+      Map.new(
+        [
+          nfn("__construct", fn obj, a, i ->
+            pattern = a |> Enum.at(0, {:string, ""}) |> dt_s()
+            dir = Path.dirname(pattern)
+            mask = Path.basename(pattern)
+
+            entries =
+              case File.ls(dir) do
+                {:ok, names} ->
+                  re = glob_to_re(mask)
+
+                  names
+                  |> Enum.sort()
+                  |> Enum.filter(&Regex.match?(re, &1))
+                  |> Enum.map(&{&1, join_path(dir, &1)})
+
+                _ ->
+                  []
+              end
+
+            obj0 = st_put(st_put(obj, "dir", dir), "pairs", entries)
+            {:ok, {:null, dir_entry_refresh(st_put(obj0, "pos", 0))}, i}
+          end),
+          nfn("count", fn obj, _a, i ->
+            {:ok, {{:int, length(it_pairs(obj))}, obj}, i}
+          end),
+          nfn("rewind", fn obj, _a, i ->
+            {:ok, {:null, st_put(obj, "pos", 0)}, i}
+          end),
+          nfn("next", fn obj, _a, i ->
+            {:ok, {:null, dir_entry_refresh(st_put(obj, "pos", it_pos(obj) + 1))}, i}
+          end)
+        ],
+        fn m -> {String.downcase(m.name), m} end
+      )
+
+    shell_p(
+      "GlobIterator",
+      :class,
+      Map.merge(filesystem_iterator_class().methods, methods),
+      ["iterator", "traversable", "seekable", "countable"],
+      "filesystemiterator"
+    )
+  end
+
+  defp glob_to_re(mask) do
+    src =
+      mask
+      |> String.replace(".", "\\.")
+      |> String.replace("?", ".")
+      |> String.replace("*", ".*")
+
+    Regex.compile!("^" <> src <> "$")
+  end
+
+  # RecursiveIteratorIterator: flatten the tree at rewind per mode
+  defp recursive_iterator_iterator_class do
+    methods =
+      Map.new(
+        [
+          nfn("__construct", fn obj, a, i ->
+            case a do
+              [{:object, _} = inner | rest] ->
+                mode =
+                  case Enum.at(rest, 0) do
+                    {:int, n} when n in [1, 2] -> n
+                    _ -> 0
+                  end
+
+                {:ok, {:null, st_put(st_put(obj, "inner", inner), "mode", mode)}, i}
+
+              _ ->
+                {:unwind,
+                 {:php_throw,
+                  {:native_error, "TypeError",
+                   "RecursiveIteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable"}},
+                 i}
+            end
+          end),
+          nfn("rewind", fn obj, _a, i ->
+            mode = Map.get(st(obj), "mode") || 0
+
+            # php RII walks the tree through the INNER ITERATOR's
+            # getChildren() at each position — the current() snapshots have
+            # no recursive nature of their own
+            case recursive_collect(st(obj)["inner"], mode, [], i) do
+              {flat, i2} ->
+                {:ok, {:null, st_put(st_put(obj, "pairs", flat), "pos", 0)}, i2}
+
+              other ->
+                other
+            end
+          end)
+        ] ++
+          common_iter_methods(fn obj, _a, i ->
+            case it_cur(obj) do
+              {_k, v} -> {:ok, {v, obj}, i}
+              nil -> {:ok, {:null, obj}, i}
+            end
+          end),
+        fn m -> {String.downcase(m.name), m} end
+      )
+
+    shell("RecursiveIteratorIterator", :class, methods, ["iterator", "traversable"])
+    |> Map.put(:consts, %{
+      "LEAVES_ONLY" => {:int, 0},
+      "SELF_FIRST" => {:int, 1},
+      "CHILD_FIRST" => {:int, 2},
+      "CATCH_GET_CHILD" => {:int, 16}
+    })
+  end
+
+  # walk one iterator level: at each position ask the ITERATOR for children
+  # (getchildren on the inner iterator — php RII semantics). Leaf values are
+  # emitted; dir values are emitted before (SELF_FIRST) / after (CHILD_FIRST)
+  # their subtree, or skipped (LEAVES_ONLY).
+  defp recursive_collect(iter_ref, mode, acc, i) do
+    call_m = fn name, args, ia ->
+      case Table.find_method(ia, obj_class(ia, iter_ref), name) do
+        nil -> {{:val, :null}, nil, ia}
+        m -> Eval.call_php_method(iter_ref, m, args, nil, ia)
+      end
+    end
+
+    case call_m.("rewind", [], i) do
+      {{:unwind, _}, _, i2} ->
+        {acc, i2}
+
+      {_, _, i2} ->
+        rec_step(call_m, iter_ref, mode, acc, i2)
+    end
+  end
+
+  defp rec_step(call_m, iter_ref, mode, acc, i) do
+    case call_m.("valid", [], i) do
+      {{:val, v}, _e1, i2} ->
+        if Value.truthy?(v) do
+          {cur, i3} =
+            case call_m.("current", [], i2) do
+              {{:val, cur}, _e2, i3} -> {cur, i3}
+              {_, _, i3} -> {:null, i3}
+            end
+
+          {has_kids, child_ref, i4} =
+            case call_m.("haschildren", [], i3) do
+              {{:val, hv}, _e3, i4} ->
+                if Value.truthy?(hv) do
+                  case call_m.("getchildren", [], i4) do
+                    {{:val, {:object, _} = cref}, _e4, i5} -> {true, cref, i5}
+                    {_, _, i5} -> {false, nil, i5}
+                  end
+                else
+                  {false, nil, i4}
+                end
+
+              {_, _, i4} ->
+                {false, nil, i4}
+            end
+
+          self_entry = {nil, cur}
+
+          cond do
+            not has_kids ->
+              {_, _, i5} = call_m.("next", [], i4)
+              rec_step(call_m, iter_ref, mode, acc ++ [self_entry], i5)
+
+            mode == 0 ->
+              {sub, i5} = recursive_collect(child_ref, mode, [], i4)
+              {_, _, i6} = call_m.("next", [], i5)
+              rec_step(call_m, iter_ref, mode, acc ++ sub, i6)
+
+            mode == 1 ->
+              {sub, i5} = recursive_collect(child_ref, mode, [], i4)
+              {_, _, i6} = call_m.("next", [], i5)
+              rec_step(call_m, iter_ref, mode, acc ++ [self_entry] ++ sub, i6)
+
+            true ->
+              {sub, i5} = recursive_collect(child_ref, mode, [], i4)
+              {_, _, i6} = call_m.("next", [], i5)
+              rec_step(call_m, iter_ref, mode, acc ++ sub ++ [self_entry], i6)
+          end
+        else
+          {acc, i2}
+        end
+
+      {_, _, i2} ->
+        {acc, i2}
+    end
+  end
+
 
   ## ───────────────── helpers ─────────────────
 
@@ -1012,6 +1673,12 @@ defmodule PhpBeam.Classes.Spl do
           nfn("getextension", fn obj, _a, i ->
             {:ok, {{:string, String.trim_leading(Path.extname(st(obj)["path"] || ""), ".")}, obj},
              i}
+          end),
+          nfn("getpathname", fn obj, _a, i ->
+            {:ok, {{:string, st(obj)["path"] || ""}, obj}, i}
+          end),
+          nfn("getpath", fn obj, _a, i ->
+            {:ok, {{:string, Path.dirname(st(obj)["path"] || "")}, obj}, i}
           end),
           nfn("getrealpath", fn obj, _a, i ->
             p = st(obj)["path"] || ""
