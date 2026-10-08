@@ -112,7 +112,12 @@
 
 - [x] T017-p15 算术错误措辞带操作数：value.ex arith_operand 错误改 **tag**（:unsupported_operand——渲染需 op/两侧上下文故上移）；eval arith 层渲染 `Unsupported operand types: <左类名|gettype> <op符号> <右类型>`（oracle 探针钉死 `E + int`）；interp 线程化进 arith/4；ValueTest 期望随 tag 化 | tests: throw/001 语义对齐（leaks 余 `Caught` 流控小差异）；基线 424@13 收缩；fast PASS | commit: 593c0a0
 
+- [x] T017-p16 保留字矩阵 + `_` 弃用 + log_errors stderr 三连：①类名保留字矩阵 oracle 钉死（bool/int/float/string/iterable/object/mixed/null/false/true → `Cannot use "X" as a <kind> name as it is reserved` 编译期 fatal（@fatal 通道）；array/callable/static 是词法 parse error）；②`_` 弃用（parser 收集 deprecated_name 成员 → class 走 Classes.register、**enum 走 Enums.register 独立路径**两处都发活警告——enum 曾静默因忘接）；③**log_errors stderr 副本通道全量补齐**（T006 债清偿——每条显示诊断一条 `PHP <前缀>:  msg in file on line N` stderr，log_errors 门控）；④匿名类 decl 补 prop_hooks/deprecated_names 字段（缺键 badmatch——21_m24 回归当场抓获，工程教训：**register 新增解构键必须同步 anon decl**） | tests: e1/cu/e2/case21 IDENTICAL；基线 424@13；fast PASS | commit: ee28f31
+
 ### 恢复点（下会话从这里继续）
+
+**下一批候选不变**：arrow_functions(8)/closures(11)/list(11)/anon(16)/numeric_strings(8)/multibyte(8) ~62 例。**deferred 余项**：`\int` unqualified（typehints 2）、assert AST 导出、typed-prop 未初始化读、leaks `Caught`。
+**基线**：424 @ 13 分片。
 
 **Z 相节奏（确立循环）**：每迭代 = 纳入 3-6 个小子目录 → 首录 → 分诊 → 修最大普适类 → 收缩提交。
 **下一批候选**：arrow_functions(8)/closures(11)/list(11)/anon(16)/numeric_strings(8)/multibyte(8) ~62 例。
