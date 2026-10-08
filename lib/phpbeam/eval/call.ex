@@ -79,7 +79,8 @@ defmodule PhpBeam.Eval.Call do
   end
 
   def call_value({:array, arr}, args, env, interp) do
-    call_cb_dispatch({:array, arr}, wrap_args(args), env, interp)
+    # args arrive as raw AST — dispatch arms wrap them themselves
+    call_cb_dispatch({:array, arr}, args, env, interp)
   end
 
 
