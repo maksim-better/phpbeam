@@ -1284,6 +1284,73 @@ defmodule PhpBeam.Eval.ConstEval do
       "SORT_STRING" ->
         {:ok, {:int, 2}}
 
+
+      "LOG_EMERG" ->
+        {:ok, {:int, 0}}
+      "LOG_ALERT" ->
+        {:ok, {:int, 1}}
+      "LOG_CRIT" ->
+        {:ok, {:int, 2}}
+      "LOG_ERR" ->
+        {:ok, {:int, 3}}
+      "LOG_WARNING" ->
+        {:ok, {:int, 4}}
+      "LOG_NOTICE" ->
+        {:ok, {:int, 5}}
+      "LOG_INFO" ->
+        {:ok, {:int, 6}}
+      "LOG_DEBUG" ->
+        {:ok, {:int, 7}}
+      "LOG_KERN" ->
+        {:ok, {:int, 0}}
+      "LOG_USER" ->
+        {:ok, {:int, 8}}
+      "LOG_MAIL" ->
+        {:ok, {:int, 16}}
+      "LOG_DAEMON" ->
+        {:ok, {:int, 24}}
+      "LOG_AUTH" ->
+        {:ok, {:int, 32}}
+      "LOG_SYSLOG" ->
+        {:ok, {:int, 40}}
+      "LOG_LPR" ->
+        {:ok, {:int, 48}}
+      "LOG_NEWS" ->
+        {:ok, {:int, 56}}
+      "LOG_UUCP" ->
+        {:ok, {:int, 64}}
+      "LOG_CRON" ->
+        {:ok, {:int, 72}}
+      "LOG_AUTHPRIV" ->
+        {:ok, {:int, 80}}
+      "LOG_LOCAL0" ->
+        {:ok, {:int, 128}}
+      "LOG_LOCAL1" ->
+        {:ok, {:int, 136}}
+      "LOG_LOCAL2" ->
+        {:ok, {:int, 144}}
+      "LOG_LOCAL3" ->
+        {:ok, {:int, 152}}
+      "LOG_LOCAL4" ->
+        {:ok, {:int, 160}}
+      "LOG_LOCAL5" ->
+        {:ok, {:int, 168}}
+      "LOG_LOCAL6" ->
+        {:ok, {:int, 176}}
+      "LOG_LOCAL7" ->
+        {:ok, {:int, 184}}
+      "LOG_PID" ->
+        {:ok, {:int, 1}}
+      "LOG_CONS" ->
+        {:ok, {:int, 2}}
+      "LOG_ODELAY" ->
+        {:ok, {:int, 4}}
+      "LOG_NDELAY" ->
+        {:ok, {:int, 8}}
+      "LOG_NOWAIT" ->
+        {:ok, {:int, 16}}
+      "LOG_PERROR" ->
+        {:ok, {:int, 32}}
       "SORT_LOCALE_STRING" ->
         {:ok, {:int, 5}}
 

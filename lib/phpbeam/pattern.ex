@@ -49,17 +49,38 @@ defmodule PhpBeam.Pattern do
 
   defp split_body("", _d, _close, _acc), do: :error
 
-  defp split_body(<<c, rest::binary>>, d, close, acc) do
-    open? = <<c>> == <<d>> and Map.has_key?(@pairs, d) and not escaped?(acc)
-
-    if <<c>> == <<close>> and not escaped?(acc) and not open? do
-      {:ok, acc, rest}
-    else
-      split_body(rest, d, close, acc <> <<c>>)
-    end
+  # paired delimiters (`(...)`, `[...]`, `{...}`, `<...>`) nest — php's
+  # delimiter scan closes at the MATCHING bracket (probed: `((a))A` → body
+  # `((a)`... i.e. the outer pair), skipping backslash-escaped chars. The
+  # escape state CONSUMES PAIRS (`\\)` = escaped backslash then a real
+  # close) — inspecting the last char would treat the close as escaped.
+  defp split_body(rest, d, close, acc) do
+    split_body(rest, d, close, acc, 0, false)
   end
 
-  defp escaped?(acc), do: byte_size(acc) > 0 and binary_part(acc, byte_size(acc) - 1, 1) == "\\"
+  defp split_body("", _d, _close, _acc, _depth, _esc), do: :error
+
+  defp split_body(<<c, rest::binary>>, d, close, acc, depth, esc) do
+    cond do
+      esc ->
+        split_body(rest, d, close, acc <> <<c>>, depth, false)
+
+      c == ?\\ ->
+        split_body(rest, d, close, acc <> <<c>>, depth, true)
+
+      c == d and c != close ->
+        split_body(rest, d, close, acc <> <<c>>, depth + 1, false)
+
+      c == close and depth == 0 ->
+        {:ok, acc, rest}
+
+      c == close ->
+        split_body(rest, d, close, acc <> <<c>>, depth - 1, false)
+
+      true ->
+        split_body(rest, d, close, acc <> <<c>>, depth, false)
+    end
+  end
 
   defp build(body, flags, source) do
     with {:ok, opts} <- translate_modifiers(flags),

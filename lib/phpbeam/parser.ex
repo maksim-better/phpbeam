@@ -1814,9 +1814,6 @@ defmodule PhpBeam.Parser do
 
   defp unary(ts) do
     case peek(ts) do
-      {:op, _, "!"} ->
-        wrap_unop(tl(ts), :!)
-
       {:op, _, "~"} ->
         wrap_unop(tl(ts), :bnot)
 
@@ -1828,6 +1825,16 @@ defmodule PhpBeam.Parser do
 
       {:op, _, "@"} ->
         wrap_unop(tl(ts), :@)
+
+      {:op, _, "!"} ->
+        # php grammar: the `!` operand is a FULL expr — `!$x = f()` parses as
+        # `!($x = f())` (Laravel's Container::rebound / handleShutdown live on
+        # this) — but only ASSIGNMENT rides inside: `!$a && $b` stays
+        # `(!$a) && $b`
+        case not_assign_shaped?(tl(ts)) do
+          true -> wrap_unop(tl(ts), :!)
+          false -> {e, r} = assign(tl(ts)); {{:unop, :!, e}, r}
+        end
 
       # `@include`/`@require`: include binds looser than unary, but the
       # suppressed-include idiom is everywhere (composer) — wrap the WHOLE
@@ -1898,6 +1905,22 @@ defmodule PhpBeam.Parser do
       :op -> txt in [";", ")", ",", "]", "}", ">", "?", ":", "&&", "||", "??"]
       :eof -> true
       _ -> false
+    end
+  end
+
+  # `!` operand heuristic: NOT an assignment when the next token can't start
+  # an lvalue (`!$a && …`, `!(…)`, `!f()`) or the token after a bare variable
+  # is not a plain `=` (`!$a &&`, `!$a ==`)
+  defp not_assign_shaped?([{k, _, _} | [{:op, _, "="} | _]]) when k in [:variable, :name],
+    do: false
+
+  defp not_assign_shaped?(tl_ts) do
+    case tl_ts do
+      [{:variable, _, _} | [{:op, _, op} | _]] ->
+        op not in ["->", "[", "++", "--"]
+
+      _ ->
+        true
     end
   end
 

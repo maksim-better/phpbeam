@@ -1413,7 +1413,13 @@ defmodule PhpBeam.Interp do
           true
 
         list ->
-          Enum.any?(list, fn v -> Value.loose_eq(s, Eval.const_eval_quiet(v, env, interp)) end)
+          # case labels are FULL constant expressions (self::STATE in a
+          # switch was the Dotenv killer) — const_eval_quiet only knows
+          # literals and would null every class-const label
+          Enum.any?(list, fn v ->
+            {label, _} = PhpBeam.Eval.ConstEval.const_eval(v, interp, env && env.scope_class)
+            Value.loose_eq(s, label)
+          end)
       end
 
     if match? do

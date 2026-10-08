@@ -188,13 +188,22 @@ defmodule PhpBeam.Eval do
 
   defp index_body(c, idx_expr, env2, interp2) do
     case eval(idx_expr, env2, interp2) do
+      {{:unwind, {:unwind, _} = inner}, e3, i3} -> {inner, e3, i3}
       {{:unwind, _} = u, e3, i3} -> {u, e3, i3}
       {{:val, i}, e3, i3} -> index_read(c, i, e3, i3)
+      other -> other
     end
   end
 
   def eval({:prop, obj_e, name_e}, env, interp) do
-    {{:val, obj_val}, env2, interp2} = eval(obj_e, env, interp)
+    case eval(obj_e, env, interp) do
+      {{:unwind, {:unwind, _} = inner}, e2, i2} -> {inner, e2, i2}
+      {{:unwind, _} = u, e2, i2} -> {u, e2, i2}
+      {{:val, obj_val}, env2, interp2} -> prop_read(obj_val, name_e, env2, interp2, env)
+    end
+  end
+
+  defp prop_read(obj_val, name_e, env2, interp2, env) do
 
     case obj_val do
       {:object, _} = obj_ref ->

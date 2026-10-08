@@ -954,6 +954,7 @@ defmodule PhpBeam.Eval.Call do
   def call_php_method_inner({:object, _} = obj_ref, method, args, env, interp) do
     obj = get_object(interp, obj_ref)
 
+
     case method_violation(interp, obj.class, method, env) do
       nil -> :ok
       msg -> throw({:fatal_violation, msg, env, interp})
