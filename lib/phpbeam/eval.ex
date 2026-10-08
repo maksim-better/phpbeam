@@ -1795,18 +1795,8 @@ defmodule PhpBeam.Eval do
                 new_ref(deref(v, it), it)
 
               _ ->
-                # php: an UNDEFINED variable auto-captured by an arrow still
-                # warns at CALL time when read (arrow-002: fn() => $b + $c
-                # with $c undefined warns once per call). Bind null but mark
-                # the cell so the read path can warn — cells carry no flag,
-                # so warn HERE (definition time ≈ first call in practice;
-                # probed warning text/position match)
-                it =
-                  case EvalError.warn(e, it, "Undefined variable $#{name}") do
-                    {:cont, _, i2} -> i2
-                    {:unwind, _, _, i2} -> i2
-                  end
-
+                # by-ref uses MAY be undefined at definition (self-recursive
+                # closures: use (&$fact)) — bind silently, never warn
                 new_ref(:null, it)
             end
 
@@ -1879,10 +1869,31 @@ defmodule PhpBeam.Eval do
   # the body (nested closure bodies included — their references force the
   # outer capture too, as in php); static/local declarations that happen to
   # shadow are over-captured harmlessly (by-value copy)
-  defp arrow_free_vars(body), do: arrow_vars(body, [])
+  defp arrow_free_vars(body), do: arrow_vars(body, []) |> Enum.reject(&(&1 == :assign_target))
 
   defp arrow_vars({:var, name}, acc) when is_binary(name), do: [name | acc]
   defp arrow_vars({:param, name, _, _, _, _}, acc), do: [name | acc]
+
+  # an ASSIGNMENT TARGET is a write, not a read — `fn ($a) => $a + $n = 5`
+  # must not auto-capture/warn for $n (05_funcs differential)
+  defp arrow_vars({:assign, target, rhs}, acc) do
+    # writes are not reads: drop the target var, keep any READS inside a
+    # compound target ($a[$k] = … still reads $a/$k) and the rhs
+    acc2 = arrow_vars(strip_target_var(target), acc)
+    arrow_vars(rhs, acc2)
+  end
+
+  defp strip_target_var({:var, _name}), do: nil
+  defp strip_target_var({:index, container, idx}),
+    do: {:index, strip_or_nil(container), idx}
+
+  defp strip_target_var({:prop, container, name}),
+    do: {:prop, strip_or_nil(container), name}
+
+  defp strip_target_var(other), do: other
+
+  defp strip_or_nil(nil), do: nil
+  defp strip_or_nil(c), do: strip_target_var(c)
 
   defp arrow_vars(list, acc) when is_list(list),
     do: Enum.reduce(list, acc, &arrow_vars/2)
