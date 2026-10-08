@@ -97,7 +97,12 @@
 
 - [x] T017-p9 语法/正则三修：①**`!` 操作数=完整表达式**（php yacc 语义 `!$x = f()` → `!($x=f())`——Container::rebound 的 `if (! $callbacks = …)` 与 HandleExceptions::handleShutdown 同模式；unary 里遗留的旧 `!` 子句抢先吞掉新臂（双子句陷阱第二次咬人）且 `@` 臂连带失踪——`@$x['k']` 解析回归被 parser_test 当场抓获）；②**switch case 标签=完整常量表达式**（`self::STATE`——Dotenv EntryParser 状态机死因；const_eval_quiet 只认字面量→所有类常量标签落 default）；③**括号定界符嵌套配对扫描+转义状态消费成对反斜杠**（Dotenv Lexer 的 `((..)|(..))A` 无定界符形态——php 以 `(` 为定界符；首版只数深度不看转义对，`\\)` 误判转义）；LOG_*/SORT_* 常量族 | tests: bang/rb/hs/sw1/dx 全 IDENTICAL；fast PASS | commit: 5c7d4ec
 
+- [x] T017-p10 `$this` 未绑定读取 → Error：php 8 探针四上下文（普通函数/闭包/静态方法/顶层）全 Fatal `Using $this when not in object context`（isset($this)=false 走 isset 路径不受影响；`??` 也 Fatal）——eval({:var,"this"}) 守卫 `not match?({:object,_}, env.this)` 即 Fatal。容器 build(closure) 链上出现 fn=nil 的 env 读 $this（帧栈：resolve→isBuildable@Container:1117）——**isBuildable 以 function=nil 的 env 执行**（某条方法分派路径漏建 fenv.function 或 globalize 串入），已在台账固化待查 | tests: tb 探针语义对齐（仅差闭包帧进栈的已知债）；fast PASS | commit: a0127df
+
 ### 恢复点（下会话从这里继续）
+
+**T017-p11 线索（isBuildable env 串扰）**：`$this` Fatal 的 env.function=nil + current_file=Container:1117（isBuildable 体）+ 帧栈=resolve→isBuildable。下手点：grep `lib/phpbeam/eval/call.ex` 与 interp.ex 里**所有构造 %Env{} 却漏 `function:` 字段**的路径（call_static_method 非 static 臂 / magic_static_call / resolve 的 FCC 调用 / Env.globalize 串入方法体）；再跑 bc.php 确认 isBuildable 拿到 function="isbuildable"。 artisan 链此时应能过 build('env') 到下一层。
+**工具链提示**：laravel-smoke vendor DBG 残留仍在（备份 /tmp/{Container,LoadConfiguration}.php.bak）；`mix escript.build` 的编译错误会被 `>/dev/null 2>&1` 吞——**任何 rebuild 后必须显式 grep error**（本迭代两次被陈旧二进制误导）。
 
 **artisan 当前层（T017-p10）**：`make('env')` → `build(Closure)`（Container:1143 `return $concrete($this, $this->getLastParameterOverride())`）执行 env 绑定闭包时冒出 **`Undefined variable $error`**（HandleExceptions:240 的 `$error['type']`——但该链所有闭包都不含 $error 变量 ⇒ 疑**FCC/闭包调用的作用域串扰**：闭包体在错误词法 env 下执行，读到别处 handleShutdown 的 $error）。复现已固化：`/tmp/bc.php`（LEV+LC+HandleExceptions 后 `$app->build(fn() => "x")`）——php 侧 "done"，phpx 侧炸同一链。下一步：最小化 bc.php（去掉 bootstrap 逐个减），或 engine 层 dump 闭包调用时的 env.vars 键集合。
 **工具链**：laravel-smoke vendor 有 DBG 残留（Container.php 的 MAKE-CONFIG、LoadConfiguration 的 CONFIG-INSTANCED、Application 的 BOOT probe、EntryParser 的 BAD-STATE——备份在 /tmp/{Container,LoadConfiguration}.php.bak）；phpx 仍缺 `DEBUG_BACKTRACE_IGNORE_ARGS` 常量（deferred）。
