@@ -122,7 +122,12 @@
 
 - [x] T017-p19 收尾：call_value 可调用值形状补全（string/array/__invoke 三臂 + 静默兜底 fatal——**兜底必须放子句族末尾**，插中间截获 static_fcc 被当场抓获）；fast PASS（d0177a1）。closures 分片 10→7（basic 推进到尾部、部分语义差异剩）。**剩余差异点（下一迭代）**：①`{:arg,…}` AST 泄漏进输出流（string-FCC 调用链 wrap_args 双包——`Function that exists{:arg,…}` 现场）；②rebinding/lsb/reflection 三例的绑定语义；③`{:fcc,inner}` 的 invoke_fcc arg 求值路径在 FCC-after-fromCallable 场景的参数形态混用（call_value 家族现在同时接 AST/vals 两种 args——**契约分裂**，需统一）。
 
+- [x] T017-p19-b call_value array 臂去双包（335f177）：wrap_args DOUBLE-PACK probe 实证 args 已是 AST——call_value({:array}) 直传 dispatch（dispatch 臂自会包装）。**string-FCC 链残余**：`Function that exists{:arg,…}` ——bar(" OK".PHP_EOL) 的返回/求值路径仍把 AST 当值打出（call_named 返回槽污染疑点）；且 cc_basic 尾部 PublicInvocable __invoke 实例 arm 已补。基线 468@19（closures 7）。
+
 ### 恢复点（下会话从这里继续）
+
+**T019-b 收口路径**：①单点 `phpx -r 'function bar(){return "B";} $f="bar"; echo $f(" OK");'`——若打 AST 即最小复现（call_named 返回槽污染）→ 修；②PublicInvocable __invoke arm 验证；③closures 剩 7 例清点。
+**工具链提醒**：cc_basic.php 是从 phpt 提取的 body 文件（会因源树清理丢失——重生成命令在 quickstart/台账均有）。
 
 **p19-b 线索**：`{:arg,…}` AST 打进输出 = wrap_args 对**已求值 vals** 再包一层后某处 php_to_string 了结构。查 call_value({:string}) → call_named(wrap_args(args)) 中 args 的真实形态（do_call {:var} 臂传 AST；concat 路径传 vals？）——统一 call_value 的 args 契约为 AST（各臂内部 arg_values）。
 **沿用**：list-by-ref 11 例；vendor DBG 还原；基线 468@19。
