@@ -980,14 +980,32 @@ defmodule PhpBeam.Builtin.B6 do
 
   defp trait_exists_v(vals, i) do
     case vals do
-      [{:string, name} | _] ->
+      [{:string, name} | rest] ->
+        autoload? =
+          case rest do
+            [{:bool, false} | _] -> false
+            _ -> true
+          end
+
+        # php: trait_exists()/enum_exists() trigger the autoloader like
+        # class_exists (Laravel's boot probes traits before composer loads
+        # them)
+        i2 =
+          if autoload? and PhpBeam.Classes.Table.get_class(i, String.downcase(name)) == nil and
+               i.autoload_fns != [] do
+            {_k, it2} = PhpBeam.Eval.fetch_class(i, String.downcase(name), name)
+            it2
+          else
+            i
+          end
+
         found =
-          case PhpBeam.Classes.Table.get_class(i, String.downcase(name)) do
+          case PhpBeam.Classes.Table.get_class(i2, String.downcase(name)) do
             %{kind: :trait} -> true
             _ -> false
           end
 
-        {:ok, {:bool, found}, i}
+        {:ok, {:bool, found}, i2}
 
       _ ->
         {:ok, {:bool, false}, i}
@@ -996,14 +1014,29 @@ defmodule PhpBeam.Builtin.B6 do
 
   defp enum_exists_v(vals, i) do
     case vals do
-      [{:string, name} | _] ->
+      [{:string, name} | rest] ->
+        autoload? =
+          case rest do
+            [{:bool, false} | _] -> false
+            _ -> true
+          end
+
+        i2 =
+          if autoload? and PhpBeam.Classes.Table.get_class(i, String.downcase(name)) == nil and
+               i.autoload_fns != [] do
+            {_k, it2} = PhpBeam.Eval.fetch_class(i, String.downcase(name), name)
+            it2
+          else
+            i
+          end
+
         found =
-          case PhpBeam.Classes.Table.get_class(i, String.downcase(name)) do
+          case PhpBeam.Classes.Table.get_class(i2, String.downcase(name)) do
             %{kind: :enum} -> true
             _ -> false
           end
 
-        {:ok, {:bool, found}, i}
+        {:ok, {:bool, found}, i2}
 
       _ ->
         {:ok, {:bool, false}, i}

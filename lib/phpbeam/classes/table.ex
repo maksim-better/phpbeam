@@ -47,10 +47,20 @@ defmodule PhpBeam.Classes.Table do
       implements: implements,
       consts: consts,
       props: props,
+      prop_hooks: prop_hooks,
       methods: methods,
       uses: uses,
       modifiers: mods
     } = decl
+
+    # PHP 8.4 property hooks: each {:prop_hooks, entry, hooks} member both
+    # declares its property and attaches get/set bodies to it
+    props =
+      prop_hooks
+      |> Enum.reduce(props, fn {entry, _hooks}, acc ->
+        {vis, static?, ro?, pname, default} = entry
+        acc ++ [{vis, static?, ro?, pname, default}]
+      end)
 
     key = full_key(name, interp)
 
@@ -87,6 +97,7 @@ defmodule PhpBeam.Classes.Table do
             interp,
             decl[:end_line] || 0
           )
+          |> merge_prop_hooks(prop_hooks)
 
         case apply_traits(class, uses, interp) do
           {:ok, class2, it} ->
@@ -104,6 +115,37 @@ defmodule PhpBeam.Classes.Table do
         end
       end
     end
+  end
+
+  # attach get/set hook bodies ({params, body}; body nil = `get;` shorthand)
+  # onto their property maps — hooked props were injected into the props list
+  # by register()
+  defp merge_prop_hooks(class, []), do: class
+
+  defp merge_prop_hooks(class, prop_hooks) do
+    by_key =
+      Map.new(prop_hooks, fn {{_vis, _static?, _ro, pname, _default}, hooks} ->
+        down = String.downcase(pname)
+
+        get = Enum.find(hooks, fn {k, _p, _b} -> k == "get" end)
+        set = Enum.find(hooks, fn {k, _p, _b} -> k == "set" end)
+        {down, {get, set}}
+      end)
+
+    props2 =
+      Enum.map(class.props, fn p ->
+        case Map.fetch(by_key, p.name) do
+          {:ok, {get, set}} ->
+            p
+            |> Map.put(:get_hook, get && {elem(get, 1), elem(get, 2)})
+            |> Map.put(:set_hook, set && {elem(set, 1), elem(set, 2)})
+
+          :error ->
+            p
+        end
+      end)
+
+    %{class | props: props2}
   end
 
   defp build_class(

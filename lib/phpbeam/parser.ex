@@ -356,6 +356,7 @@ defmodule PhpBeam.Parser do
       end_line: peek_line(rest6),
       consts: List.flatten(Keyword.get_values(members, :consts)),
       props: List.flatten(Keyword.get_values(members, :props)),
+      prop_hooks: List.flatten(Keyword.get_values(members, :prop_hooks)),
       methods: List.flatten(Keyword.get_values(members, :methods)),
       uses: Keyword.get_values(members, :uses)
     }
@@ -682,7 +683,60 @@ defmodule PhpBeam.Parser do
 
   defp prop_member(ts, vis, static?, readonly?) do
     {props, rest} = prop_entries(ts, vis, static?, readonly?, [])
-    {{:props, props}, expect_semi(rest)}
+
+    # PHP 8.4 property hooks: `public X $p { get => …; set { … } }` — legal
+    # only on a single-property declaration (Symfony 8 Request needs set)
+    case props do
+      [entry] ->
+        if at_op?(rest, "{") do
+          {hooks, rest2} = prop_hooks(tl(rest))
+          {{:prop_hooks, {entry, hooks}}, rest2}
+        else
+          {{:props, props}, expect_semi(rest)}
+        end
+
+      _ ->
+        {{:props, props}, expect_semi(rest)}
+    end
+  end
+
+  # hook list until the closing `}` of the property declaration
+  defp prop_hooks([{_, _, "}"} | rest]), do: {[], rest}
+
+  defp prop_hooks(ts) do
+    {kind, rest} = take_ident(ts)
+
+    # `get($params)` / `set($value)` — explicit parameter lists; the default
+    # set parameter is named $value when omitted (php 8.4)
+    {params, rest2} =
+      case take_op(rest, "(") do
+        {true, r} -> param_list(r)
+        {false, _} -> {[], rest}
+      end
+
+    {body, rest3} =
+      cond do
+        at_op?(rest2, ";") ->
+          # `get;` / `set;` shorthand = default behavior (body nil)
+          {nil, tl(rest2)}
+
+        at_op?(rest2, "=>") ->
+          # arrow form: for `set` the expression's VALUE becomes the stored
+          # value — keep it tagged so the engine can distinguish it from a
+          # block body's return (whose value php discards)
+          {e, r} = expr(tl(rest2))
+          r2 = expect_semi(r)
+          {[{:hook_arrow, e}], r2}
+
+        at_op?(rest2, "{") ->
+          block_body(tl(rest2))
+
+        true ->
+          raise(ParseError, message: "expected hook body", line: peek_line(rest2))
+      end
+
+    {more, rest4} = prop_hooks(rest3)
+    {[{String.downcase(kind), params, body} | more], rest4}
   end
 
   defp prop_entries(ts, vis, static?, readonly?, acc) do
@@ -2494,6 +2548,7 @@ defmodule PhpBeam.Parser do
       implements: implements,
       consts: List.flatten(Keyword.get_values(members, :consts)),
       props: List.flatten(Keyword.get_values(members, :props)),
+      prop_hooks: List.flatten(Keyword.get_values(members, :prop_hooks)),
       methods: List.flatten(Keyword.get_values(members, :methods)),
       uses: Keyword.get_values(members, :uses)
     }

@@ -47,12 +47,48 @@ defmodule PhpBeam.Eval.Assign do
             throw({:readonly_throw, obj_ref, env2, i3})
 
           declared ->
-            case PArray.put(obj.props, {:string, key}, v) do
-              {:ok, props2} ->
-                {env2, Eval.put_object(interp2, obj_ref, %{obj | props: props2})}
+            # PHP 8.4 set hook: arrow form's value is STORED; block form runs
+            # its body (which writes the backing store itself)
+            hook_result =
+              case PhpBeam.Classes.find_prop(interp2, obj.class, key) do
+                {:ok, prop} when is_map_key(prop, :set_hook) ->
+                  down = String.downcase(key)
+                  guard_key = {elem(obj_ref, 1), down}
 
-              {:error, _} ->
-                {env2, interp2}
+                  if prop.set_hook && not MapSet.member?(interp2.hook_guard, guard_key) do
+                    Eval.run_prop_hook(obj_ref, obj.class, prop, :set, v, env2, interp2)
+                  else
+                    :plain
+                  end
+
+                _ ->
+                  :plain
+              end
+
+            case hook_result do
+              {:hooked, stored, i4} when stored != :null ->
+                case PArray.put(obj.props, {:string, key}, stored) do
+                  {:ok, p2} -> {env2, Eval.put_object(i4, obj_ref, %{obj | props: p2})}
+                  _ -> {env2, interp2}
+                end
+
+              {:hooked, _, i4} ->
+                # block-form set: the body did its own backing writes —
+                # thread the POST-HOOK interp (a stale obj map here would
+                # clobber the hook's writes)
+                {env2, i4}
+
+              {:unwind, u, i4} ->
+                throw({:hook_unwind, u, env2, i4})
+
+              _ ->
+                case PArray.put(obj.props, {:string, key}, v) do
+                  {:ok, props2} ->
+                    {env2, Eval.put_object(interp2, obj_ref, %{obj | props: props2})}
+
+                  {:error, _} ->
+                    {env2, interp2}
+                end
             end
 
           true ->

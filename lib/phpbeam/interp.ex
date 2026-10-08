@@ -28,6 +28,10 @@ defmodule PhpBeam.Interp do
             halted: nil,
             suppress: 0,
             warnings: 0,
+            # property-hook recursion guard: {obj_id, downcase(name)} pairs
+            # while a get/set hook body runs — reads/writes of the same prop
+            # inside its own hook hit the backing store directly (php 8.4)
+            hook_guard: MapSet.new(),
             ini: %{
               "precision" => "14",
               "serialize_precision" => "-1",

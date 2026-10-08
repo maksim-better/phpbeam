@@ -212,7 +212,46 @@ defmodule PhpBeam.Eval do
   end
 
   defp prop_read(obj_val, name_e, env2, interp2, env) do
+    # PHP 8.4 get-hook short-circuit: a hooked property's accessor REPLACES
+    # the backing store (and precedes __get / visibility handling)
+    hook_probe =
+      case obj_val do
+        {:object, _} = oref ->
+          o = get_object(interp2, oref)
+          k = prop_name_string(name_e, env2, interp2)
 
+          case PhpBeam.Classes.find_prop(interp2, o.class, k) do
+            {:ok, prop} when is_map_key(prop, :get_hook) ->
+              down = String.downcase(k)
+              guard_key = {elem(oref, 1), down}
+
+              if prop.get_hook && not MapSet.member?(interp2.hook_guard, guard_key) do
+                run_prop_hook(oref, o.class, prop, :get, nil, env2, interp2)
+              else
+                :plain
+              end
+
+            _ ->
+              :plain
+          end
+
+        _ ->
+          :plain
+      end
+
+    case hook_probe do
+      {:hooked, v, i3} ->
+        {{:val, v}, env2, i3}
+
+      {{:unwind, _} = u, e, i3} ->
+        {u, e, i3}
+
+      :plain ->
+        prop_read_plain(obj_val, name_e, env2, interp2, env)
+    end
+  end
+
+  defp prop_read_plain(obj_val, name_e, env2, interp2, env) do
     case obj_val do
       {:object, _} = obj_ref ->
         obj = get_object(interp2, obj_ref)
@@ -706,6 +745,9 @@ defmodule PhpBeam.Eval do
         catch
           {:readonly_throw, obj_ref, e3, i3} ->
             {{:unwind, {:php_throw, obj_ref}}, e3, i3}
+
+          {:hook_unwind, u, e3, i3} ->
+            {u, e3, i3}
         end
 
       unw ->
@@ -2730,4 +2772,97 @@ defmodule PhpBeam.Eval do
   defdelegate get_object(interp, ref), to: PhpBeam.Objects
   defdelegate put_object(interp, ref, obj_map), to: PhpBeam.Objects
   defdelegate new_stdclass(interp, props), to: PhpBeam.Objects
+  # PHP 8.4 property hooks — execute a get/set body. Returns
+  # {:hooked, value, interp} | {:plain, interp} | unwind triple.
+  # While a hook runs, reads/writes of the SAME prop hit the backing store
+  # directly (hook_guard keyed by {obj id, prop name}).
+  def run_prop_hook(obj_ref, class_key, prop, kind, value, env, interp) do
+    hook = if kind == :set, do: Map.get(prop, :set_hook), else: Map.get(prop, :get_hook)
+    down = prop.name
+    guard_key = {elem(obj_ref, 1), down}
+
+    case hook do
+      nil ->
+        {:plain, interp}
+
+      _ ->
+        if MapSet.member?(interp.hook_guard, guard_key) do
+          {:plain, interp}
+        else
+          # guard REMOVED on every exit — a leaked entry would silence the
+          # accessor forever (set ran once, then every get went :plain)
+          interp0 = %{interp | hook_guard: MapSet.put(interp.hook_guard, guard_key)}
+
+          case do_run_prop_hook(hook, kind, value, obj_ref, class_key, env, interp0) do
+            {:hooked, v, i3} ->
+              {:hooked, v, %{i3 | hook_guard: MapSet.delete(i3.hook_guard, guard_key)}}
+
+            {:plain, i3} ->
+              {:plain, %{i3 | hook_guard: MapSet.delete(i3.hook_guard, guard_key)}}
+
+            {u, e, i3} ->
+              {u, e, %{i3 | hook_guard: MapSet.delete(i3.hook_guard, guard_key)}}
+          end
+        end
+    end
+  end
+
+  defp do_run_prop_hook({params, body}, kind, value, obj_ref, class_key, env, interp0) do
+    down =
+      case kind do
+        :set -> "set"
+        _ -> "get"
+      end
+
+    fenv = %Env{
+      function: "{#{down} hook}",
+      this: obj_ref,
+      called_class: class_key,
+      scope_class: class_key
+    }
+
+    {vars, _args} =
+      cond do
+        kind == :set and params == [] ->
+          {%{"value" => value}, []}
+
+        kind == :set ->
+          pname =
+            case params do
+              [{:param, n, _, _, _, _} | _] -> n
+              n when is_binary(n) -> n
+              _ -> "value"
+            end
+
+          {%{pname => value}, []}
+
+        true ->
+          {%{}, []}
+      end
+
+    fenv2 = %{fenv | vars: Map.merge(fenv.vars, vars)}
+
+    case body do
+      nil ->
+        {:plain, interp0}
+
+      [{:hook_arrow, e}] ->
+        case eval(e, fenv2, interp0) do
+          {{:val, v}, _, i3} -> {:hooked, v, i3}
+          {{:unwind, _} = u, _, i3} -> {u, env, i3}
+        end
+
+      stmts when is_list(stmts) ->
+        case Interp.exec_stmts(stmts, fenv2, interp0) do
+          {:ok, _, i3} ->
+            {:hooked, :null, i3}
+
+          {{:unwind, {:return, v}}, _, i3} ->
+            {:hooked, deref(v, i3), i3}
+
+          {{:unwind, _} = u, _, i3} ->
+            {u, env, i3}
+        end
+    end
+  end
 end
