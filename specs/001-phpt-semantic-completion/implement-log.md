@@ -143,7 +143,13 @@
 
 - [x] T017-p22-c **by-ref 专项暂停转 deferred**（静默+写回两半均未通——空体探针证静默从未生效，前轮"silent"系误读 watchdog 截断输出）。已落地的无害基建保留（align srcs 列表 + write_back_refs variadic 分支 + by_ref_positions/eval_call_args 第四参通道）。**deferred 登记为大单元**：by-ref 实参完整语义（静默求值 + 写回创建 + variadic 聚合 ref 语义）——涉 eval_call_args/bind_params/write_back_refs 三层契约，需独立 2h+ 专项 | fast PASS（519f053+728f655 基建保留）
 
+- [x] T017-p23 限定内建类型 fatal：param_type_atom 对 fq+单段内建名（15 个，含 void/never/static）raise @fatal `Type declaration 'X' must be unqualified`；ns 类名对照不受影响 | tests: uq/uq2 IDENTICAL；typehints 4→2、总账 519@26 收缩；fast PASS | commit: 2e463ee
+
 ### 恢复点（下会话从这里继续）
+
+**弹药余量**：typed-prop 未初始化读检查（整体缺口）、enum-names 的 or_null/bug76198、assert AST 导出。
+**下一批纳入候选**：float_to_int(19)/prop_const_expr(20)/stack_limit(17)/constants 已入。
+**基线**：519 @ 26 分片。
 
 **优先级调整**：by-ref 专项转 deferred 后，Z 相弹药优先级更新——①`\int` unqualified fatal（typehints 2 例，parser 小改）；②typed-prop 未初始化读检查（整体缺口）；③enum/类名已修✓。**下一批纳入候选**：float_to_int(19)/prop_const_expr(20)/stack_limit(17)。
 **基线**：521 @ 26 分片。
