@@ -63,8 +63,8 @@ defmodule PhpBeam.Classes.Table do
     props =
       prop_hooks
       |> Enum.reduce(props, fn {entry, _hooks}, acc ->
-        {vis, static?, ro?, pname, default} = entry
-        acc ++ [{vis, static?, ro?, pname, default}]
+        {vis, static?, ro?, pname, default, promoted?, ptype} = entry
+        acc ++ [{vis, static?, ro?, pname, default, promoted?, ptype}]
       end)
 
     key = full_key(name, interp)
@@ -144,7 +144,7 @@ defmodule PhpBeam.Classes.Table do
 
   defp merge_prop_hooks(class, prop_hooks) do
     by_key =
-      Map.new(prop_hooks, fn {{_vis, _static?, _ro, pname, _default}, hooks} ->
+      Map.new(prop_hooks, fn {{_vis, _static?, _ro, pname, _default, _prom?, _ptype}, hooks} ->
         down = String.downcase(pname)
 
         get = Enum.find(hooks, fn {k, _p, _b} -> k == "get" end)
@@ -201,9 +201,12 @@ defmodule PhpBeam.Classes.Table do
         Enum.flat_map(methods, fn
           {_, _, _, _, _, "__construct", params, _, _} ->
             Enum.map(params, fn
-              {:param_promoted, pvis, ro?, name, _t, d, _br, _var} ->
+              {:param_promoted, pvis, ro?, name, t, d, _br, _var} ->
                 vis = if pvis in [:public, :protected, :private], do: pvis, else: :public
-                {vis, false, ro?, name, d || :null, true}
+
+                # pass the default AST raw (nil = none) — props_list folds it
+                # and records has_default from the nil-ness
+                {vis, false, ro?, name, d, true, t}
 
               _ ->
                 nil
@@ -215,36 +218,24 @@ defmodule PhpBeam.Classes.Table do
         end)
 
     props_list =
-      Enum.map(props, fn
-        {vis, static?, ro?, pname, default, promoted?} ->
-          %{
-            name: String.downcase(pname),
-            display: pname,
-            visibility: vis,
-            static?: static?,
-            readonly?: ro?,
-            promoted?: promoted?,
-            default:
-              case Eval.const_fold(default || :null, interp, key) do
-                {:ok, v} -> v
-                :defer -> :null
-              end
-          }
-
-        {vis, static?, ro?, pname, default} ->
-          %{
-            name: String.downcase(pname),
-            display: pname,
-            visibility: vis,
-            static?: static?,
-            readonly?: ro?,
-            promoted?: false,
-            default:
-              case Eval.const_fold(default || :null, interp, key) do
-                {:ok, v} -> v
-                :defer -> :null
-              end
-          }
+      Enum.map(props, fn {vis, static?, ro?, pname, default, promoted?, ptype} ->
+        %{
+          name: String.downcase(pname),
+          display: pname,
+          visibility: vis,
+          static?: static?,
+          readonly?: ro?,
+          promoted?: promoted?,
+          # declared type hint (source spelling, e.g. "?int", "int|string");
+          # nil = untyped — drives the uninitialized-read fatal
+          ptype: ptype,
+          has_default: not is_nil(default),
+          default:
+            case Eval.const_fold(default || :null, interp, key) do
+              {:ok, v} -> v
+              :defer -> :null
+            end
+        }
       end)
 
     methods =

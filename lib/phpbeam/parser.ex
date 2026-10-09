@@ -776,8 +776,10 @@ defmodule PhpBeam.Parser do
     {[{String.downcase(kind), params, body} | more], rest4}
   end
 
+  # prop entries carry the declared type hint (nil = untyped) as the 7th
+  # element — the engine needs it to model "typed prop starts uninitialized"
   defp prop_entries(ts, vis, static?, readonly?, acc) do
-    {_t, rest0} = param_type(ts)
+    {t, rest0} = param_type(ts)
 
     case rest0 do
       [{:variable, _, name} | rest2] ->
@@ -791,10 +793,10 @@ defmodule PhpBeam.Parser do
 
         if yes do
           prop_entries(rest4, vis, static?, readonly?, [
-            {vis, static?, readonly?, name, default} | acc
+            {vis, static?, readonly?, name, default, false, t} | acc
           ])
         else
-          {Enum.reverse([{vis, static?, readonly?, name, default} | acc]), rest3}
+          {Enum.reverse([{vis, static?, readonly?, name, default, false, t} | acc]), rest3}
         end
 
       _ ->

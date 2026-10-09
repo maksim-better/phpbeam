@@ -259,17 +259,28 @@ defmodule PhpBeam.Eval do
 
         hidden = prop_read_violation(interp2, obj.class, String.downcase(key), env)
 
+        downkey = String.downcase(key)
+
         declared_ro_uninit =
-          PArray.fetch(obj.props, {:string, String.downcase(key)}) == :error and
+          PArray.fetch(obj.props, {:string, downkey}) == :error and
             PhpBeam.Classes.find_prop(interp2, obj.class, key) != nil and
-            readonly_prop?(interp2, obj, String.downcase(key))
+            readonly_prop?(interp2, obj, key)
+
+        # ANY typed declared prop absent from obj.props is an uninitialized
+        # read (instance_defaults refuses to seed typed-no-default props, so
+        # absence genuinely means uninit — probed: `public int $x` read throws;
+        # isset/??/empty gate on isset? and never reach here)
+        declared_typed_uninit =
+          PArray.fetch(obj.props, {:string, downkey}) == :error and
+            typed_declared?(interp2, obj.class, downkey)
 
         cond do
           is_binary(hidden) ->
             {{:unwind, {:fatal, hidden}}, env2, interp2}
 
-          declared_ro_uninit ->
-            # readonly implies typed; php throws on the uninitialized read
+          declared_ro_uninit or declared_typed_uninit ->
+            # readonly implies typed; php throws on the uninitialized read of
+            # ANY typed declared prop (probed: `public int $x` unset read)
             msg =
               "Typed property #{prop_declarer_display(interp2, obj, key)}::$#{key} must not be accessed before initialization"
 
@@ -462,6 +473,17 @@ defmodule PhpBeam.Eval do
   # php: reading a private/protected prop from an unrelated scope is a
   # fatal Error; a subclass reading the parent's PRIVATE prop is not visible
   # (falls through to Undefined-property semantics on the subclass copy)
+  # does the declared prop (own or inherited) carry a type hint? (the parser
+  # keeps the hint in the prop map as :ptype since the typed-uninit fix)
+  defp typed_declared?(interp, class_key, downkey) do
+    case PhpBeam.Classes.find_prop(interp, class_key, downkey) do
+      {:ok, p} -> Map.get(p, :ptype) not in [nil, ""]
+      # :error = declared untyped/absent; nil = class not in the table at all
+      # (native objects — SimpleXML etc. land here)
+      _ -> false
+    end
+  end
+
   defp prop_read_violation(interp, class_key, key, env) do
     walk_prop_visibility(interp, class_key, key, env)
   end

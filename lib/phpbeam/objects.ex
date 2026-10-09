@@ -56,9 +56,14 @@ defmodule PhpBeam.Objects do
           class.props
           # readonly props start UNINITIALIZED (defaults only reach them via
           # promoted ctor params) so presence in obj.props genuinely means
-          # "initialized" — a readonly class makes every own prop readonly
+          # "initialized" — a readonly class makes every own prop readonly.
+          # Typed props with no declared default are likewise uninitialized
+          # (php: reading one is a fatal "must not be accessed before
+          # initialization"; isset/??/empty then see it as absent). Hooked
+          # props keep the backing seed — v1 models their store as present.
           |> Enum.reject(fn p ->
-            p.static? or match?(%{readonly?: true}, p) or ro_class?
+            p.static? or match?(%{readonly?: true}, p) or ro_class? or
+              typed_unseeded?(p)
           end)
           # prop names are case-insensitive in php: reads AND writes go
           # through String.downcase, so seeds must too (cased seeds were
@@ -67,6 +72,11 @@ defmodule PhpBeam.Objects do
 
         own ++ instance_defaults(interp, class.parent)
     end
+  end
+
+  defp typed_unseeded?(p) do
+    Map.get(p, :ptype) not in [nil, ""] and not Map.get(p, :has_default, true) and
+      not Map.has_key?(p, :get_hook) and not Map.has_key?(p, :set_hook)
   end
 
   # ───────────────────────── exceptions (from Classes) ─────────────────────────

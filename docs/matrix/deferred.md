@@ -218,10 +218,10 @@ DEFER T006 log_errors stderr 副本通道 | lang,strings,func,classes,basic,outp
 
 - [ ] **算术错误措辞带操作数类型**：php 8.4 `Unsupported operand types: Exception + int`（左类名+op+右类型）；value.ex arith_operand 错误无上下文——API 需带 op/左右 gettype（throw/001、leaks 两例）
 - [ ] assert 消息的 zend_ast 表达式导出：`assert(false && ($a **= 2))` 的操作数文本（ast/zend-pow-assign；A1 的 zend_ast_export 债的具体化）
-- [ ] `\int` 限定类型声明 → Fatal `Type declaration 'int' must be unqualified`（parser 接受 \int——typehints/fully_qualified_scalar、namespace_relative_scalar）
+- [x] `\int` 限定类型声明 → Fatal `Type declaration 'int' must be unqualified`（T017-p23 已修，commit 2e463ee；typehints 4→2）
 - [ ] `?Foo` or_null 类型参数解析（typehints/or_null、bug76198）
 - [ ] enum 名检查：`_` 弃用警告 + 保留字 fatal（gh15976/enum-names；class/interface/trait-names 同族=类名保留字表）
-- [ ] typed-prop 未初始化读检查（ph1 揭示的整体缺口）
+- [x] typed-prop 未初始化读检查（T017-p24 已修：parser prop 条目携 :ptype + instance_defaults 不播种 typed-no-default + prop_read 缺席读 fatal；总账 519→511，static typed uninit 仍留——属静态属性读路径，另批）
 - [ ] leaks.phpt 的 `Caught` 缺失（嵌套 try/catch 流控小差异）
 
 ## Z 相第二批分诊（2026-10-09，六目录 44 例基线：arrow5/closures10/list11/anon7/numeric5/multibyte6）
