@@ -139,7 +139,12 @@
 
 - [x] T017-p22 by-ref 静默创建（半程，fecec0b）：by_ref_positions/1（固定 by-ref 位 + **variadic 起全段**——range 成员测试处理多余实参）+ eval_call_args 对 by-ref 位置 undefined 实参静默 null（直探针 silent ✓）。**剩余半程**：write_back_refs 的写回创建——fenv 参数经 bind_params by_ref 臂已 make_ref_cell(null)，但 **fenv2 的 ref cell 未传回调用方变量**（write_back_refs 的 `{:arg,{:var,vname}}` 匹配 srcs——srcs 从 align_slots 来，与 by-ref cell 的关联链路需核）——`test($a,$b,$c)` 后 $a/$b/$c 应=0/1/2 | fast PASS
 
+- [x] T017-p22-b 半程二（519f053）：align_slots 的 variadic srcs 槽改**源 AST 列表**（原 nil）+ write_back_refs 的 by-ref variadic 分支（zip 调用方变量到 fenv $args 终值）。**链路仍断**（调用后 $a 未创建）：待核 fenv2 传递（write_back_refs 收到的 fenv2 是否含 by-ref 臂的 make_ref_cell 结果——call_function 内 fenv2 从 binds 重构，**variadic 参数的 binds 值来自 do_bind_params variadic 臂的 {:bound, variadic_arr}——值拷贝非 ref**——by-ref variadic 需要 align 阶段不装值而装 ref，或写回改从 fenv2 的终值取） | fast PASS
+
 ### 恢复点（下会话从这里继续）
+
+**p22-c 定案方向**：align_slots 需 interp 才能 make_ref_cell——**变通**：write_back_refs 不依赖 ref，直接 zip（已实现但断）→ 断点在 fenv2 的 $args 终值获取：`fenv.vars["args"]` 应为函数体 foreach 修改后的数组——核实 fenv2 与 write_back_refs 收到的 fenv 是否同一（call_function 传 fenv2 ✓）。单点：`phpx -r 'function t(&...$a){ $a[0]=9; } t($x); var_dump($x);'` 应 int(9)。
+**沿用**：基线 521@26。
 
 **p22-b 单点**：write_back_refs 的 srcs 关联——`align_slots(params, slots, extra_named, pos_left)` 返回的 srcs 对 by-ref 位置是否为原始 AST（`{:var,vname}`）——若 slots 重排后 srcs 缺失则 `Enum.at(args, idx)` 不匹配。预期收益：by_ref 全族 + list_reference 部分例。
 **沿用**：基线 521@26。
