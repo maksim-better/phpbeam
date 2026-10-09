@@ -145,7 +145,7 @@
 
 - [x] T017-p23 限定内建类型 fatal：param_type_atom 对 fq+单段内建名（15 个，含 void/never/static）raise @fatal `Type declaration 'X' must be unqualified`；ns 类名对照不受影响 | tests: uq/uq2 IDENTICAL；typehints 4→2、总账 519@26 收缩；fast PASS | commit: 2e463ee
 
-- [x] T017-p24 typed-prop 未初始化读检查：parser prop_entries 条目扩 7 元组携类型（nil=untyped）；table.ex props_list 落 `ptype`/`has_default`（promoted 构造器同步）；objects.ex instance_defaults 不播种 typed-no-default（与 readonly 同机制，hooked 豁免）；eval.ex prop_read 缺席+typed_declared?（find_prop 走父链，nil=原生类豁免——SimpleXML case_clause 险情）→ catchable Error `Typed property X::$y must not be accessed before initialization`。isset/??/empty 经 isset? 门控天然正确（探针全对齐）；(array)/serialize/clone/foreach/get_class_vars 消费者对拍同相。**坑**：git stash 往返后忘 rebuild，陈旧二进制两次伪装回归——rebuild 后必跑案例验证 | tests: 57 IDENTICAL、unit 127/127、gate full PASS | 总账 519→511@26 收缩（classes -2、lang -4、余散 -3；record 波动 ±1）| commit: <本次>
+- [x] T017-p24 typed-prop 未初始化读检查：parser prop_entries 条目扩 7 元组携类型（nil=untyped）；table.ex props_list 落 `ptype`/`has_default`（promoted 构造器同步）；objects.ex instance_defaults 不播种 typed-no-default（与 readonly 同机制，hooked 豁免）；eval.ex prop_read 缺席+typed_declared?（find_prop 走父链，nil=原生类豁免——SimpleXML case_clause 险情）→ catchable Error `Typed property X::$y must not be accessed before initialization`。isset/??/empty 经 isset? 门控天然正确（探针全对齐）；(array)/serialize/clone/foreach/get_class_vars 消费者对拍同相。**坑**：git stash 往返后忘 rebuild，陈旧二进制两次伪装回归——rebuild 后必跑案例验证 | tests: 57 IDENTICAL、unit 127/127、gate full PASS | 总账 519→511@26 收缩（classes -2、lang -4、余散 -3；record 波动 ±1）| commit: 47b4ae6
 
 ### 恢复点（下会话从这里继续）
 
