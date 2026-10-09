@@ -149,12 +149,14 @@
 
 - [x] T017-p25 static typed 未初始化读 + unset static：eval static_prop 缺席槽位+typed-no-default → catchable Error `Typed static property <declaring>::$<n> must not be accessed before initialization`（消息走 declaring 显示名，NS\S 对拍同相）；assign.ex isset? 补 {:static_prop} 静默子句（未初始化 typed static isset=false、?? 走右支——否则 catch-all eval 踩新 fatal）；unset_target 补 {:static_prop} → catchable Error `Attempt to unset static property X::$y`（php 8.4 静态属性不可 unset）。**坑**：2>&1 混流对比两侧 fatal 块错位是 Erlang stderr 无缓冲伪影——diff_test 只比 stdout，对称比 stdout-only 即可 | tests: 58 IDENTICAL、unset 探针 IDENTICAL、unit 127/127、gate full PASS | 总账 511→509@26 收缩（classes −1、zend-exit −1）| commit: db4346d
 
+- [x] T017-p26a 位运算 lossy + bnot + 字节流：①Value.bnot 的 with 模式 `{:int,i} <- to_int(x)` 匹配不上 `{:ok,…}` → else 把未 bnot 中间值原返回（~1.5 曾=1）——修 unwrap；~bool/~null → TypeError `Cannot perform bitwise not on true/null`（bool 措辞是字面量），~object → 类名，~字符串=逐字节取反（含数字字符串，无 deprecation——probed ~"1.5"=ced1ca）；②eval 位运算臂 & | ^ << >> 补 lossy_warn（float + float-string 两措辞：`from float 1.5` / `from float-string "1.5"`，复合赋值 &=/<<= 经 apply_binop 免费受益）；Unsupported operand types 错误映射（[] & 1 措辞 + op_glyph 补 & | ^ << >>）；③"arg"|"b" 双字符串位运算补齐（&截短、| ^ 零填充）；④**CLI stdout 字节流**：IO.write 校 UTF-8 炸 raw bytes → binwrite 又被 io-server latin1→UTF8 转码（probed c3 8e）→ `:io.setopts(:standard_io, encoding: :latin1)` + binwrite 透传（:file.write(1,…) 不是 fd 写，静默失败——坑）。新增 3 分片入账：zend-float-to-int(14)/zend-prop-const-expr(16)/zend-stack-limit(2) | tests: 59 BYTE-IDENTICAL、unit 127/127、gate full PASS 541@29 | commit: 7beed79
+
 ### 恢复点（下会话从这里继续）
 
-**弹药余量**：enum-names 的 or_null/bug76198、assert AST 导出。
-**工具链新坑**：http_test 每轮泄漏一个 `phpx serve --port=18899/18898` 孤儿进程，端口占用会让下轮 mix test 挂 30 分钟+（ps 里 phpx serve PPID=1 即为此症）——跑套件前 `pkill -f "phpx serve"`。
-**下一批纳入候选**：float_to_int(19)/prop_const_expr(20)/stack_limit(17)。
-**基线**：509 @ 26 分片。
+**弹药余量（float-to-int 14 的残体）**：用户函数/方法 **参数+返回类型强制机**（coercive：int←1.5=1+dep、int←"7"=7、int←"7.5"=7+dep、int←[]=TypeError `Cannot assign array to property P::$i of type int`——探针全在 /tmp/tpa.php；typed int 参数现完全不强转 float 直通、chr(60.5)=""）＝ p26b 大单元（parser return_hint 现被丢弃、method 9 元组无 rtype 字段）；prop-const-expr 16（enum case `::` 后 `->name/value` 进 const-expr 求值器 + nullsafe + non-enum fatal）；stack-limit 2；enum or_null/bug76198、assert AST 导出。
+**本单元观察**：字符串位运算两操作数 `"a"<<"b"` shift 无措辞探针（ PHP: Unsupported operand types: string << int 已覆盖）；strict_types=1 模式未实现（parser 无 per-file declare 记录）——coercive 先行。
+**工具链新坑**：http_test 每轮泄漏 `phpx serve` 孤儿（跑前 `pkill -f "phpx serve"`）；CLI stdout 已字节流化（latin1 GL）——若有测试断言 UTF-8 行为需复验。
+**基线**：541 @ 29 分片（509 旧 + 32 新入账；float-to-int 14 待 p26b 收缩）。
 **本单元遗留**：var_dump 对未初始化 typed prop 应打 `uninitialized(int)`（现整属性消失）——与 PHP 输出有差，暂无案例踩中，挂观察。
 
 **弹药余量**：typed-prop 未初始化读检查（整体缺口）、enum-names 的 or_null/bug76198、assert AST 导出。
