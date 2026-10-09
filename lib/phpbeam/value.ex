@@ -693,7 +693,11 @@ defmodule PhpBeam.Value do
     end
   end
 
-  @doc "Bitwise on ints (operands cast to int)."
+  @doc "Bitwise on ints (operands cast to int); two strings = char-wise bytes."
+  def bitwise(op, {:string, a}, {:string, b}) when op in [:&, :|, :^] do
+    {:ok, {:string, string_bitwise(op, a, b)}}
+  end
+
   def bitwise(op, a, b) do
     with {:ok, x} <- coerced(a),
          {:ok, y} <- coerced(b),
@@ -711,14 +715,52 @@ defmodule PhpBeam.Value do
     end
   end
 
+  # php byte semantics: & truncates to the shorter string, | and ^ run the
+  # longer length with the shorter zero-padded (probed: "a"|"b" → "c")
+  defp string_bitwise(op, a, b) do
+    n =
+      if op == :&,
+        do: min(byte_size(a), byte_size(b)),
+        else: max(byte_size(a), byte_size(b))
+
+    pa = pad_bytes(a, n)
+    pb = pad_bytes(b, n)
+
+    for {x, y} <- Enum.zip(to_charlist(pa), to_charlist(pb)), into: "" do
+      v =
+        case op do
+          :& -> Bitwise.band(x, y)
+          :| -> Bitwise.bor(x, y)
+          :^ -> Bitwise.bxor(x, y)
+        end
+
+      <<v::8>>
+    end
+  end
+
+  defp pad_bytes(s, n) when byte_size(s) >= n, do: s
+  defp pad_bytes(s, n), do: s <> :binary.copy(<<0>>, n - byte_size(s))
+
   defp shift(j) when j > 1024, do: 1024
   defp shift(j) when j < -1024, do: -1024
   defp shift(j), do: trunc(j)
 
   def bnot({:int, i}), do: {:ok, {:int, Bitwise.bnot(i)}}
 
+  # php errors on ~bool/~null (probed: Cannot perform bitwise not on true/null);
+  # arrays/objects error through coerced below
+  def bnot({:bool, _}), do: {:error, :unsupported_operand}
+  def bnot(:null), do: {:error, :unsupported_operand}
+
+  # strings: php's `~` is ALWAYS char-wise on the raw bytes (probed: even
+  # numeric float-strings — ~"1.5" → bytes ced1ca, no int coercion, no
+  # deprecation — the int path is for floats only)
+  def bnot({:string, s}) do
+    {:ok, {:string, for(<<c::8 <- s>>, into: "", do: <<Bitwise.bnot(c)::8>>)}}
+  end
+
   def bnot(v) do
-    with {:ok, x} <- coerced(v), {:int, i} <- to_int(x) do
+    with {:ok, x} <- coerced(v), {:ok, {:int, i}} <- to_int(x) do
       {:ok, {:int, Bitwise.bnot(i)}}
     else
       e -> e

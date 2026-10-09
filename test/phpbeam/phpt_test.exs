@@ -51,7 +51,10 @@ suites = [
   {"zend-use-function", "Zend/tests/use_function"},
   {"zend-variadic", "Zend/tests/variadic"},
   {"zend-constants", "Zend/tests/constants"},
-  {"zend-offsets", "Zend/tests/offsets"}
+  {"zend-offsets", "Zend/tests/offsets"},
+  {"zend-float-to-int", "Zend/tests/float_to_int"},
+  {"zend-prop-const-expr", "Zend/tests/prop_const_expr"},
+  {"zend-stack-limit", "Zend/tests/stack_limit"}
 ]
 
 # PHPT_DIRS="lang,basic" limits the compiled suites to those dir_ids

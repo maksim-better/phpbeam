@@ -1019,12 +1019,35 @@ defmodule PhpBeam.Eval do
 
   def eval({:unop, :bnot, e}, env, interp) do
     gmp_unop(e, env, interp, fn n -> -n - 1 end, fn v ->
+      # only floats coerce for `~` (strings are byte-wise, never warned —
+      # probed: ~"1.5" → 3 raw bytes, no deprecation)
+      interp2 =
+        case v do
+          {:float, _} -> lossy_warn(v, interp)
+          _ -> interp
+        end
+
       case Value.bnot(v) do
-        {:ok, r} -> {{:val, r}, nil, nil}
-        {:error, err} -> throw_error(err)
+        {:ok, r} ->
+          {{:val, r}, interp2, nil}
+
+        {:error, :unsupported_operand} ->
+          msg = "Cannot perform bitwise not on " <> bnot_operand_name(interp2, v)
+
+          {{:unwind, {:php_throw, {:native_error, "TypeError", msg}}}, interp2, nil}
       end
     end)
   end
+
+  # php wording: `~[]` → "on array", `~true` → "on true" (bool LITERAL),
+  # `~(new stdClass)` → "on stdClass" (class name)
+  defp bnot_operand_name(_interp, {:bool, true}), do: "true"
+  defp bnot_operand_name(_interp, {:bool, false}), do: "false"
+
+  defp bnot_operand_name(interp, {:object, _} = oref),
+    do: display_class(interp, get_object(interp, oref).class)
+
+  defp bnot_operand_name(_interp, v), do: operand_name(v)
 
   # unary minus / ~ on GMP objects produce fresh GMP instances (probed)
   defp gmp_unop(e, env, interp, int_f, std_f) do
@@ -1036,7 +1059,8 @@ defmodule PhpBeam.Eval do
       {{:val, ref}, env2, interp3}
     else
       case std_f.(v) do
-        {{:val, r}, _, _} -> {{:val, r}, env2, interp2}
+        {{:val, r}, i3, _} -> {{:val, r}, env2, i3 || interp2}
+        {{:unwind, _} = u, i3, _} -> {u, env2, i3 || interp2}
       end
     end
   end
@@ -2306,19 +2330,19 @@ defmodule PhpBeam.Eval do
         {:ok, {:int, Value.compare(l, r)}}
 
       :& ->
-        Value.bitwise(:&, l, r)
+        bitwise_with_warn(:&, l, r, interp)
 
       :| ->
-        Value.bitwise(:|, l, r)
+        bitwise_with_warn(:|, l, r, interp)
 
       :^ ->
-        Value.bitwise(:^, l, r)
+        bitwise_with_warn(:^, l, r, interp)
 
       :shl ->
-        Value.bitwise(:shl, l, r)
+        bitwise_with_warn(:shl, l, r, interp)
 
       :shr ->
-        Value.bitwise(:shr, l, r)
+        bitwise_with_warn(:shr, l, r, interp)
 
       :instanceof ->
         {:ok, {:bool, false}}
@@ -2357,6 +2381,40 @@ defmodule PhpBeam.Eval do
   defp op_glyph(:+), do: "+"
   defp op_glyph(:-), do: "-"
   defp op_glyph(:*), do: "*"
+  defp op_glyph(:&), do: "&"
+  defp op_glyph(:|), do: "|"
+  defp op_glyph(:^), do: "^"
+  defp op_glyph(:shl), do: "<<"
+  defp op_glyph(:shr), do: ">>"
+
+  # php 8.1+: float / float-string operands of int-only ops emit the lossy
+  # implicit-conversion deprecation; non-scalar operands are Unsupported
+  # (probed: `[] & 1` → Unsupported operand types: array & int)
+  defp bitwise_with_warn(op, l, r, interp) do
+    interp2 = lossy_warn(l, interp)
+    interp3 = lossy_warn(r, interp2)
+
+    case Value.bitwise(op, l, r) do
+      {:ok, v} ->
+        {:ok, v, interp3}
+
+      {:error, :unsupported_operand} ->
+        left =
+          case l do
+            {:object, _} = oref -> display_class(interp3, get_object(interp3, oref).class)
+            _ -> operand_name(l)
+          end
+
+        throw_error(%PhpBeam.Error{
+          kind: :type_error,
+          message:
+            "Unsupported operand types: " <> left <> " " <> op_glyph(op) <> " " <> operand_name(r)
+        })
+
+      {:error, %Error{} = err} ->
+        throw_error(err)
+    end
+  end
 
   # php describes the LEFT operand by CLASS NAME for objects, gettype
   # otherwise (probed: Exception + int / array + int)
@@ -2369,7 +2427,9 @@ defmodule PhpBeam.Eval do
   defp operand_name(:null), do: "null"
   defp operand_name(_), do: "mixed"
 
-  # float→int implicit conversion deprecation (parity with PHP 8)
+  # float→int implicit conversion deprecation (parity with PHP 8); numeric
+  # float-strings warn with the raw string spelling (probed: "6.5" % 2 →
+  # Implicit conversion from float-string "6.5" to int loses precision)
   defp lossy_warn({:float, f}, interp) when trunc(f) != f do
     PhpBeam.Interp.warn_level(
       interp,
@@ -2377,6 +2437,21 @@ defmodule PhpBeam.Eval do
       "Implicit conversion from float " <>
         PhpBeam.Value.float_to_string(f) <> " to int loses precision"
     )
+  end
+
+  defp lossy_warn({:string, s}, interp) do
+    case PhpBeam.Value.classify_string_number(s) do
+      {:numeric, {:float, _}} ->
+        PhpBeam.Interp.warn_level(
+          interp,
+          "Deprecated",
+          "Implicit conversion from float-string \"" <>
+            s <> "\" to int loses precision"
+        )
+
+      _ ->
+        interp
+    end
   end
 
   defp lossy_warn(_, interp), do: interp

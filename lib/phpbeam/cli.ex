@@ -116,7 +116,12 @@ defmodule PhpBeam.CLI do
 
   def run_code(src, file \\ nil, ini_entries \\ [], argv \\ [], display \\ nil) do
     {out, code} = run_and_capture(src, file, ini_entries, argv, display)
-    IO.write(out)
+    # php stdout is a BYTE stream — the io server in its default unicode mode
+    # re-encodes even binwrite's latin1 payload (probed: ~"1.5" echo → c3 8e…,
+    # and :file.write(1, …) is not an fd write). latin1 GL mode passes bytes
+    # through untouched — UTF-8 text rides along byte-identically.
+    :io.setopts(:standard_io, encoding: :latin1)
+    IO.binwrite(out)
     if code != 0, do: System.halt(code)
   end
 
