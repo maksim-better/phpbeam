@@ -723,6 +723,32 @@ defmodule PhpBeam.Eval.Assign do
       {:nullsafe_prop, _, _} ->
         {false, env, interp}
 
+      # static props: read the slot QUIETLY — an uninitialized typed static
+      # must isset() as false (and feed ??'s gate), not fatal like a real read
+      {:static_prop, cname_e, name_e} ->
+        case Eval.class_key_of(cname_e, env, interp) do
+          {:ok, key} ->
+            name = Eval.static_prop_name(name_e, env, interp)
+
+            case PhpBeam.Classes.find_prop(interp, key, name) do
+              {:ok, prop} when prop.static? ->
+                statics =
+                  Map.get(
+                    interp.statics,
+                    Eval.static_props_key(Eval.static_declaring_key(interp, key, name)),
+                    %{}
+                  )
+
+                {Map.get(statics, prop.name, prop.default) != :null, env, interp}
+
+              _ ->
+                {false, env, interp}
+            end
+
+          _ ->
+            {false, env, interp}
+        end
+
       _ ->
         case Eval.eval(target, env, interp) do
           {{:unwind, _} = u, e2, i2} ->
@@ -811,6 +837,30 @@ defmodule PhpBeam.Eval.Assign do
 
       _ ->
         {:ok, env2, interp2}
+    end
+  end
+
+  # php 8.4: static properties cannot be unset at all — catchable Error
+  # (probed: `unset(S::$s)` → "Attempt to unset static property S::$s")
+  def unset_target({:static_prop, cname_e, name_e}, env, interp) do
+    case Eval.class_key_of(cname_e, env, interp) do
+      {:ok, key} ->
+        name = Eval.static_prop_name(name_e, env, interp)
+
+        case PhpBeam.Classes.find_prop(interp, key, name) do
+          {:ok, prop} when prop.static? ->
+            declaring = Eval.static_declaring_key(interp, key, name)
+            msg = "Attempt to unset static property #{Eval.display_class(interp, declaring)}::$#{name}"
+
+            {oref, i3} = materialize_native({:native_error, "Error", msg}, interp)
+            {{:unwind, {:php_throw, oref}}, env, i3}
+
+          _ ->
+            {:ok, env, interp}
+        end
+
+      _ ->
+        {:ok, env, interp}
     end
   end
 

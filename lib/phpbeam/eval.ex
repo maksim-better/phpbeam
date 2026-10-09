@@ -445,14 +445,27 @@ defmodule PhpBeam.Eval do
             case static_prop_violation(interp, key, prop, env) do
               nil ->
                 # family-shared storage: resolve to the DECLARING class's slot
-                statics =
-                  Map.get(
-                    interp.statics,
-                    static_props_key(static_declaring_key(interp, key, name)),
-                    %{}
-                  )
+                declaring = static_declaring_key(interp, key, name)
+                statics = Map.get(interp.statics, static_props_key(declaring), %{})
 
-                {{:val, Map.get(statics, prop.name, prop.default)}, env, interp}
+                if Map.has_key?(statics, prop.name) do
+                  {{:val, Map.get(statics, prop.name)}, env, interp}
+                else
+                  # no slot yet: typed-no-default props are UNINITIALIZED
+                  # (probed: `public static int $s` read → catchable Error,
+                  # message names the declaring class; untyped/defaults fall
+                  # through to the declared default — isset/?? gate elsewhere)
+                  if Map.get(prop, :ptype) not in [nil, ""] and
+                       not Map.get(prop, :has_default, true) do
+                    msg =
+                      "Typed static property #{prop_declarer_display(interp, %{class: declaring}, name)}::$#{name} must not be accessed before initialization"
+
+                    {ref2, i3} = materialize_native({:native_error, "Error", msg}, interp)
+                    {{:unwind, {:php_throw, ref2}}, env, i3}
+                  else
+                    {{:val, prop.default}, env, interp}
+                  end
+                end
 
               msg ->
                 {{:unwind, {:fatal, msg}}, env, interp}
