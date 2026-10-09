@@ -1563,8 +1563,21 @@ defmodule PhpBeam.Parser do
   end
 
   defp param_type_atom(ts) do
-    {parts, rest, _fq} = qualified_name(ts)
-    {Enum.join(parts, "\\"), rest}
+    {parts, rest, fq} = qualified_name(ts)
+    joined = Enum.join(parts, "\\")
+
+    # a builtin type name with a namespace qualifier is a fatal (probed:
+    # `\int` → Type declaration 'int' must be unqualified)
+    if fq and length(parts) == 1 and
+         String.downcase(joined) in
+         ~w(int float string bool array callable iterable object mixed null false true void never static) do
+      raise(ParseError,
+        message: "@fatal Type declaration '#{joined}' must be unqualified",
+        line: peek_line(ts)
+      )
+    end
+
+    {joined, rest}
   end
 
   defp type_union_tail(ts, acc) do
