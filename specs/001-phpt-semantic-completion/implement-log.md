@@ -147,12 +147,14 @@
 
 - [x] T017-p24 typed-prop 未初始化读检查：parser prop_entries 条目扩 7 元组携类型（nil=untyped）；table.ex props_list 落 `ptype`/`has_default`（promoted 构造器同步）；objects.ex instance_defaults 不播种 typed-no-default（与 readonly 同机制，hooked 豁免）；eval.ex prop_read 缺席+typed_declared?（find_prop 走父链，nil=原生类豁免——SimpleXML case_clause 险情）→ catchable Error `Typed property X::$y must not be accessed before initialization`。isset/??/empty 经 isset? 门控天然正确（探针全对齐）；(array)/serialize/clone/foreach/get_class_vars 消费者对拍同相。**坑**：git stash 往返后忘 rebuild，陈旧二进制两次伪装回归——rebuild 后必跑案例验证 | tests: 57 IDENTICAL、unit 127/127、gate full PASS | 总账 519→511@26 收缩（classes -2、lang -4、余散 -3；record 波动 ±1）| commit: 47b4ae6
 
+- [x] T017-p25 static typed 未初始化读 + unset static：eval static_prop 缺席槽位+typed-no-default → catchable Error `Typed static property <declaring>::$<n> must not be accessed before initialization`（消息走 declaring 显示名，NS\S 对拍同相）；assign.ex isset? 补 {:static_prop} 静默子句（未初始化 typed static isset=false、?? 走右支——否则 catch-all eval 踩新 fatal）；unset_target 补 {:static_prop} → catchable Error `Attempt to unset static property X::$y`（php 8.4 静态属性不可 unset）。**坑**：2>&1 混流对比两侧 fatal 块错位是 Erlang stderr 无缓冲伪影——diff_test 只比 stdout，对称比 stdout-only 即可 | tests: 58 IDENTICAL、unset 探针 IDENTICAL、unit 127/127、gate full PASS | 总账 511→509@26 收缩（classes −1、zend-exit −1）| commit: db4346d
+
 ### 恢复点（下会话从这里继续）
 
-**弹药余量**：static typed 未初始化读（静态属性读路径，探针措辞 `Typed static property S::$s must not be accessed before initialization`）、enum-names 的 or_null/bug76198、assert AST 导出。
+**弹药余量**：enum-names 的 or_null/bug76198、assert AST 导出。
 **工具链新坑**：http_test 每轮泄漏一个 `phpx serve --port=18899/18898` 孤儿进程，端口占用会让下轮 mix test 挂 30 分钟+（ps 里 phpx serve PPID=1 即为此症）——跑套件前 `pkill -f "phpx serve"`。
-**下一批纳入候选**：float_to_int(19)/prop_const_expr(20)/stack_limit(17)/static typed uninit。
-**基线**：511 @ 26 分片。
+**下一批纳入候选**：float_to_int(19)/prop_const_expr(20)/stack_limit(17)。
+**基线**：509 @ 26 分片。
 **本单元遗留**：var_dump 对未初始化 typed prop 应打 `uninitialized(int)`（现整属性消失）——与 PHP 输出有差，暂无案例踩中，挂观察。
 
 **弹药余量**：typed-prop 未初始化读检查（整体缺口）、enum-names 的 or_null/bug76198、assert AST 导出。
