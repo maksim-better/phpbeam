@@ -704,7 +704,9 @@ defmodule PhpBeam.Eval.Call do
         # extras collected by the variadic — v(1, 2, x: 9) snapshots [1, 2]
         {:param, _, _, _, _, true}, {o, s, d, sl} ->
           flat = Enum.map(pos_left, &elem(&1, 0))
-          {[{:bound, variadic_arr} | o], [nil | s], flat ++ d, sl}
+          # srcs slot = the LIST of each extra arg's source AST — by-ref
+          # variadics write every collected value back to its caller variable
+          {[{:bound, variadic_arr} | o], [Enum.map(pos_left, &elem(&1, 1)) | s], flat ++ d, sl}
 
         {:param, _, _, _, _, _}, {o, s, d, [h | t]} ->
           case h do
@@ -1136,20 +1138,49 @@ defmodule PhpBeam.Eval.Call do
     |> Enum.with_index()
     |> Enum.filter(fn {{:param, _, _, _, by_ref?, _}, _} -> by_ref? end)
     |> Enum.reduce({interp, env}, fn {{:param, pname, _, _, _, _}, idx}, {it, e} ->
-      case Enum.at(args, idx) do
-        {:arg, {:var, vname}, _, _} ->
-          case Env.lookup(fenv, it, pname) do
-            {:ok, {:ref, _rid}} ->
-              {:ok, v} = Env.lookup(fenv, it, pname)
-              {:ok, e2, it2} = Env.bind_var(e, it, vname, deref(v, it))
-              {it2, e2}
+      src_slot = Enum.at(args, idx)
 
-            _ ->
-              {it, e}
+      # by-ref VARIADIC: the src slot is the LIST of each extra arg's source
+      # AST — bind every caller variable to the array's final element value
+      if is_list(src_slot) do
+        var_names =
+          Enum.flat_map(src_slot, fn
+            {:arg, {:var, vname}, _, _} -> [vname]
+            _ -> []
+          end)
+
+        fargs = Map.get(fenv.vars, pname) || Map.get(fenv.vars, String.downcase(pname))
+
+        vals =
+          case fargs do
+            {:array, arr} -> PArray.values(arr)
+            _ -> []
           end
 
-        _ ->
-          {it, e}
+        e2 =
+          Enum.zip(var_names, vals)
+          |> Enum.reduce(e, fn {vname, val}, acc ->
+            {:ok, acc2, _} = Env.bind_var(acc, it, vname, val)
+            acc2
+          end)
+
+        {it, e2}
+      else
+        case Enum.at(args, idx) do
+          {:arg, {:var, vname}, _, _} ->
+            case Env.lookup(fenv, it, pname) do
+              {:ok, {:ref, _rid}} ->
+                {:ok, v} = Env.lookup(fenv, it, pname)
+                {:ok, e2, it2} = Env.bind_var(e, it, vname, deref(v, it))
+                {it2, e2}
+
+              _ ->
+                {it, e}
+            end
+
+          _ ->
+            {it, e}
+        end
       end
     end)
   end
