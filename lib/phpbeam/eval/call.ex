@@ -100,10 +100,10 @@ defmodule PhpBeam.Eval.Call do
 
   def call_named(parts, name, fq, args, env, interp) do
     case resolve_function(name, fq, interp) do
-      {:user, _params, _body, _def_file, _def_line, _ns, _uses} = fn_def ->
+      {:user, _params, _body, _def_file, _def_line, _ns, _uses, _rt} = fn_def ->
         call_function(fn_def, name, args, env, interp, false)
 
-      {:user_gen, _params, _body, _def_file, _def_line, _ns, _uses} = fn_def ->
+      {:user_gen, _params, _body, _def_file, _def_line, _ns, _uses, _rt} = fn_def ->
         call_generator_fn(fn_def, name, args, env, interp)
 
       # higher-order builtins (registry v2): raw mode receives argument ASTs
@@ -136,7 +136,7 @@ defmodule PhpBeam.Eval.Call do
   # call time), then hand the prepared env/body to the lazy generator
 
   def call_generator_fn(
-        {:user_gen, params, body, def_file, def_line, dns, duses},
+        {:user_gen, params, body, def_file, def_line, dns, duses, _rt},
         name,
         args,
         env,
@@ -381,7 +381,7 @@ defmodule PhpBeam.Eval.Call do
   end
 
   def call_function(
-        {:user, params, body, def_file, def_line, dns, duses},
+        {:user, params, body, def_file, def_line, dns, duses, rt},
         name,
         args,
         env,
@@ -419,10 +419,18 @@ defmodule PhpBeam.Eval.Call do
         restore = fn i -> %{i | ns: interp.ns, uses: interp.uses} end
 
         case res do
-          :ok -> {{:val, :null}, env_out, restore.(interp5)}
-          {:unwind, {:return, v}} -> {{:val, v}, env_out, restore.(interp5)}
+          :ok ->
+            # no explicit return: implicit null — still checked against the
+            # declared return type (probed: `function f(): int {}` call →
+            # "Return value must be of type int, none returned")
+            return_type_check(rt, name, :null, env_out, restore.(interp5), true, {def_file, interp5.cur_line})
+
+          {:unwind, {:return, v}} ->
+            return_type_check(rt, name, v, env_out, restore.(interp5), false, {def_file, interp5.cur_line})
+
           # a throw escaping keeps its frame alive for the uncaught trace
-          {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, restore.(interp4)}
+          {:unwind, _} = u ->
+            {{:unwind, elem(u, 1)}, env_out, restore.(interp4)}
         end
 
       {{:unwind, _} = u, _, it2} ->
@@ -540,9 +548,21 @@ defmodule PhpBeam.Eval.Call do
 
             case do_bind_params(params, ordered, fenv, env2, interp2, []) do
               {:ok, binds, interp3} ->
-                # env2 carries the arg-expression bindings ($i = X inside a
-                # call's argument list) — the caller must resume with it
-                {:ok, binds, display, srcs, interp3, env2}
+                case coerce_bound_params(params, binds, interp3, msg_name, decl_site) do
+                  {:ok, binds2, interp4} ->
+                    # env2 carries the arg-expression bindings ($i = X inside a
+                    # call's argument list) — the caller must resume with it
+                    {:ok, binds2, display, srcs, interp4, env2}
+
+                  {:type_error, interp4, msg} ->
+                    # probed 8.4: `C::m(): Argument #1 ($a) must be of type
+                    # int, array given, called in <file> on line <n>` — no
+                    # "and defined in" suffix
+                    {obj_ref, it5} =
+                      materialize_native({:native_error, "TypeError", msg}, interp4)
+
+                    {{:unwind, {:php_throw, obj_ref}}, env2, it5}
+                end
 
               {:missing, interp3, miss_idx} ->
                 arg_count_error(
@@ -938,6 +958,296 @@ defmodule PhpBeam.Eval.Call do
     {{:unwind, {:php_throw, obj_ref}}, env, %{it3 | throw_pos: {df, dl}}}
   end
 
+  # ─────────────────── coercive param/return typing (php 8) ───────────────────
+  # v1 scope: scalar builtins (int/float/string/bool), nullable ?T, scalar
+  # unions. Class/mixed/array/callable/iterable/object types pass through
+  # unchecked (p26c).
+
+  @scalar_types ~w(int float string bool)
+
+  defp coerce_bound_params(params, binds, interp, msg_name, decl_site) do
+    named =
+      Enum.zip(params, binds)
+      |> Enum.with_index()
+      |> Enum.flat_map(fn
+        {{{:param, name, t, _, _, true}, {_, v}}, _i} when is_binary(t) ->
+          # variadic: php checks every ELEMENT against the element type
+          case v do
+            {:array, arr} ->
+              PArray.values(arr)
+              |> Enum.with_index()
+              |> Enum.map(fn {ev, ei} -> {name, t, ev, ei, msg_name} end)
+
+            _ ->
+              []
+          end
+
+        {{{:param, name, t, _, _, false}, {_, v}}, i} when is_binary(t) ->
+          [{name, t, v, i, msg_name}]
+
+        _ ->
+          []
+      end)
+
+    Enum.reduce_while(named, {:ok, binds, interp}, fn
+      {pname, t, v, idx, fname}, {:ok, acc, it} ->
+        case coerce_typed(t, v, it, decl_site) do
+          {:ok, v2, it2} ->
+            {:cont, {:ok, replace_bind(acc, pname, v2), it2}}
+
+          {:type_error, bad} ->
+            {:halt,
+             {:type_error, it,
+              "#{fname}(): Argument ##{idx + 1} ($#{pname}) must be of type #{display_type(t)}, #{given_name(it, bad)} given, called in #{Eval.eval_file(it)} on line #{it.cur_line}"}}
+
+          :pass ->
+            {:cont, {:ok, acc, it}}
+        end
+    end)
+  end
+
+  defp replace_bind(binds, name, v) do
+    Enum.map(binds, fn {n, existing} -> if n == name, do: {n, v}, else: {n, existing} end)
+  end
+
+  defp coerce_typed(t, v, interp, loc) do
+    {nullable, base} =
+      case t do
+        "?" <> b -> {true, b}
+        _ -> {false, t}
+      end
+
+    cond do
+      base == "" or base == "mixed" ->
+        {:ok, v, interp}
+
+      v == :null and nullable ->
+        {:ok, :null, interp}
+
+      # unions: only all-scalar unions are checked in v1; try members in the
+      # input-driven preference order (numeric input prefers int/float)
+      String.contains?(base, "|") ->
+        members = String.split(base, "|")
+
+        if Enum.all?(members, &(&1 in @scalar_types)) do
+          union_coerce(sort_members(members), v, interp, loc)
+        else
+          :pass
+        end
+
+      # class/interface/self/static/parent etc.: unchecked in v1
+      base not in @scalar_types ->
+        :pass
+
+      v == :null ->
+        {:type_error, :null}
+
+      true ->
+        scalar_coerce(base, v, interp, loc)
+    end
+  end
+
+  # probed display sort (empirical zend order): string > int > float > bool
+  defp sort_members(members) do
+    rank = fn
+      "string" -> 0
+      "int" -> 1
+      "float" -> 2
+      "bool" -> 3
+      _ -> 4
+    end
+
+    Enum.sort_by(members, rank)
+  end
+
+  # union member TRIAL order is input-driven (probed: float 1.5 → int|string
+  # picks int(1), not "1.5"): numeric input prefers int → float → string;
+  # string input prefers string
+  defp union_coerce(members, v, interp, loc) do
+    order =
+      case v do
+        {:string, s} ->
+          case PhpBeam.Value.classify_string_number(s) do
+            {:numeric, _} -> ~w(int float string bool)
+            _ -> ~w(string bool int float)
+          end
+
+        {:int, _} ->
+          ~w(int float string bool)
+
+        {:float, _} ->
+          ~w(int float string bool)
+
+        _ ->
+          members
+      end
+
+    Enum.reduce_while(order, {:type_error, v}, fn m, acc ->
+      if m in members do
+        case scalar_coerce(m, v, interp, loc) do
+          {:ok, v2, it2} -> {:halt, {:ok, v2, it2}}
+          {:type_error, _} -> {:cont, acc}
+        end
+      else
+        {:cont, acc}
+      end
+    end)
+  end
+
+  defp scalar_coerce("int", {:int, _} = v, interp, _loc), do: {:ok, v, interp}
+
+  defp scalar_coerce("int", {:float, f}, interp, loc) do
+    i = trunc(f)
+
+    # lossless floats (1.0) coerce silently (probed: sum(1.0) no dep)
+    it2 = if trunc(f) != f, do: lossy_int_warn("float " <> PhpBeam.Value.float_to_string(f), interp, loc), else: interp
+    {:ok, {:int, i}, it2}
+  end
+
+  defp scalar_coerce("int", {:string, s}, interp, loc) do
+    case PhpBeam.Value.classify_string_number(s) do
+      {:numeric, {:int, i}} ->
+        {:ok, {:int, i}, interp}
+
+      {:numeric, {:float, f}} ->
+        it2 =
+          if trunc(f) != f,
+            do: lossy_int_warn("float-string \"" <> s <> "\"", interp, loc),
+            else: interp
+
+        {:ok, {:int, trunc(f)}, it2}
+
+      _ ->
+        {:type_error, "string"}
+    end
+  end
+
+  defp scalar_coerce("int", {:bool, b}, interp, _loc), do: {:ok, {:int, if(b, do: 1, else: 0)}, interp}
+  defp scalar_coerce("int", v, _interp, _loc), do: {:type_error, v}
+
+  defp scalar_coerce("float", {:int, i}, interp, _loc), do: {:ok, {:float, i * 1.0}, interp}
+  defp scalar_coerce("float", {:float, _} = v, interp, _loc), do: {:ok, v, interp}
+
+  defp scalar_coerce("float", {:string, s}, interp, _loc) do
+    case PhpBeam.Value.classify_string_number(s) do
+      {:numeric, {:int, i}} -> {:ok, {:float, i * 1.0}, interp}
+      {:numeric, {:float, f}} -> {:ok, {:float, f}, interp}
+      _ -> {:type_error, "string"}
+    end
+  end
+
+  defp scalar_coerce("float", {:bool, b}, interp, _loc),
+    do: {:ok, {:float, if(b, do: 1.0, else: 0.0)}, interp}
+
+  defp scalar_coerce("float", v, _interp, _loc), do: {:type_error, v}
+
+  defp scalar_coerce("string", {:string, _} = v, interp, _loc), do: {:ok, v, interp}
+  defp scalar_coerce("string", v, interp, loc), do: string_coerce(v, interp, loc)
+
+  defp string_coerce({:int, i}, interp, _loc), do: {:ok, {:string, Integer.to_string(i)}, interp}
+
+  defp string_coerce({:float, _} = v, interp, _loc),
+    do: {:ok, {:string, Eval.php_to_string(v)}, interp}
+
+  defp string_coerce({:bool, b}, interp, _loc),
+    do: {:ok, {:string, if(b, do: "1", else: "")}, interp}
+
+  defp string_coerce(v, _interp, _loc), do: {:type_error, v}
+
+  # bool accepts scalars only (probed: fb2(null)/arrays are TypeErrors);
+  # coercion follows php truthiness (0 / 0.0 / "" / "0" → false)
+  defp scalar_coerce("bool", {:bool, _} = v, interp, _loc), do: {:ok, v, interp}
+  defp scalar_coerce("bool", v, interp, _loc), do: {:ok, {:bool, PhpBeam.Value.truthy?(v)}, interp}
+
+  # source is the full phrase (probed: "float 6.5" / `float-string "6.5"`),
+  # pinned to the DECLARATION site (probed: php reports the decl line)
+  defp lossy_int_warn(source, interp, {df, dl}) do
+    PhpBeam.Interp.warn_level_at(
+      interp,
+      "Deprecated",
+      "Implicit conversion from " <> source <> " to int loses precision",
+      df,
+      dl
+    )
+  end
+
+  # given-type rendering for the TypeError (probed: array/null/class names)
+  defp given_name(_interp, {:int, _}), do: "int"
+  defp given_name(_interp, {:float, _}), do: "float"
+  defp given_name(_interp, {:string, _}), do: "string"
+  defp given_name(_interp, {:bool, b}), do: if(b, do: "true", else: "false")
+  defp given_name(_interp, :null), do: "null"
+  defp given_name(_interp, {:array, _}), do: "array"
+
+  defp given_name(interp, {:object, _} = oref) do
+    obj = Eval.get_object(interp, oref)
+    Eval.display_class(interp, obj.class)
+  end
+
+  defp given_name(_interp, _), do: "unknown"
+
+  # declared-type rendering: probed int|string → "string|int" (zend order);
+  # ?int stays "?int"; single types unchanged
+  defp display_type(t) do
+    case String.split(t, "|") do
+      [one] ->
+        t
+
+      members ->
+        members |> sort_members() |> Enum.join("|")
+    end
+  end
+
+  # return type check — probed 8.4: float→int returns coerce WITH the
+  # deprecation; failures render `NAME(): Return value must be of type T,
+  # G given` with NO location suffix. Implicit no-return = "none returned".
+  defp return_type_check(nil, _name, v, env, interp, _implicit?, _loc),
+    do: {{:val, v}, env, interp}
+
+  defp return_type_check(rt, name, v, env, interp, implicit?, loc) do
+    {nullable, base} =
+      case rt do
+        "?" <> b -> {true, b}
+        _ -> {false, rt}
+      end
+
+    cond do
+      # mixed/unchecked accepts everything, null included (probed:
+      # `current(): mixed { return null; }` is legal)
+      base in ["", "mixed"] ->
+        {{:val, v}, env, interp}
+
+      v == :null and nullable ->
+        {{:val, :null}, env, interp}
+
+      # void accepts null both ways — explicit `return;` and falling off the
+      # end (probed: `function rv(): void { return; }` is fine)
+      v == :null and base == "void" ->
+        {{:val, :null}, env, interp}
+
+      v == :null and implicit? and base in @scalar_types ->
+        return_type_error(name, rt, "none", env, interp)
+
+      v == :null ->
+        return_type_error(name, rt, "null", env, interp)
+
+      true ->
+        case coerce_typed(base, v, interp, loc) do
+          {:ok, v2, it2} -> {{:val, v2}, env, it2}
+          {:type_error, bad} ->
+            return_type_error(name, rt, given_name(interp, bad), env, interp)
+          :pass -> {{:val, v}, env, interp}
+        end
+    end
+  end
+
+  defp return_type_error(name, rt, given, env, interp) do
+    msg = "#{name}(): Return value must be of type #{display_type(rt)}, #{given} returned"
+    {obj_ref, it2} = materialize_native({:native_error, "TypeError", msg}, interp)
+    {{:unwind, {:php_throw, obj_ref}}, env, it2}
+  end
+
+
   # ordered: per-param {:bound, v} | :absent (variadic always {:bound, arr},
   # precomputed by align_slots). miss_idx counts the FULL param list (variadic
   # never missing) and feeds the "Argument #N ($name) not passed" variant.
@@ -1108,10 +1418,31 @@ defmodule PhpBeam.Eval.Call do
               interp5 = Interp.pop_frame(pop_file_once(interp4))
 
               case res do
-                :ok -> {{:val, :null}, env_out, interp5}
-                {:unwind, {:return, v}} -> {{:val, v}, env_out, interp5}
+                :ok ->
+                  return_type_check(
+                    method.rtype,
+                    "#{defc}::#{method.name}",
+                    :null,
+                    env_out,
+                    interp5,
+                    true,
+                    {cfile, interp5.cur_line}
+                  )
+
+                {:unwind, {:return, v}} ->
+                  return_type_check(
+                    method.rtype,
+                    "#{defc}::#{method.name}",
+                    v,
+                    env_out,
+                    interp5,
+                    false,
+                    {cfile, interp5.cur_line}
+                  )
+
                 # a throw escaping keeps its frame alive for the uncaught trace
-                {:unwind, _} = u -> {{:unwind, elem(u, 1)}, env_out, interp4}
+                {:unwind, _} = u ->
+                  {{:unwind, elem(u, 1)}, env_out, interp4}
               end
             end
 

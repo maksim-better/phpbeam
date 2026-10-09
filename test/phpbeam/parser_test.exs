@@ -152,8 +152,10 @@ defmodule PhpBeam.ParserTest do
   end
 
   test "function definition" do
-    [{:func_def, name, params, body}] =
+    [{:func_def, name, params, body, rtype}] =
       parse("<?php function add($a, $b = 2, ...$rest) { return $a; }")
+
+    assert rtype == nil
 
     assert name == "add"
 

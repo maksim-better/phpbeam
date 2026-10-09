@@ -266,8 +266,8 @@ defmodule PhpBeam.Classes.Reflection2 do
             case args do
               [{:string, fname} | _] ->
                 case Map.get(i.functions, String.downcase(fname)) do
-                  # userland fn: {:user, params, body, file, line, ns, uses}
-                  {:user, uparams, _, _, _, _, _} = uentry ->
+                  # userland fn: {:user, params, body, file, line, ns, uses, rtype}
+                  {:user, uparams, _, _, _, _, _, _} = uentry ->
                     ps =
                       Enum.map(uparams, fn
                         {:param, n, _, _, _, _} -> {:param, n, nil, nil, false, false}

@@ -199,7 +199,7 @@ defmodule PhpBeam.Classes.Table do
     props =
       props ++
         Enum.flat_map(methods, fn
-          {_, _, _, _, _, "__construct", params, _, _} ->
+          {_, _, _, _, _, "__construct", params, _, _, _} ->
             Enum.map(params, fn
               {:param_promoted, pvis, ro?, name, t, d, _br, _var} ->
                 vis = if pvis in [:public, :protected, :private], do: pvis, else: :public
@@ -240,7 +240,7 @@ defmodule PhpBeam.Classes.Table do
 
     methods =
       Enum.map(methods, fn
-        {vis, st?, ab?, fi?, br?, "__construct", params, body, line} = m ->
+        {vis, st?, ab?, fi?, br?, "__construct", params, body, line, rt} = m ->
           {promoted, plain} =
             Enum.split_with(params, &match?({:param_promoted, _, _, _, _, _, _, _}, &1))
 
@@ -267,7 +267,7 @@ defmodule PhpBeam.Classes.Table do
                   p
               end)
 
-            {vis, st?, ab?, fi?, br?, "__construct", new_params, assigns ++ body, line}
+            {vis, st?, ab?, fi?, br?, "__construct", new_params, assigns ++ body, line, rt}
           end
 
         m ->
@@ -275,7 +275,7 @@ defmodule PhpBeam.Classes.Table do
       end)
 
     methods_map =
-      Map.new(methods, fn {vis, static?, abstract?, final?, _by_ref?, mname, params, body, line} ->
+      Map.new(methods, fn {vis, static?, abstract?, final?, _by_ref?, mname, params, body, line, rt} ->
         {String.downcase(mname),
          %{
            name: mname,
@@ -287,6 +287,7 @@ defmodule PhpBeam.Classes.Table do
            body: body,
            class: key,
            line: line,
+           rtype: rt,
            gen?: PhpBeam.Ast.has_yield?(body),
            native: nil
          }}

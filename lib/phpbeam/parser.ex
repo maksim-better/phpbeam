@@ -816,7 +816,7 @@ defmodule PhpBeam.Parser do
     {name, rest2} = take_ident(rest1)
     rest3 = expect_op(rest2, "(")
     {params, rest4} = param_list(rest3)
-    rest5 = return_hint(rest4)
+    {rt, rest5} = return_hint(rest4)
 
     {body, rest6} =
       cond do
@@ -830,7 +830,11 @@ defmodule PhpBeam.Parser do
           {stmts, r}
       end
 
-    {{:methods, [{vis, static?, abstract?, final?, by_ref?, name, params, body, fl}]}, rest6}
+    # 10th element = declared return type (source spelling, nil = none)
+    {
+      {:methods, [{vis, static?, abstract?, final?, by_ref?, name, params, body, fl, rt}]},
+      rest6
+    }
   end
 
   # statement-level `const A = 1, B = 2;`
@@ -1454,9 +1458,11 @@ defmodule PhpBeam.Parser do
   defp func_def([{name, _, fname} | rest]) when name == :name do
     rest1 = expect_op(rest, "(")
     {params, rest2} = param_list(rest1)
-    rest3 = expect_op(return_hint(rest2), "{")
+    {rt, rest2b} = return_hint(rest2)
+    rest3 = expect_op(rest2b, "{")
     {body, rest4} = block_body(rest3)
-    {{:func_def, String.downcase(fname), params, body}, rest4}
+    # 5th element = declared return type (source spelling, nil = none)
+    {{:func_def, String.downcase(fname), params, body, rt}, rest4}
   end
 
   defp param_list(ts, acc \\ []) do
@@ -1601,13 +1607,9 @@ defmodule PhpBeam.Parser do
   end
 
   defp return_hint(ts) do
-    {yes, rest} = take_op(ts, ":")
-
-    if yes do
-      {_t, r} = param_type(rest)
-      r
-    else
-      ts
+    case take_op(ts, ":") do
+      {true, r} -> param_type(r)
+      {false, _} -> {nil, ts}
     end
   end
 
@@ -2439,7 +2441,8 @@ defmodule PhpBeam.Parser do
     rest2 = expect_op(rest1, "(")
     {params, rest3} = param_list(rest2)
     {uses, rest4} = closure_uses(rest3)
-    rest5 = expect_op(return_hint(rest4), "{")
+    {_crt, rest4b} = return_hint(rest4)
+    rest5 = expect_op(rest4b, "{")
     {body, rest6} = block_body(rest5)
     {{:closure, params, uses, by_ref?, body, false}, rest6}
   end
@@ -2488,9 +2491,9 @@ defmodule PhpBeam.Parser do
 
     rest2 = expect_op(rest1, "(")
     {params, rest3} = param_list(rest2)
-    rest4 = return_hint(rest3)
-    rest5 = expect_op(rest4, "=>")
-    {body, rest6} = expr(rest5)
+    {_art, rest3b} = return_hint(rest3)
+    rest4 = expect_op(rest3b, "=>")
+    {body, rest6} = expr(rest4)
     {{:closure, params, [], by_ref?, [{:return, body}], true}, rest6}
   end
 

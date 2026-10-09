@@ -1724,7 +1724,7 @@ defmodule PhpBeam.Interp do
     {:ok, env, %{interp | consts: consts}}
   end
 
-  def exec_stmt({:func_def, name, params, body}, env, interp) do
+  def exec_stmt({:func_def, name, params, body, rtype}, env, interp) do
     def_file = current_file(interp)
     # php function names are case-insensitive and namespace-qualified: inside
     # `namespace Sodium;` a define lands under sodium\name (calls resolve the
@@ -1739,9 +1739,9 @@ defmodule PhpBeam.Interp do
       # includes have reset interp.uses
       entry =
         if PhpBeam.Ast.has_yield?(body) do
-          {:user_gen, params, body, def_file, interp.cur_line, interp.ns, interp.uses}
+          {:user_gen, params, body, def_file, interp.cur_line, interp.ns, interp.uses, rtype}
         else
-          {:user, params, body, def_file, interp.cur_line, interp.ns, interp.uses}
+          {:user, params, body, def_file, interp.cur_line, interp.ns, interp.uses, rtype}
         end
 
       {:ok, env, %{interp | functions: Map.put(interp.functions, full, entry)}}
