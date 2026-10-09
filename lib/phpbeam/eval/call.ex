@@ -514,7 +514,12 @@ defmodule PhpBeam.Eval.Call do
   # (var_dump(next($a), current($a)) sees the moved cursor)
 
   def bind_params(params, args, fenv, env, interp, msg_name, frame_disp, decl_site) do
-    case eval_call_args(args, env, interp) do
+    # php: arguments to by-ref parameters are NEVER evaluated for the
+    # undefined-variable warning — an undefined variable is silently created
+    # (variadic `&...$args` marks every excess position by-ref too)
+    by_ref_positions = by_ref_positions(params)
+
+    case eval_call_args(args, env, interp, by_ref_positions) do
       {:unwind, u, en2, it2} ->
         {{:unwind, u}, en2, it2}
 
@@ -732,7 +737,7 @@ defmodule PhpBeam.Eval.Call do
   # NAMED arguments (php 8.1+). Result triples carry the source AST for
   # by-ref writeback.
 
-  def eval_call_args(args, env, interp) do
+  def eval_call_args(args, env, interp, by_ref_positions \\ MapSet.new()) do
     args
     |> Enum.reduce_while({:ok, [], env, interp}, fn
       {:arg_spread, e, _}, {:ok, acc, en, it} ->
@@ -753,15 +758,55 @@ defmodule PhpBeam.Eval.Call do
             {:halt, {:unwind, u, en2, it2}}
         end
 
-      {:arg, e, _, name}, {:ok, acc, en, it} ->
-        case eval(e, en, it) do
-          {{:val, v}, en2, it2} ->
-            {:cont, {:ok, acc ++ [{:val, v, name, {:arg, e, false, name}}], en2, it2}}
+      {:arg, e, _, name} = tagged, {:ok, acc, en, it} ->
+        idx = length(acc)
 
-          {{:unwind, u}, en2, it2} ->
-            {:halt, {:unwind, u, en2, it2}}
+        by_ref_here =
+          case by_ref_positions do
+            {set, nil} -> MapSet.member?(set, idx)
+            {set, from} -> MapSet.member?(set, idx) or idx >= from
+          end
+
+        if by_ref_undefined?(e, en, it) and by_ref_here do
+          # php: an undefined variable passed to a by-ref parameter is
+          # silently created — no warning (variadic/by_ref.phpt)
+          {:cont, {:ok, acc ++ [{:val, :null, name, tagged}], en, it}}
+        else
+          case eval(e, en, it) do
+            {{:val, v}, en2, it2} ->
+              {:cont, {:ok, acc ++ [{:val, v, name, tagged}], en2, it2}}
+
+            {{:unwind, u}, en2, it2} ->
+              {:halt, {:unwind, u, en2, it2}}
+          end
         end
     end)
+  end
+
+  def by_ref_undefined?({:var, vname}, env, interp) do
+    Env.lookup(env, interp, vname) == :undefined
+  end
+
+  def by_ref_undefined?(_ast, _env, _interp), do: false
+
+  def by_ref_positions(params) do
+    variadic_from =
+      Enum.find_index(params, fn {:param, _, _, _, true, true} -> true; _ -> false end)
+
+    base =
+      params
+      |> Enum.with_index()
+      |> Enum.filter(fn {{:param, _, _, _, true, false}, _} -> true; _ -> false end)
+      |> Enum.map(&elem(&1, 1))
+
+    if variadic_from do
+      # every position from the variadic onward is by-ref (excess args land
+      # in &...$args) — a bounded range can't know the call's arity here,
+      # so membership is a range check against the call's own arg count
+      {MapSet.new(base), variadic_from}
+    else
+      {MapSet.new(base), nil}
+    end
   end
 
   # php has TWO missing-argument messages. Pure positional shortfall:
