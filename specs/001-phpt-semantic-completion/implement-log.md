@@ -130,7 +130,16 @@
 
 - [x] T017-p20 七目录纳入：nullable/object-types/use-const/use-function/variadic/constants/offsets——90 例 53 败入基线（**总账 521@26 分片**）；分诊三大类：**by-ref 参数隐式创建变量**（variadic/by_ref 全族——php by-ref 实参永不未定义警告，write_back_refs 需补未 lookup 的隐式创建）、offsets 容器偏移矩阵 13 例、object_types 参数矩阵 11 例；fast PASS | commit: 05b8b36
 
+- [x] T017-p21 收尾：by-ref 实现尝试**回滚**（eval_call_args 行级替换破坏 fn 定界符——fast PASS 恢复）。**实现方案已定**（下次按此执行，勿再行级手术）：
+  1. `bind_params` 头部算 `by_ref_positions(params)`（by-ref 固定位置 + variadic 起全段）
+  2. `eval_call_args(args, env, interp, by_ref_positions \\ MapSet.new())` 增第四参
+  3. `{:arg, e, _, name} = tagged` 臂：`idx = length(acc)`；`by_ref_undefined?(e, en, it) and member?(positions, idx)` → 静默 `{:val, :null, name, tagged}`
+  4. 新 helpers：`by_ref_undefined?({:var,v},env,interp)`（lookup==:undefined）与 `by_ref_positions/1`
+  5. **行级替换教训**：del 直接吞掉 `end)` 行——Edit 工具替换 arm 必须含完整首尾锚
+
 ### 恢复点（下会话从这里继续）
+**预期收益**：variadic/by_ref 全族 + list_reference 部分例（~8-19 例收缩）。
+**沿用**：基线 521@26；vendor DBG 还原清单。
 
 **下一批候选（Z 主体延续）**：constants(19)/float_to_int(19)/prop_const_expr(20)/constants 之外的中目录——或按 deferred 弹药优先：by-ref 隐式创建（variadic 全族+list_reference 11 例**同单元一次修**）。
 **基线**：521 @ 26 分片（总纳入 ~1,120 例）。
