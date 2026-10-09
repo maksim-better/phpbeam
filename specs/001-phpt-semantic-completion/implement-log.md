@@ -137,7 +137,12 @@
   4. 新 helpers：`by_ref_undefined?({:var,v},env,interp)`（lookup==:undefined）与 `by_ref_positions/1`
   5. **行级替换教训**：del 直接吞掉 `end)` 行——Edit 工具替换 arm 必须含完整首尾锚
 
+- [x] T017-p22 by-ref 静默创建（半程，fecec0b）：by_ref_positions/1（固定 by-ref 位 + **variadic 起全段**——range 成员测试处理多余实参）+ eval_call_args 对 by-ref 位置 undefined 实参静默 null（直探针 silent ✓）。**剩余半程**：write_back_refs 的写回创建——fenv 参数经 bind_params by_ref 臂已 make_ref_cell(null)，但 **fenv2 的 ref cell 未传回调用方变量**（write_back_refs 的 `{:arg,{:var,vname}}` 匹配 srcs——srcs 从 align_slots 来，与 by-ref cell 的关联链路需核）——`test($a,$b,$c)` 后 $a/$b/$c 应=0/1/2 | fast PASS
+
 ### 恢复点（下会话从这里继续）
+
+**p22-b 单点**：write_back_refs 的 srcs 关联——`align_slots(params, slots, extra_named, pos_left)` 返回的 srcs 对 by-ref 位置是否为原始 AST（`{:var,vname}`）——若 slots 重排后 srcs 缺失则 `Enum.at(args, idx)` 不匹配。预期收益：by_ref 全族 + list_reference 部分例。
+**沿用**：基线 521@26。
 **预期收益**：variadic/by_ref 全族 + list_reference 部分例（~8-19 例收缩）。
 **沿用**：基线 521@26；vendor DBG 还原清单。
 
